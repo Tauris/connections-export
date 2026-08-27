@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+dist/
+build/
+*.egg-info/
+
+# Node
+node_modules/
+*.log
+
+# Crawl output holds exported content and session tokens -- never commit.
+# Anchored to the repository root so it does not match the
+# connections_export/archive source package or tests/archive.
+/archive/
+*.ltpa
+.env
+.env.*
+
+# Your own config: copy connections-export.example.toml and fill it in. It
+# names your deployment, so it is never committed.
+connections-export.toml
+
+# hcl-serve's default run-archive location when run from the repo root
+# (CONNECTIONS_EXPORT_ARCHIVES_DIR unset) — dev/testing archives, never commit.
+/connections-export-archives/

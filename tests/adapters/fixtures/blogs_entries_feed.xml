@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Reconstructed. Assembled from the published API reference, Blogs "Namespaces" and "Entry shape" a documented field list with no literal XML sample:
+
+    <id> = urn:lsid:ibm.com:blogs:entry-<uuid>, <title>, <author>
+    (with <snx:userid>, <snx:userState>), <published>, <updated>,
+    <content type="html"> in CDATA, <summary>, <category term="tag"/>
+    (bare, no scheme — a user tag).
+    Connections extensions: <app:edited>,
+    <app:control><snx:comments enabled="yes|no" days="n"/></app:control>,
+    <snx:rank scheme=".../recommendations|comment|hit">.
+
+  Namespace prefix `openSearch` (capital S) used deliberately, per the
+  doc's explicit note ("Note the prefix is openSearch, capital S") —
+  this is what atom.py's URI-based (not prefix-based) matching must
+  survive. <openSearch:totalResults> reflects "Responses carry
+  <openSearch:totalResults>" — not read by any BlogPost field, present
+  only to exercise namespace matching end-to-end on a real feed.
+-->
+<feed xmlns="http://www.w3.org/2005/Atom"
+      xmlns:app="http://www.w3.org/2007/app"
+      xmlns:thr="http://purl.org/syndication/thread/1.0"
+      xmlns:snx="http://www.ibm.com/xmlns/prod/sn"
+      xmlns:openSearch="http://a9.com/-/spec/opensearch/1.1/">
+  <id>urn:ibm.com:blogentries</id>
+  <title>Team Blog Entries</title>
+  <openSearch:totalResults>2</openSearch:totalResults>
+  <entry>
+    <id>urn:lsid:ibm.com:blogs:entry-33333333-aaaa-4bbb-8ccc-333333333333</id>
+    <title type="text">Sprint 42 Retrospective</title>
+    <author>
+      <name>Jane Doe</name>
+      <snx:userid>jdoe</snx:userid>
+      <snx:userState>active</snx:userState>
+    </author>
+    <published>2009-01-04T20:32:31.171Z</published>
+    <updated>2009-01-05T09:15:00.000Z</updated>
+    <summary type="text">Sprint 42 went well.</summary>
+    <content type="html"><![CDATA[<p>Sprint 42 went <b>well</b>.</p>]]></content>
+    <category term="roadmap"/>
+    <category term="retrospective"/>
+    <app:edited>2009-01-05T09:15:00.000Z</app:edited>
+    <app:control>
+      <snx:comments enabled="yes" days="30"/>
+    </app:control>
+    <link rel="self" href="https://example.com/blogs/teamblog/feed/entry/atom?entryid=33333333-aaaa-4bbb-8ccc-333333333333"/>
+    <link rel="replies" href="https://example.com/blogs/teamblog/feed/entrycomments/sprint-42-retrospective/atom" thr:count="2"/>
+    <snx:rank scheme="http://www.ibm.com/xmlns/prod/sn/recommendations">5</snx:rank>
+    <snx:rank scheme="http://www.ibm.com/xmlns/prod/sn/comment">2</snx:rank>
+    <snx:rank scheme="http://www.ibm.com/xmlns/prod/sn/hit">120</snx:rank>
+  </entry>
+  <entry>
+    <id>urn:lsid:ibm.com:blogs:entry-44444444-aaaa-4bbb-8ccc-444444444444</id>
+    <title type="text">Holiday Notice</title>
+    <author>
+      <name>John Smith</name>
+      <snx:userid>jsmith</snx:userid>
+    </author>
+    <published>2009-02-01T08:00:00.000Z</published>
+    <updated>2009-02-01T08:00:00.000Z</updated>
+    <content type="html"><![CDATA[<p>Office closed Monday.</p>]]></content>
+    <app:control>
+      <snx:comments enabled="no" days="0"/>
+    </app:control>
+    <link rel="self" href="https://example.com/blogs/teamblog/feed/entry/atom?entryid=44444444-aaaa-4bbb-8ccc-444444444444"/>
+  </entry>
+</feed>

@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Reconstructed. Assembled from the published API reference, Forums "Identifiers and markers", "Threading",
+  and the TRAP note there, with no literal XML sample anywhere for a
+  topic entry:
+
+    <id> = urn:lsid:ibm.com:forum:<uuid>. Type marker:
+    <category scheme="http://www.ibm.com/xmlns/prod/sn/type"
+               term="forum-topic"/>. Flags:
+    <category scheme=".../sn/flags" term="pinned|locked|question|answered"/>.
+    A bare <category term="..."/> (no scheme) is a user tag.
+
+  TRAP, encoded directly in this fixture: both topic entries below
+  ALSO carry <thr:in-reply-to ref="...forum-lsid..."/> — "A forum
+  topic entry also carries <thr:in-reply-to>, whose ref is the parent
+  forum's LSID. Presence of thr:in-reply-to cannot distinguish topics
+  from replies — read the .../sn/type category term." Parsing/typing
+  code under test MUST NOT be fooled by this element being present.
+-->
+<feed xmlns="http://www.w3.org/2005/Atom"
+      xmlns:thr="http://purl.org/syndication/thread/1.0">
+  <id>urn:ibm.com:topicsfeed</id>
+  <title>Topics in Forum</title>
+  <entry>
+    <id>urn:lsid:ibm.com:forum:88888888-aaaa-4bbb-8ccc-888888888888</id>
+    <title type="text">How do I configure SSO?</title>
+    <author><name>Dana</name></author>
+    <published>2010-03-01T10:00:00.000Z</published>
+    <content type="html"><![CDATA[<p>Looking for SSO setup steps.</p>]]></content>
+    <category term="forum-topic" scheme="http://www.ibm.com/xmlns/prod/sn/type"/>
+    <category term="question" scheme="http://www.ibm.com/xmlns/prod/sn/flags"/>
+    <category term="answered" scheme="http://www.ibm.com/xmlns/prod/sn/flags"/>
+    <category term="sso"/>
+    <thr:in-reply-to ref="urn:lsid:ibm.com:forum:99999999-aaaa-4bbb-8ccc-999999999999"/>
+  </entry>
+  <entry>
+    <id>urn:lsid:ibm.com:forum:aaaaaaa1-aaaa-4bbb-8ccc-aaaaaaaaaaa1</id>
+    <title type="text">Welcome -- read before posting</title>
+    <author><name>Moderator</name></author>
+    <published>2010-02-01T09:00:00.000Z</published>
+    <content type="html"><![CDATA[<p>Please read the rules.</p>]]></content>
+    <category term="forum-topic" scheme="http://www.ibm.com/xmlns/prod/sn/type"/>
+    <category term="pinned" scheme="http://www.ibm.com/xmlns/prod/sn/flags"/>
+    <category term="locked" scheme="http://www.ibm.com/xmlns/prod/sn/flags"/>
+    <thr:in-reply-to ref="urn:lsid:ibm.com:forum:99999999-aaaa-4bbb-8ccc-999999999999"/>
+  </entry>
+</feed>

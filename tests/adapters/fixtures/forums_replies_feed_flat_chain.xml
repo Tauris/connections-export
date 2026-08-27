@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Reconstructed. Assembled from the published API reference, Forums "Threading", with
+  no literal XML sample for a reply entry:
+
+    "The replies feed is FLAT... From Standalone_forum_reply_entry_
+    content_70, the three attributes on <thr:in-reply-to> do distinct
+    jobs: ref = LSID of the immediate parent (a topic or another
+    reply); href = fetchable URL of that immediate parent; source =
+    top level parent topic of this reply." Type marker
+    forum-reply via scheme=".../sn/type"; flags scheme=".../sn/flags"
+    documents "answer" applying to replies.
+
+  Encodes the flat-feed reply -> reply -> topic chain the Testing section calls for: reply-1 replies directly to the topic
+  (ref = topic uuid); reply-2 replies to reply-1 (ref = reply-1's own
+  uuid, NOT the topic) — depth 2 reconstructable only via
+  build_reply_tree, since this feed carries no nesting of its own.
+  reply-3 is a second, independent top-level reply, marked "answer",
+  to prove multiple flat roots and a flag both come through correctly.
+  All three share source = the topic uuid (88888888-...) from
+  forums_topics_feed.xml's first entry.
+-->
+<feed xmlns="http://www.w3.org/2005/Atom"
+      xmlns:thr="http://purl.org/syndication/thread/1.0">
+  <id>urn:ibm.com:repliesfeed</id>
+  <title>Replies to How do I configure SSO?</title>
+  <entry>
+    <id>urn:lsid:ibm.com:forum:bbbbbbb1-aaaa-4bbb-8ccc-bbbbbbbbbbb1</id>
+    <author><name>Erin</name></author>
+    <published>2010-03-01T11:00:00.000Z</published>
+    <content type="html"><![CDATA[<p>Try the SAML config guide.</p>]]></content>
+    <category term="forum-reply" scheme="http://www.ibm.com/xmlns/prod/sn/type"/>
+    <thr:in-reply-to ref="urn:lsid:ibm.com:forum:88888888-aaaa-4bbb-8ccc-888888888888"
+                      source="urn:lsid:ibm.com:forum:88888888-aaaa-4bbb-8ccc-888888888888"
+                      href="https://example.com/forums/atom/topic?topicUuid=88888888-aaaa-4bbb-8ccc-888888888888"/>
+  </entry>
+  <entry>
+    <id>urn:lsid:ibm.com:forum:ccccccc1-aaaa-4bbb-8ccc-ccccccccccc1</id>
+    <author><name>Frank</name></author>
+    <published>2010-03-01T11:30:00.000Z</published>
+    <content type="html"><![CDATA[<p>Which SAML config guide? Link please.</p>]]></content>
+    <category term="forum-reply" scheme="http://www.ibm.com/xmlns/prod/sn/type"/>
+    <thr:in-reply-to ref="urn:lsid:ibm.com:forum:bbbbbbb1-aaaa-4bbb-8ccc-bbbbbbbbbbb1"
+                      source="urn:lsid:ibm.com:forum:88888888-aaaa-4bbb-8ccc-888888888888"
+                      href="https://example.com/forums/atom/reply?replyUuid=bbbbbbb1-aaaa-4bbb-8ccc-bbbbbbbbbbb1"/>
+  </entry>
+  <entry>
+    <id>urn:lsid:ibm.com:forum:ddddddd1-aaaa-4bbb-8ccc-ddddddddddd1</id>
+    <author><name>Erin</name></author>
+    <published>2010-03-01T12:00:00.000Z</published>
+    <content type="html"><![CDATA[<p>Here: /docs/saml-setup</p>]]></content>
+    <category term="forum-reply" scheme="http://www.ibm.com/xmlns/prod/sn/type"/>
+    <category term="answer" scheme="http://www.ibm.com/xmlns/prod/sn/flags"/>
+    <thr:in-reply-to ref="urn:lsid:ibm.com:forum:88888888-aaaa-4bbb-8ccc-888888888888"
+                      source="urn:lsid:ibm.com:forum:88888888-aaaa-4bbb-8ccc-888888888888"
+                      href="https://example.com/forums/atom/topic?topicUuid=88888888-aaaa-4bbb-8ccc-888888888888"/>
+  </entry>
+</feed>

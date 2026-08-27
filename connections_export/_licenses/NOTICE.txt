@@ -1,0 +1,80 @@
+connections-export 0.1.0
+Licensed under BSD-3-Clause. See connections-export/LICENSE.
+
+This is the connections-export Python package.
+
+It requires the components below, which pip installs alongside it --
+they are not part of this package. Their licence texts are reproduced
+here so that the list travels with it, each under its own folder.
+
+  annotated-doc 0.0.4 -- MIT
+      annotated-doc/LICENSE
+  annotated-types 0.7.0 -- MIT License
+      annotated-types/LICENSE
+  anyio 4.14.2 -- MIT
+      anyio/LICENSE
+  beautifulsoup4 4.15.0 -- MIT License
+      beautifulsoup4/LICENSE
+  certifi 2026.6.17 -- Mozilla Public License 2.0 (MPL 2.0)
+      certifi/LICENSE
+  click 8.4.2 -- BSD-3-Clause
+      click/LICENSE.txt
+  fastapi 0.139.2 -- MIT
+      fastapi/LICENSE
+  greenlet 3.5.3 -- MIT AND PSF-2.0
+      greenlet/LICENSE
+      greenlet/LICENSE.PSF
+  h11 0.16.0 -- MIT License
+      h11/LICENSE.txt
+  httpcore 1.0.9 -- BSD-3-Clause
+      httpcore/LICENSE.md
+  httpx 0.28.1 -- BSD License
+      httpx/LICENSE.md
+  idna 3.18 -- BSD-3-Clause
+      idna/LICENSE.md
+  lxml 6.1.1 -- BSD-3-Clause
+      lxml/LICENSE.txt
+      lxml/LICENSES.txt
+  Markdown 3.10.2 -- BSD-3-Clause
+      Markdown/LICENSE.md
+  markdownify 1.2.3 -- MIT License
+      markdownify/LICENSE
+  playwright 1.61.0 -- Apache-2.0
+      playwright/LICENSE
+      playwright/LICENSE
+      playwright/LICENSE
+      playwright/NOTICE
+  pydantic 2.13.4 -- MIT
+      pydantic/LICENSE
+  pydantic_core 2.46.4 -- MIT
+      pydantic_core/LICENSE
+  pyee 13.0.1 -- MIT License
+      pyee/LICENSE
+  pypdf 6.14.2 -- BSD-3-Clause
+      pypdf/LICENSE
+  six 1.17.0 -- MIT License
+      six/LICENSE
+  soupsieve 2.9.1 -- MIT
+      soupsieve/LICENSE.md
+  starlette 1.3.1 -- BSD-3-Clause
+      starlette/LICENSE.md
+  typing-inspection 0.4.2 -- MIT
+      typing-inspection/LICENSE
+  typing_extensions 4.16.0 -- PSF-2.0
+      typing_extensions/LICENSE
+  uvicorn 0.51.0 -- BSD-3-Clause
+      uvicorn/LICENSE.md
+  pdf.js 6.2.108 -- Apache-2.0
+      pdf.js/LICENSE.txt
+  paged.js 0.4.3 -- MIT
+      paged.js/LICENSE.txt
+
+Not included: Chromium
+  What it is: Used by the browser-fidelity PDF export, through
+    Playwright. Playwright is listed above; the browser it drives is not
+    part of this build.
+  How to get it: `playwright install chromium`, or point the tool at a
+    browser you already have. Chromium's own licences are not reproduced
+    here.
+
+A machine-readable inventory is in sbom.cyclonedx.json (CycloneDX).

@@ -1,0 +1,144 @@
+name: Binaries
+
+# Single-file executables for people who will not install Python, attached to
+# the GitHub Release on `v*`.
+#
+# When they are built depends on what it costs. Four platform builds -- two of
+# them macOS -- is the most expensive thing here, and on a private repository
+# macOS bills at 10x, so there they run on a tag or on request only. On a
+# public repository standard runners are free, so they run on every push to
+# main as well: a packaging fault found on a push is found before a tag exists,
+# and a tag is a bad place to discover one.
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    # Free on a public repo, so every push; metered on a private one, so tags
+    # and explicit requests only.
+    if: >-
+      github.event.repository.private == false
+      || startsWith(github.ref, 'refs/tags/v')
+      || github.event_name == 'workflow_dispatch'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: linux-x86_64
+          - os: macos-latest
+            target: macos-arm64
+          # Intel macOS. NOT `macos-13` -- GitHub retired those runners, and a
+          # retired label does not fail, it queues forever: the first two runs
+          # here sat unassigned for over an hour while the other three
+          # platforms had long since finished, and the run never reported.
+          - os: macos-15-intel
+            target: macos-x86_64
+          - os: windows-latest
+            target: windows-x86_64
+    runs-on: ${{ matrix.os }}
+    # A PyInstaller build is minutes, not tens of minutes. The cap turns a hung
+    # or unservable cell into a failure someone can see.
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          # PyInstaller embeds the interpreter it builds against, so the
+          # executable IS this Python version. Pinned rather than matrixed:
+          # one binary per platform, not one per Python.
+          python-version: "3.13"
+          enable-cache: true
+
+      # `requests-kerberos` pulls `krb5`, which builds against system Kerberos
+      # headers that the Linux runners do not ship -- `--all-extras` therefore
+      # fails at resolve time on Linux alone. Same wall a Linux user installing
+      # `connections-export[sspi]` hits, so the fix belongs in the docs too.
+      - name: Kerberos headers (Linux only, for the sspi extra)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq libkrb5-dev
+
+      # `--all-extras` is what puts markdownify in the environment, and so in
+      # the bundle: the Obsidian ingester imports it lazily, which means a
+      # bundle built without it still starts and still passes `--help`.
+      # build_binary.py asserts the module is present rather than trusting it.
+      - name: Build executable
+        run: uv run --all-extras --python 3.13 python tools/build_binary.py --dist dist
+
+      # The point of the executable is that a user with no Python and no
+      # install can run it, so the smoke test uses the binary ALONE -- no uv,
+      # no source, no helper script. `--demo` renders the synthetic deployment
+      # that ships inside it; PDF rendering is the one thing that reaches
+      # outside, for a Chromium-based browser. On Windows that is the
+      # preinstalled Edge, which is the path most users will take.
+      - name: Smoke-test the executable, standalone
+        shell: bash
+        run: |
+          set -euo pipefail
+          exe="dist/connections-export"
+          [ "${{ runner.os }}" = "Windows" ] && exe="dist/connections-export.exe"
+          "$exe" --help > /dev/null
+          "$exe" crawl --demo --output-dir demo-archive
+          "$exe" pdf --demo --output smoke.pdf
+          # A PDF header and a plausible size: the demo set renders ~100 pages,
+          # so anything tiny means it rendered nothing and still exited 0.
+          head -c 5 smoke.pdf | grep -q '%PDF' || { echo "not a PDF"; exit 1; }
+          size=$(wc -c < smoke.pdf)
+          echo "smoke.pdf: $size bytes on ${{ matrix.target }}"
+          [ "$size" -gt 100000 ] || { echo "PDF suspiciously small"; exit 1; }
+          rm -rf demo-archive smoke.pdf
+
+      - name: Name the artifact after the version and platform
+        shell: bash
+        run: |
+          # `uv run --no-project`, not bare `python`: setup-uv provisions a
+          # managed interpreter without guaranteeing `python` on PATH, and
+          # --no-project skips a pointless re-sync just to read a TOML key.
+          version="$(uv run --no-project python -c 'import tomllib; print(tomllib.load(open("pyproject.toml","rb"))["project"]["version"])')"
+          src="dist/connections-export"; ext=""
+          if [ "${{ runner.os }}" = "Windows" ]; then src="dist/connections-export.exe"; ext=".exe"; fi
+          mv "$src" "dist/connections-export-${version}-${{ matrix.target }}${ext}"
+          ls -la dist/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: connections-export-${{ matrix.target }}
+          path: dist/connections-export-*
+          if-no-files-found: error
+          # Four executables are ~290 MB a run, and GitHub keeps artifacts for
+          # 90 days by default. On a PRIVATE repo that is metered storage: seven
+          # runs had accumulated 2 GB against a 500 MB allowance. These are
+          # disposable -- rebuildable from any tag -- and on a `v*` tag the
+          # release assets are the copy that lasts.
+          retention-days: 7
+
+  attach-to-release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist/
+          merge-multiple: true
+      # `gh release upload` fails if no Release object exists, and release.yml
+      # only publishes to PyPI -- pushing a tag does not create one. Create it
+      # if absent, then upload; `--clobber` makes a re-run idempotent.
+      - name: Attach executables to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 \
+            || gh release create "$GITHUB_REF_NAME" \
+                 --repo "$GITHUB_REPOSITORY" \
+                 --title "$GITHUB_REF_NAME" \
+                 --generate-notes
+          gh release upload "$GITHUB_REF_NAME" dist/* --clobber --repo "$GITHUB_REPOSITORY"

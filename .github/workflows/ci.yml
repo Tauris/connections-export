@@ -1,0 +1,82 @@
+name: CI
+
+# How much of the matrix runs depends on whether the repository is private,
+# because that is what decides whether it costs anything.
+#
+#   public  -> everything, on every push. GitHub-hosted standard runners are
+#              free for public repositories, so there is no reason to prove
+#              less than the whole matrix.
+#   private -> Linux only on a push; the full 3 OS x 3 Python matrix on a tag
+#              or on request. Minutes are metered there, and metered unevenly:
+#              macOS bills at 10x and Windows at 2x, so a nine-cell matrix on
+#              every push costs roughly 350 metered minutes and exhausts a
+#              modest allowance in a day.
+#
+# Linux alone catches most of it -- a dependency without wheels for a new
+# Python fails at resolve time on any OS -- but the claim that `requires-python`
+# is honoured can only be proved by running there.
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.12", "3.13", "3.14"]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: ${{ matrix.python }}
+          enable-cache: true
+      # `requests-kerberos` pulls `krb5`, which builds against system Kerberos
+      # headers that the Linux runners do not ship -- `--all-extras` therefore
+      # fails at resolve time on Linux alone. Same wall a Linux user installing
+      # `connections-export[sspi]` hits, so the fix belongs in the docs too.
+      - name: Kerberos headers (Linux only, for the sspi extra)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq libkrb5-dev
+
+      # No Playwright browsers installed on purpose: the suite runs offline
+      # against the in-process fake server; the ~2 browser-PDF tests skip.
+      - name: Lint
+        run: |
+          uv run --all-extras ruff check .
+          uv run --all-extras ruff format --check .
+      - name: Tests
+        run: uv run --all-extras pytest
+
+  # The expensive half: only before a release, or when asked. macOS bills at
+  # 10x and Windows at 2x, so this job costs more than everything else in the
+  # repo combined -- which is exactly why it does not run on every push.
+  cross-platform:
+    # Free on a public repo, so always; metered on a private one, so only
+    # when it is worth paying for.
+    if: >-
+      github.event.repository.private == false
+      || startsWith(github.ref, 'refs/tags/v')
+      || github.event_name == 'workflow_dispatch'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+        python: ["3.12", "3.13", "3.14"]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: ${{ matrix.python }}
+          enable-cache: true
+      - name: Lint
+        run: |
+          uv run --all-extras ruff check .
+          uv run --all-extras ruff format --check .
+      - name: Tests
+        run: uv run --all-extras pytest

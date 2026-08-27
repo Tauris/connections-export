@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Not a literal XML block from the reference doc: none exists for
+  page entries there, only a field list. Assembled from the
+  "Page entry — " section of the published API reference, using the documented element names, attribute names, and namespaces
+  verbatim:
+
+    id, title type="text", td:label, summary type="text",
+    content type="text/html" src="...", td:visibility,
+    td:version/uid, td:versionLabel, published, updated,
+    author; link rels self/alternate/edit/edit-media/enclosure/
+    replies (thr:count); snx:rank scheme="..." for
+    /recommendations /comment /hit /anonymous_hit /attachments
+    /versions.
+
+  td:parentUuid is NOT listed in that field-list section (the doc
+  documents it only under "Navigation entry"); included here anyway
+  because the design 4.1 and specs/adapters/the "Parse a page
+  entry" requirement both require the page entry to carry it, and the
+  fake server (connections_export/fakeserver/atom.py, _build_page_entry) emits
+  it on page entries too. Flagged for reviewer attention.
+
+  Category is likewise not in the page-entry field list itself, but is
+  required to exist on a page entry per the "Known documentation
+  defects #1" discussion (which is about page/wiki-definition
+  entries). scheme="tag:ibm.com,2006:td/type" chosen here; a sibling
+  fixture (page_entry_scheme_sn_type.xml) uses the other documented
+  spelling for the leniency test.
+-->
+<entry xmlns="http://www.w3.org/2005/Atom"
+       xmlns:td="urn:ibm.com/td"
+       xmlns:snx="http://www.ibm.com/xmlns/prod/sn"
+       xmlns:thr="http://purl.org/syndication/thread/1.0">
+   <id>urn:lsid:ibm.com:td:1f9c7f1e-2222-4dab-9a6b-c9a8e7c8d001</id>
+   <title type="text">Reference Sample Page</title>
+   <td:label>referenceSamplePage</td:label>
+   <summary type="text">Reference Sample Page</summary>
+   <content type="text/html" src="https://example.com/wikis/basic/api/wiki/wiki0321/page/referenceSamplePage/media"/>
+   <category term="page" scheme="tag:ibm.com,2006:td/type"/>
+   <td:visibility>public</td:visibility>
+   <!-- Documented as `<td:version/uid>`; nesting interpreted here as
+        td:version > td:uid since no full sample disambiguates it.
+        Not consumed by parse_page_entry (no field for it on the Page
+        model). -->
+   <td:version>
+      <td:uid>9b1e6c2a-0000-4a11-8888-abcdefabcdef</td:uid>
+   </td:version>
+   <td:versionLabel>3</td:versionLabel>
+   <published>2018-10-09T12:00:00Z</published>
+   <updated>2018-10-12T08:30:00Z</updated>
+   <author>
+      <name>Reference Author</name>
+   </author>
+   <td:parentUuid>7c6a4d2e-1111-4c8a-9e33-1a2b3c4d5e6f</td:parentUuid>
+   <link rel="self" href="https://example.com/wikis/basic/api/wiki/wiki0321/page/referenceSamplePage/entry"/>
+   <link rel="alternate" href="https://example.com/wikis/basic/api/wiki/wiki0321/page/referenceSamplePage/entry"/>
+   <link rel="edit" href="https://example.com/wikis/basic/api/wiki/wiki0321/page/referenceSamplePage/entry"/>
+   <link rel="edit-media" href="https://example.com/wikis/basic/api/wiki/wiki0321/page/referenceSamplePage/media"/>
+   <link rel="enclosure" href="https://example.com/wikis/basic/api/wiki/wiki0321/page/referenceSamplePage/media"/>
+   <link rel="replies" href="https://example.com/wikis/basic/api/wiki/wiki0321/page/referenceSamplePage/feed" thr:count="4"/>
+   <snx:rank scheme="http://www.ibm.com/xmlns/prod/sn/recommendations">2</snx:rank>
+   <snx:rank scheme="http://www.ibm.com/xmlns/prod/sn/comment">4</snx:rank>
+   <snx:rank scheme="http://www.ibm.com/xmlns/prod/sn/hit">57</snx:rank>
+   <snx:rank scheme="http://www.ibm.com/xmlns/prod/sn/anonymous_hit">12</snx:rank>
+   <snx:rank scheme="http://www.ibm.com/xmlns/prod/sn/attachments">1</snx:rank>
+   <snx:rank scheme="http://www.ibm.com/xmlns/prod/sn/versions">3</snx:rank>
+</entry>

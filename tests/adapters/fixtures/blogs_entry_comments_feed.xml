@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Reconstructed. the published API reference, Blogs "Comment
+  threading": "the parent
+  entry carries <link rel="replies" thr:count="<n>"/> ...; each
+  comment also back-references via
+  <thr:in-reply-to ref="..." source="..." href="..."/>." No comment
+  entry field list/sample exists, so this fixture reuses only the
+  generic Atom fields ("Genuinely shared" section) plus the documented
+  thr:in-reply-to element — one level ("Threading: one
+  level"): the second comment replies to the first; a third top-level
+  comment has no thr:in-reply-to at all.
+-->
+<feed xmlns="http://www.w3.org/2005/Atom"
+      xmlns:thr="http://purl.org/syndication/thread/1.0">
+  <id>urn:ibm.com:entrycomments</id>
+  <title>Comments on Sprint 42 Retrospective</title>
+  <entry>
+    <id>urn:lsid:ibm.com:blogs:entry-55555555-aaaa-4bbb-8ccc-555555555555</id>
+    <author><name>Alice</name></author>
+    <published>2009-01-04T21:00:00.000Z</published>
+    <content type="html"><![CDATA[<p>Great sprint!</p>]]></content>
+  </entry>
+  <entry>
+    <id>urn:lsid:ibm.com:blogs:entry-66666666-aaaa-4bbb-8ccc-666666666666</id>
+    <author><name>Bob</name></author>
+    <published>2009-01-04T21:15:00.000Z</published>
+    <content type="html"><![CDATA[<p>Agreed!</p>]]></content>
+    <thr:in-reply-to ref="urn:lsid:ibm.com:blogs:entry-55555555-aaaa-4bbb-8ccc-555555555555"
+                      source="urn:lsid:ibm.com:blogs:entry-33333333-aaaa-4bbb-8ccc-333333333333"
+                      href="https://example.com/blogs/teamblog/feed/comment/atom?commentid=55555555-aaaa-4bbb-8ccc-555555555555"/>
+  </entry>
+  <entry>
+    <id>urn:lsid:ibm.com:blogs:entry-77777777-aaaa-4bbb-8ccc-777777777777</id>
+    <author><name>Carol</name></author>
+    <published>2009-01-04T22:00:00.000Z</published>
+    <content type="html"><![CDATA[<p>Thanks for sharing.</p>]]></content>
+  </entry>
+</feed>

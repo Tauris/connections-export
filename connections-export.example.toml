@@ -1,0 +1,73 @@
+# Copy this file to connections-export.toml (git-ignored) and fill in your own
+# deployment's details. connections-export.toml is never committed.
+#
+# Every value here can also be set via a CLI flag or an CONNECTIONS_EXPORT_*
+# environment variable; CLI > environment > this file > built-in
+# defaults. See connections_export/config.py for the full precedence rules.
+#
+# Secrets are NOT set here, ever. Use environment variables instead:
+#   CONNECTIONS_EXPORT_TOKEN                       (paste_token auth mode)
+#   CONNECTIONS_EXPORT_USER / CONNECTIONS_EXPORT_PASSWORD   (basic auth mode)
+# sspi/kerberos need no stored secret — they use the OS session.
+
+# Your Connections base URL (placeholder host below — replace it).
+base_url = "https://connections.example.corp"
+
+# sspi | kerberos | basic | paste_token
+auth_mode = "sspi"
+
+# basic | basic/anonymous | form | oauth
+auth_root = "basic"
+
+# The Connections source version being exported.
+source_version = "8.0"
+
+# Hosts counted as part of the same deployment (the asset boundary) —
+# links to any of these are treated as in-scope, not external.
+hcl_hosts = ["connections.example.corp", "files.example.corp"]
+
+# Self-throttle: minimum seconds between requests. An export is thousands of
+# them against a live deployment, so one second is the default. For anything
+# large, 3 overnight is the kinder choice: the same number of requests either
+# way, and a slower export is one nobody has to notice.
+min_interval = 1
+
+# Feed page size sent as `ps` on every paginated feed request (wikis,
+# comments, versions, attachments). 500 is the documented Wikis max.
+page_size = 500
+
+# Where the archive is written.
+output_dir = "archive"
+
+# What a run does about content the archive already holds:
+#   "resume"  - skip any URL already archived (finish an interrupted crawl)
+#   "update"  - bring the archive up to date: re-read the feeds that reveal
+#               change, and re-fetch only the items whose own date moved
+#   "refresh" - re-fetch everything, ignoring what is on disk
+fetch = "resume"
+
+# An existing archive directory to extend or update instead of capturing
+# fresh. When set, the cutoff for date-filtered feeds is read from that
+# archive's own provenance, so a scheduled re-run needs no date editing.
+# into = "archive/export-20260810-2114-atlas-project"
+
+# Override the cutoff an update would compute for itself. Earlier re-checks
+# more, never less.
+# since_override = "2026-08-01T00:00:00Z"
+
+# Version history policy: "list" (fetch the versions feed metadata only,
+# not each version's body), "full" (fetch every version's body too), or
+# "none" (skip version history entirely).
+versions = "list"
+
+# The running header and footer of an exported PDF. Six text slots taking
+# {page}, {pages}, {title}, {date} and {section} mixed with literal text, plus
+# five fields that shape rather than fill them.
+#
+#   connections-export style --marks
+#
+# writes the whole block out with every placeholder explained.
+# [pdf_marks]
+# footer_left = "{section}"
+# footer_right = "{page} / {pages}"
+# footer_rule = "1px solid #ddd"

@@ -1,0 +1,181 @@
+name: Packages
+
+# Wheel + sdist on every push to main, so staging proves the distributions the
+# same way it proves the executables -- and `twine check` renders the README the
+# way PyPI will, which is the one packaging fault a local install cannot show.
+#
+# The TestPyPI upload below is deliberately DORMANT: it never runs on a push,
+# only when someone dispatches it by hand with publish=true. Before it can work,
+# two things must exist (neither is created by this file):
+#   * a TestPyPI Trusted Publisher for this owner/repo naming `packages.yml`
+#     and the `testpypi` environment
+#   * a repository Environment named `testpypi`
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: "Upload the built distributions to TestPyPI"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.13"
+          enable-cache: true
+
+      - name: Build wheel and sdist
+        run: uv build --out-dir dist
+
+      # A package index renders the README as the project description. A
+      # malformed one is rejected at upload, or silently renders wrong, and a
+      # relative link that resolves in a checkout may not resolve there.
+      - name: Validate metadata and description rendering
+        run: uvx twine check --strict dist/*
+
+      - name: Report what was built
+        run: ls -l dist/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: distributions
+          path: dist/
+          if-no-files-found: error
+          # Small (~2 MB) but uploaded on every push; no reason to keep 90 days
+          # of them on metered storage.
+          retention-days: 7
+
+  # What only a real install can show. The tests run against the source tree,
+  # where the working copy has answered every question the same way for so long
+  # that some of them stopped being asked: bytecode is cached, the repository is
+  # on `sys.path`, and a data file is found because `docs/` happens to be next
+  # door. A fresh venv with nothing but the wheel in it has none of that.
+  #
+  # Runs on every push, before the dormant upload below, so a fault of this kind
+  # is found while the version number is still free to reuse.
+  smoke:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.13"
+      - uses: actions/download-artifact@v4
+        with:
+          name: distributions
+          path: dist/
+
+      - name: Install the built wheel into an empty environment
+        run: |
+          uv venv /tmp/smoke
+          VIRTUAL_ENV=/tmp/smoke uv pip install dist/*.whl
+
+      # Deliberately not from the repository root: Python puts the working
+      # directory on `sys.path`, so a check run there imports the checkout and
+      # the wheel is never touched.
+      - name: It runs, and says nothing it was not asked to say
+        working-directory: /tmp
+        run: |
+          set -euo pipefail
+          /tmp/smoke/bin/connections-export --help >/tmp/out.txt 2>/tmp/err.txt
+          echo "--- stdout ---"; cat /tmp/out.txt
+          if [ -s /tmp/err.txt ]; then
+            echo "::error::the console script wrote to stderr; a user sees this"
+            cat /tmp/err.txt
+            exit 1
+          fi
+          if grep -qi stub /tmp/out.txt; then
+            echo "::error::a stub command is advertised in the public help"
+            exit 1
+          fi
+
+      # A SyntaxWarning is raised once, when the `.pyc` is written -- long ago
+      # in a working tree, and on a new install either during it or on stderr of
+      # every command until a cache warms. Compiling on purpose catches both.
+      - name: Every installed module compiles without warnings
+        working-directory: /tmp
+        run: |
+          SITE=$(/tmp/smoke/bin/python -P -c \
+            "import connections_export,pathlib;print(pathlib.Path(connections_export.__file__).parent)")
+          /tmp/smoke/bin/python -W error::SyntaxWarning -m compileall -q -f -x vendor "$SITE"
+
+      # The documents the application READS, not merely ships beside: the
+      # manual is the console's Manual tab, and the spec is copied into every
+      # package written.
+      - name: Its own documents are inside it, and readable
+        working-directory: /tmp
+        run: |
+          /tmp/smoke/bin/python -P - <<'PY'
+          import pathlib
+          import connections_export
+          from connections_export.gui.manual import MANUAL_DOC_PATH, manual_html
+          from connections_export.interchange.package import SPEC_DOC_PATH
+
+          root = pathlib.Path(connections_export.__file__).parent
+          assert MANUAL_DOC_PATH.is_file(), f"no manual at {MANUAL_DOC_PATH}"
+          assert SPEC_DOC_PATH.is_file(), f"no interchange spec at {SPEC_DOC_PATH}"
+          assert (root / "architecture.md").is_file(), "no architecture document"
+          html = manual_html()
+          assert html.count("<h2") >= 10, f"the manual rendered {html.count('<h2')} sections"
+          print(f"manual renders: {len(html)} chars, {html.count('<h2')} sections")
+          PY
+
+      # The console serves its own page, with the manual already in it -- and
+      # refuses a caller that is not local. The console reads archives and can
+      # start a capture with the user's own credentials, so it answers to this
+      # machine and nothing else; that guard is worth proving in the artefact
+      # that ships rather than only in the tests.
+      - name: The console starts, serves a complete page, and stays local
+        working-directory: /tmp
+        run: |
+          /tmp/smoke/bin/python -P - <<'PY'
+          import asyncio
+          import httpx
+          from connections_export.gui.app import make_app
+
+          async def get(base):
+              transport = httpx.ASGITransport(app=make_app(demo=True))
+              async with httpx.AsyncClient(transport=transport, base_url=base) as c:
+                  return await c.get("/")
+
+          r = asyncio.run(get("http://127.0.0.1"))
+          assert r.status_code == 200, r.status_code
+          assert 'id="man-intro"' in r.text, "the manual is not in the served page"
+          assert "<!--MANUAL-->" not in r.text, "the manual placeholder was never filled"
+          print(f"console serves {len(r.text)} chars with the manual in place")
+
+          elsewhere = asyncio.run(get("http://elsewhere.example"))
+          assert elsewhere.status_code == 403, (
+              f"a non-local caller got {elsewhere.status_code}, not 403"
+          )
+          print("a non-local caller is refused")
+          PY
+
+  publish-testpypi:
+    # Dormant until dispatched by hand. Nothing on a push can reach this job.
+    if: github.event_name == 'workflow_dispatch' && inputs.publish
+    needs: [build, smoke]
+    runs-on: ubuntu-latest
+    environment:
+      name: testpypi
+      url: https://test.pypi.org/p/connections-export
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: distributions
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/

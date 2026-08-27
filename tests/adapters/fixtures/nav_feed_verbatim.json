@@ -1,0 +1,18 @@
+{
+  "identifier": "id", "label": "label",
+  "incremental": false, "fullTree": true, "clean": true,
+  "items": [
+    { "parent": "3d9210be-...", "children": [], "root": "false",
+      "id": "5ab5beda-...", "label": "page3", "type": "item",
+      "title": "page3", "childSize": 0 },
+    { "parent": "dc1b52bb-...",
+      "children": [ { "_reference": "5ab5beda-..." } ],
+      "parElem": "false", "root": "false", "id": "3d9210be-...",
+      "label": "page2", "title": "page2", "type": "item", "childSize": 1 },
+    { "children": [ { "_reference": "9b4a852e-..." } ],
+      "root": "true", "parElem": "false", "id": "tree",
+      "label": "tree", "type": "item", "childSize": 1 }
+  ],
+  "breadcrumbs": [],
+  "timestamp": 1539328731587
+}

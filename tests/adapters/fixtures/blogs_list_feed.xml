@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Reconstructed. the published API reference, Blogs section,
+  table row "List all blogs" -> `/blogs/{homepage}/feed/blogs/atom`
+  documents the endpoint *path* only; no field list or
+  sample exists anywhere in the doc for the "blog" (container)
+  resource itself — only for a blog *entry* (post), a different
+  resource. This fixture uses only the fields the doc's own
+  "Cross-application analysis / Genuinely shared" section confirms
+  hold for all three apps generically: <id>, <title>, and a self link.
+  Nothing app-specific (no handle, no blogType) is invented here.
+-->
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <id>urn:ibm.com:blogslist</id>
+  <title>All Blogs</title>
+  <entry>
+    <id>urn:lsid:ibm.com:blogs:entry-11111111-aaaa-4bbb-8ccc-111111111111</id>
+    <title type="text">Team Blog</title>
+    <link rel="self" href="https://example.com/blogs/teamblog/feed/entries/atom"/>
+  </entry>
+  <entry>
+    <id>urn:lsid:ibm.com:blogs:entry-22222222-aaaa-4bbb-8ccc-222222222222</id>
+    <title type="text">Release Notes</title>
+    <link rel="self" href="https://example.com/blogs/releasenotes/feed/entries/atom"/>
+  </entry>
+</feed>

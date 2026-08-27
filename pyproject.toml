@@ -1,0 +1,151 @@
+[project]
+name = "connections-export"
+version = "0.1.0"
+description = "Lossless, archive-first export of HCL Connections content — wikis, blogs, and forums — to a portable, self-documenting package"
+readme = "README.md"
+requires-python = ">=3.12"
+license = "BSD-3-Clause"
+license-files = ["LICENSE"]
+authors = [{ name = "Jörg Türmer" }]
+keywords = [
+    "hcl connections",
+    "wiki",
+    "blog",
+    "forum",
+    "export",
+    "archive",
+    "migration",
+    "obsidian",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: System Administrators",
+    "Intended Audience :: Information Technology",
+    "License :: OSI Approved :: BSD License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: System :: Archiving",
+    "Topic :: Utilities",
+]
+dependencies = [
+    "fastapi>=0.139.2",
+    "httpx>=0.28.1",
+    "lxml>=6.1.1",
+    "markdown>=3.7",
+    "playwright>=1.61.0",
+    "pydantic>=2.13",
+    # Merges the per-page PDFs the live browser export renders into one
+    # document. A runtime dependency, not a test one: without it a long
+    # export yields its first page only. Pure Python, no system libraries.
+    "pypdf>=4",
+    "uvicorn>=0.51.0",
+]
+
+# These URLs are what a package index shows on the project page.
+[project.urls]
+Homepage = "https://github.com/Tauris/connections-export"
+Repository = "https://github.com/Tauris/connections-export"
+Issues = "https://github.com/Tauris/connections-export/issues"
+
+[project.scripts]
+connections-export = "connections_export.cli:main"
+
+[project.optional-dependencies]
+# On Linux this needs system Kerberos headers before it will install:
+#   Debian/Ubuntu  sudo apt-get install libkrb5-dev
+#   Fedora/RHEL    sudo dnf install krb5-devel
+# `requests-kerberos` pulls `krb5`, which compiles against them. Windows and
+# macOS need nothing extra.
+sspi = [
+    "requests-negotiate-sspi>=0.5.2; sys_platform == 'win32'",
+    "requests-kerberos>=0.15.0",
+]
+# The reference Obsidian ingester (`connections-export ingest --format obsidian`).
+obsidian = [
+    "markdownify>=0.13",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1",
+    "ruff>=0.15",
+    "markdownify>=0.13",
+    # `just release-check` freezes the CLI into a single-file executable so a
+    # user without Python can run it. Build-time only; never a runtime import.
+    "pyinstaller>=6.11",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["connections_export"]
+
+# The sdist names what it contains rather than excluding what it does not.
+# The default is "everything in the working tree", which quietly ships whatever
+# happens to be lying beside the project. What belongs in an sdist is a small
+# and stable set, so listing it is both safe and readable -- and anything new
+# has to be added deliberately.
+[tool.hatch.build.targets.sdist]
+include = [
+    "connections_export",
+    "tests",
+    "tools",
+    ".github",
+    "docs/reference/interchange-format.md",
+    "docs/reference/architecture.md",
+    "docs/manual.md",
+    "README.md",
+    "LICENSE",
+    "justfile",
+    "pyproject.toml",
+    "uv.lock",
+    "connections-export.example.toml",
+]
+
+# Ship the interchange-format spec inside the wheel (next to the interchange
+# package), so the Manual's spec view and write_package's INTERCHANGE.md copy
+# work from a plain install, where `docs/` isn't present. Resolved by
+# `interchange.package.SPEC_DOC_PATH` (packaged copy first, repo doc in dev).
+[tool.hatch.build.targets.wheel.force-include]
+"docs/reference/interchange-format.md" = "connections_export/interchange/interchange-format.md"
+# The architecture document ships with the package too: someone reading the
+# installed code should not have to find the repository to learn how it fits
+# together. Force-included, so a build fails loudly rather than producing a
+# package with the document silently missing.
+"docs/reference/architecture.md" = "connections_export/architecture.md"
+# The console renders its Manual tab from this one Markdown source, so it has
+# to be present in an installed package as well as in a checkout. Resolved by
+# `gui.manual.MANUAL_DOC_PATH` (packaged copy first, repository doc second).
+"docs/manual.md" = "connections_export/manual.md"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+# RUF100 catches a `noqa` for a rule that does not fire -- a marker that reads
+# as a considered decision while suppressing nothing.
+select = ["E", "F", "I", "UP", "B", "PLC0415", "RUF100"]
+
+# PLC0415 (import-outside-top-level) is enabled for the library only. A
+# function-local import there is usually a module breaking a cycle, which is
+# worth seeing; each remaining one carries its own reason.
+#
+# Tests are exempt: a local import inside a test is idiomatic -- keeping a
+# heavy dependency out of collection, or importing the thing under test after
+# a monkeypatch -- and says nothing about coupling.
+external = ["BLE001", "SLF001", "N801"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["PLC0415"]
+"tools/**" = ["PLC0415"]

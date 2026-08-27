@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Same as page_entry_reference_fields.xml, but with the category on
+  the *other* documented scheme spelling
+  (scheme="http://www.ibm.com/xmlns/prod/sn/type" instead of
+  "tag:ibm.com,2006:td/type"); see "Known documentation defects #1"
+  in the published API reference. Used for the category-leniency
+  test: the adapter must read the same term ("page") from either.
+-->
+<entry xmlns="http://www.w3.org/2005/Atom"
+       xmlns:td="urn:ibm.com/td"
+       xmlns:snx="http://www.ibm.com/xmlns/prod/sn"
+       xmlns:thr="http://purl.org/syndication/thread/1.0">
+   <id>urn:lsid:ibm.com:td:2a8d8f2f-3333-4dab-9a6b-c9a8e7c8d002</id>
+   <title type="text">Reference Sample Page (sn/type scheme)</title>
+   <td:label>referenceSamplePageAltScheme</td:label>
+   <summary type="text">Reference Sample Page (sn/type scheme)</summary>
+   <content type="text/html" src="https://example.com/wikis/basic/api/wiki/wiki0321/page/referenceSamplePageAltScheme/media"/>
+   <category term="page" scheme="http://www.ibm.com/xmlns/prod/sn/type"/>
+   <td:visibility>public</td:visibility>
+   <td:versionLabel>1</td:versionLabel>
+   <published>2018-10-09T12:00:00Z</published>
+   <updated>2018-10-12T08:30:00Z</updated>
+   <author>
+      <name>Reference Author</name>
+   </author>
+   <td:parentUuid></td:parentUuid>
+   <link rel="self" href="https://example.com/wikis/basic/api/wiki/wiki0321/page/referenceSamplePageAltScheme/entry"/>
+   <link rel="replies" href="https://example.com/wikis/basic/api/wiki/wiki0321/page/referenceSamplePageAltScheme/feed" thr:count="0"/>
+   <snx:rank scheme="http://www.ibm.com/xmlns/prod/sn/recommendations">0</snx:rank>
+   <snx:rank scheme="http://www.ibm.com/xmlns/prod/sn/comment">0</snx:rank>
+   <snx:rank scheme="http://www.ibm.com/xmlns/prod/sn/hit">0</snx:rank>
+   <snx:rank scheme="http://www.ibm.com/xmlns/prod/sn/anonymous_hit">0</snx:rank>
+   <snx:rank scheme="http://www.ibm.com/xmlns/prod/sn/attachments">0</snx:rank>
+   <snx:rank scheme="http://www.ibm.com/xmlns/prod/sn/versions">1</snx:rank>
+</entry>

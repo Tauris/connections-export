@@ -1,0 +1,658 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>HCL Connections Export</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="stylesheet" href="console.css" />
+</head>
+<body>
+<!-- Icon sprite. Hand-authored 24x24 stroke set: one visual grammar
+     (1.75 stroke, round caps/joins, currentColor) replacing the emoji
+     that were doing this job. Emoji render in the OS colour font, so
+     their weight, colour and metaphor were outside our control and
+     differed per platform -- the single loudest 'home built' tell. -->
+<svg xmlns="http://www.w3.org/2000/svg" style="display:none" aria-hidden="true"><defs><g id="i-defs"></g></defs><symbol id="i-home" viewBox="0 0 24 24"><path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.8V21h14V9.8"/><path d="M9.5 21v-6h5v6"/></symbol><symbol id="i-archive" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="4.5" rx="1"/><path d="M5 8.5V20h14V8.5"/><path d="M10 12.5h4"/></symbol><symbol id="i-reader" viewBox="0 0 24 24"><path d="M3 5.5c3-1.2 6-1.2 9 0v14c-3-1.2-6-1.2-9 0z"/><path d="M21 5.5c-3-1.2-6-1.2-9 0v14c3-1.2 6-1.2 9 0z"/></symbol><symbol id="i-target" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="4.5"/><circle cx="12" cy="12" r="1"/></symbol><symbol id="i-ingest" viewBox="0 0 24 24"><path d="M12 3v11"/><path d="M7.5 10.5 12 15l4.5-4.5"/><path d="M4 16v3.5h16V16"/></symbol><symbol id="i-manual" viewBox="0 0 24 24"><path d="M4 4.5h11a3 3 0 0 1 3 3V21H7a3 3 0 0 1-3-3z"/><path d="M4 18h14"/><path d="M8 8.5h6"/></symbol><symbol id="i-settings" viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16"/><circle cx="9" cy="7" r="2"/><circle cx="15.5" cy="12" r="2"/><circle cx="7.5" cy="17" r="2"/></symbol><symbol id="i-brand" viewBox="0 0 24 24"><path d="M12 21V9"/><path d="M4.5 9a7.5 7.5 0 0 1 15 0"/><path d="M8 9a4 4 0 0 1 8 0"/><circle cx="12" cy="6.5" r="1"/></symbol><symbol id="i-theme" viewBox="0 0 24 24"><path d="M12 3.5a8.5 8.5 0 1 0 8.5 8.5A6.5 6.5 0 0 1 12 3.5z"/></symbol><symbol id="i-eye" viewBox="0 0 24 24"><path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z"/><circle cx="12" cy="12" r="3"/></symbol><symbol id="i-download" viewBox="0 0 24 24"><path d="M12 3.5v11"/><path d="M7.5 10.5 12 15l4.5-4.5"/><path d="M4.5 19.5h15"/></symbol><symbol id="i-globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M3.5 12h17"/><path d="M12 3.5c2.4 2.4 3.5 5.4 3.5 8.5S14.4 18.1 12 20.5c-2.4-2.4-3.5-5.4-3.5-8.5S9.6 5.9 12 3.5z"/></symbol><symbol id="i-stop" viewBox="0 0 24 24"><rect x="6.5" y="6.5" width="11" height="11" rx="1.5"/></symbol><symbol id="i-play" viewBox="0 0 24 24"><path d="M8 5.5 18 12 8 18.5z"/></symbol><symbol id="i-restart" viewBox="0 0 24 24"><path d="M3.5 12a8.5 8.5 0 1 0 2.6-6.1"/><path d="M3.5 4.5V10h5.5"/></symbol><symbol id="i-back" viewBox="0 0 24 24"><path d="M14.5 5.5 8 12l6.5 6.5"/></symbol><symbol id="i-filter" viewBox="0 0 24 24"><path d="M4 5.5h16l-6.2 7.3v5.4l-3.6 2v-7.4z"/></symbol><symbol id="i-search" viewBox="0 0 24 24"><circle cx="10.8" cy="10.8" r="6.3"/><path d="M15.4 15.4 20.5 20.5"/></symbol><symbol id="i-close" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></symbol><symbol id="i-flask" viewBox="0 0 24 24"><path d="M9.5 3.5v6L4.5 18a2 2 0 0 0 1.7 3h11.6a2 2 0 0 0 1.7-3l-5-8.5v-6"/><path d="M8.5 3.5h7"/><path d="M7.2 14.5h9.6"/></symbol><symbol id="i-package" viewBox="0 0 24 24"><path d="M12 3 20.5 7.5v9L12 21l-8.5-4.5v-9z"/><path d="M3.5 7.5 12 12l8.5-4.5"/><path d="M12 12v9"/></symbol><symbol id="i-columns" viewBox="0 0 24 24"><rect x="3.5" y="4.5" width="17" height="15" rx="2"/><path d="M9.5 4.5v15"/></symbol><symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 3 19.5 6v6c0 4.2-3 7.4-7.5 9-4.5-1.6-7.5-4.8-7.5-9V6z"/></symbol><symbol id="i-move" viewBox="0 0 24 24"><path d="M4.5 12h15"/><path d="M14.5 7 19.5 12l-5 5"/><path d="M4.5 6.5v11"/></symbol><symbol id="i-layers" viewBox="0 0 24 24"><path d="M12 3 21 7.8 12 12.6 3 7.8z"/><path d="M3 12.4 12 17.2l9-4.8"/><path d="M3 16.6 12 21.4l9-4.8"/></symbol><symbol id="i-pen" viewBox="0 0 24 24"><path d="M4 20h4L20 8a2.5 2.5 0 0 0-3.5-3.5L4.5 16.5z"/><path d="M15.5 5.5 18.5 8.5"/></symbol><symbol id="i-comment" viewBox="0 0 24 24"><path d="M20.5 12.5a7.5 7.5 0 0 1-10.9 6.7L4.5 20.5l1.3-5.1A7.5 7.5 0 1 1 20.5 12.5z"/></symbol><symbol id="i-printer" viewBox="0 0 24 24"><path d="M7 9.5V3.5h10v6"/><rect x="3.5" y="9.5" width="17" height="7" rx="2"/><path d="M7 14.5h10v6H7z"/></symbol><symbol id="i-check" viewBox="0 0 24 24"><path d="M5 12.5 9.5 17 19 6.5"/></symbol><symbol id="i-warn" viewBox="0 0 24 24"><path d="M12 4 21 19.5H3z"/><path d="M12 10v4"/><circle cx="12" cy="17" r=".6" fill="currentColor" stroke="none"/></symbol></svg>
+
+<div id="app-shell">
+  <nav id="sidebar" aria-label="Sections">
+    <button class="sb-brand" id="sb-brand" type="button" title="Go to Overview"><svg class="icon" aria-hidden="true"><use href="#i-brand"/></svg> <span class="sb-label">Connections Export</span></button>
+    <button class="nav-item" data-section="overview" type="button"><svg class="icon" aria-hidden="true"><use href="#i-home"/></svg> <span class="sb-label">Overview</span></button>
+    <div class="sb-group"><span class="sb-label">Browse</span></div>
+    <button class="nav-item" data-section="archives" type="button"><svg class="icon" aria-hidden="true"><use href="#i-archive"/></svg> <span class="sb-label">Archives</span></button>
+    <button class="nav-item" data-section="reader" type="button"><svg class="icon" aria-hidden="true"><use href="#i-reader"/></svg> <span class="sb-label">Reader</span></button>
+    <div class="sb-group"><span class="sb-label">Capture</span></div>
+    <button class="nav-item" data-section="select" type="button"><svg class="icon" aria-hidden="true"><use href="#i-target"/></svg> <span class="sb-label">Select &amp; Tailor</span></button>
+    <button class="nav-item" data-section="ingest" type="button"><svg class="icon" aria-hidden="true"><use href="#i-ingest"/></svg> <span class="sb-label">Ingest</span></button>
+    <div class="sb-group"><span class="sb-label">Help</span></div>
+    <button class="nav-item" data-section="manual" type="button"><svg class="icon" aria-hidden="true"><use href="#i-manual"/></svg> <span class="sb-label">Manual</span></button>
+    <button class="nav-item" data-section="licenses" type="button"><svg class="icon" aria-hidden="true"><use href="#i-manual"/></svg> <span class="sb-label">Licenses</span></button>
+    <button class="nav-item" data-section="settings" type="button"><svg class="icon" aria-hidden="true"><use href="#i-settings"/></svg> <span class="sb-label">Settings</span></button>
+    <div id="sb-run-status" class="sb-status" hidden></div>
+    <div class="sb-identity" id="sb-identity" hidden><svg class="icon" aria-hidden="true"><use href="#i-target"/></svg><span id="sb-identity-text">Checking…</span></div>
+    <button id="theme-toggle" class="theme-btn" type="button" title="Toggle dark / light / auto theme"><span class="ti-icon" aria-hidden="true"><svg class="icon"><use href="#i-theme"/></svg></span> <span class="sb-label">Auto</span></button>
+    <button id="sb-collapse" class="sb-collapse" type="button" title="Collapse sidebar">«</button>
+  </nav>
+  <main id="app-main">
+  <section class="section-panel" id="panel-overview">
+
+<div class="wrap ov-wrap">
+  <h1 class="ov-hero">Keep what your community built.</h1>
+  <p class="ov-lede">Capture HCL Connections wikis, blogs, forums, files &amp; community front pages into a portable,
+    self-documenting archive you control — with an offline reader and PDF export.
+    Built for content you already have access to.</p>
+  <div class="why-grid" aria-label="What this tool can do">
+    <div class="why-card">
+      <div class="wi" aria-hidden="true"><svg class="icon" aria-hidden="true"><use href="#i-columns"/></svg></div>
+      <h3>Keep what your community built</h3>
+      <p>Years of pages, posts, and answers accumulate in these apps. Capture them in an open format you hold yourself, so the content isn't bound to the lifetime of any single platform.</p>
+    </div>
+    <div class="why-card">
+      <div class="wi" aria-hidden="true"><svg class="icon" aria-hidden="true"><use href="#i-manual"/></svg></div>
+      <h3>A backup you can actually read</h3>
+      <p>A lossless local capture with a built-in reader — browse pages, threads, and comments offline, and turn any of it into a PDF whenever you need a document.</p>
+    </div>
+    <div class="why-card">
+      <div class="wi" aria-hidden="true"><svg class="icon" aria-hidden="true"><use href="#i-move"/></svg></div>
+      <h3>Ready to move anywhere</h3>
+      <p>The archive is an open interchange package: structure, metadata, attachments, and provenance stay machine-readable — far less information loss than a PDF — so content can be re-homed into whatever comes next.</p>
+    </div>
+    <div class="why-card">
+      <div class="wi" aria-hidden="true"><svg class="icon" aria-hidden="true"><use href="#i-layers"/></svg></div>
+      <h3>More than a snapshot</h3>
+      <p>Built-in exports and print-to-PDF give you snapshots — fine for a quick copy, but not made to be re-homed. A PDF flattens hierarchy, threads, versions, and comments; this capture keeps all of that intact.</p>
+    </div>
+    <div class="why-card wide">
+      <div class="wi" aria-hidden="true"><svg class="icon" aria-hidden="true"><use href="#i-pen"/></svg></div>
+      <h3>Your own contributions, in context</h3>
+      <p>Keep the discussions you were part of — everything you wrote, answered, or commented on, each with its full surrounding chain: the whole forum thread, the whole blog entry with every comment, never an isolated snippet. Name yourself in the <strong>“Only content authored by”</strong> field when you set up a capture and the sweep keeps just what you authored or took part in — matched on your name, user id, or contributor credit.</p>
+    </div>
+  </div>
+  <div class="ov-ctas">
+    <button class="btn" id="ov-start" type="button"><svg class="icon" aria-hidden="true"><use href="#i-target"/></svg> Capture a community</button>
+    <button class="btn" id="ov-archives" type="button"><svg class="icon" aria-hidden="true"><use href="#i-archive"/></svg> Open an archive</button>
+    <span class="ov-cta-aside"><button class="btn quiet" id="ov-demo" type="button">Try the demo</button></span>
+  </div>
+</div>
+
+  </section>
+  <section class="section-panel" id="panel-archives" hidden>
+    <div class="wrap archive-page-wrap">
+      <div class="page-heading"><div><h1>Archives</h1><p class="foot-note">Open a captured archive in the Reader, or remove old captures.</p></div><button class="btn danger" id="delete-demo-archives" type="button">Delete all demo archives</button></div>
+      <div class="archive-toolbar" id="archive-toolbar" hidden>
+        <button class="btn" id="select-superseded" type="button" title="Select every run that a later attempt at the same target has replaced">Select superseded</button>
+        <button class="btn" id="clear-selection" type="button">Clear selection</button>
+        <input type="search" id="archive-filter" placeholder="Filter by name or content…" aria-label="Filter archives" />
+        <span class="foot-note" id="selection-summary">Nothing selected.</span>
+        <button class="btn danger" id="delete-selected" type="button" disabled>Delete selected</button>
+      </div>
+      <div id="archive-drop" class="archive-drop">
+        <div class="archive-drop-main">
+          <b>An archive from anywhere</b>
+          <p class="foot-note">Drop a folder or a <code>.zip</code> here — from your file manager,
+            from OneDrive or SharePoint, or a link to one — and it opens in the Reader. It does not
+            have to live in this folder, and nothing is copied when it is already on this machine.</p>
+        </div>
+        <div class="archive-drop-actions">
+          <button class="btn" id="archive-choose" type="button">Choose a .zip…</button>
+          <input type="file" id="archive-file" accept=".zip,application/zip" hidden />
+          <input type="text" id="archive-path" placeholder="…or paste a path or a link to a .zip"
+                 autocomplete="off" spellcheck="false" />
+          <button class="btn" id="archive-open-path" type="button">Open</button>
+        </div>
+      </div>
+      <div id="archive-list" class="ov-recent"><span class="foot-note">No archives loaded yet.</span></div>
+    </div>
+  </section>
+  <section class="section-panel" id="panel-select" hidden>
+
+<div class="wrap setup-wrap screen" id="setup-screen">
+  <div class="setup-head">
+    <h1>Select &amp; tailor</h1>
+    <p class="setup-tagline">Paste any Connections page you can open — the capture is shaped from what it turns out to be. <span class="setup-tagline-aside">Or drop an archive here — a folder, a <code>.zip</code>, or a link to one — to read it instead.</span></p>
+  </div>
+
+  <div class="setup-grid">
+  <!-- SOURCE: one control with two faces. The capture bar until something is
+       identified; the identity strip afterwards, because once identify has run
+       the source is one line of facts, not a card that needs a column. -->
+  <section class="panel setup-source" id="setup-source">
+    <div class="source-body">
+      <!-- Face 1: the capture bar. One input, three ways in -- paste, type, or
+           drop anywhere on the page. The dropzone and the field were two
+           affordances for the same verb. -->
+      <div id="capture-bar">
+        <label class="dz-label" for="setup-url-input">Wiki, blog, forum, or community URL</label>
+        <div class="dz-row">
+          <input type="text" id="setup-url-input" placeholder="https://connections.example.corp/wikis/home/wiki/…" autocomplete="off" spellcheck="false" />
+          <button class="btn primary" id="identify-url" type="button">Identify</button>
+        </div>
+        <p class="dz-hint">One field, three ways in: <b>paste</b> an address, <b>type</b> one, or <b>drag a link or browser tab</b> anywhere onto this page. Identifying only looks; nothing is captured until you press Start.</p>
+        <button class="btn" id="demo-mode" type="button" hidden>Show demo sample URLs</button>
+        <div id="demo-chips" class="demo-chips" hidden></div>
+        <p class="foot-note source-foot"><button class="linklike" id="manual-setup-link" type="button">No URL handy? Set up manually</button></p>
+      </div>
+      <!-- Face 2: what the URL resolves to. Not an editable form -- the
+           address stops being interface once it has been resolved. -->
+      <div id="identity-strip" class="identity-strip" hidden>
+        <div class="is-icon" aria-hidden="true"><svg class="icon"><use href="#i-target"/></svg></div>
+        <div class="is-facts">
+          <div class="is-title"><b id="is-name"></b><span class="lr-chip" id="is-kind"></span><span class="lr-chip" id="is-archive-chip" hidden>existing archive</span></div>
+          <div class="is-detail mono" id="is-detail"></div>
+          <div class="is-detail" id="is-extra"></div>
+        </div>
+        <div class="is-actions">
+          <div class="foot-note" id="is-auth"></div>
+          <button class="btn" id="change-source" type="button">Change source</button>
+          <button class="linklike" id="capture-fresh" type="button" hidden>Capture fresh into a new archive</button>
+        </div>
+      </div>
+      <!-- Manual setup: the one path with no URL to derive anything from, so
+           it is the one place the deployment address is still typed. Settings
+           owns the default; this overrides it for one run. -->
+      <div id="manual-setup-fields" class="setup-form" hidden>
+        <div class="field full">
+          <label for="field-base-url">HCL system (base URL)</label>
+          <input type="text" id="field-base-url" placeholder="https://connections.example.corp" autocomplete="off" spellcheck="false" />
+        </div>
+        <div class="field">
+          <label for="field-auth-mode">Sign in as yourself (auth)</label>
+          <select id="field-auth-mode">
+            <option value="sspi">Windows sign-in (SSPI)</option>
+            <option value="kerberos">Kerberos</option>
+            <option value="basic">Username and password</option>
+            <option value="paste_token">Paste a token</option>
+          </select>
+        </div>
+      </div>
+      <div class="setup-note" id="setup-note" hidden></div>
+      <!-- Shown when what was just identified is already in an archive here.
+           An offer, never a redirect: someone may want a fresh capture beside
+           the old one, and silently making it an update would be worse than
+           not noticing. -->
+      <div class="setup-note" id="collision-note" hidden role="status" aria-live="polite">
+        <span id="collision-text"></span>
+        <span class="collision-actions">
+          <button class="btn" id="collision-extend" type="button">Extend or update that archive</button>
+          <button class="linklike" id="collision-dismiss" type="button">Keep this a fresh capture</button>
+        </span>
+      </div>
+    </div>
+  </section>
+
+  <!-- STEP 2: tailoring — revealed once a URL is identified, filtered to the detected app.
+       Not a boxed panel: the tailor groups sit directly on the page, each a labelled
+       zone, so the two panels that remain (source, run bar) read as the anchors. -->
+  <div class="setup-col-right">
+  <section id="tailor-panel">
+      <div class="analysis-note" id="analysis-note" hidden role="status" aria-live="polite">
+        <span class="spin" aria-hidden="true"></span>
+        <span><b class="analysis-detail">Working out what this URL contains</b> — starting an import now would capture only what has been found so far, so Start is held until this finishes.</span>
+      </div>
+      <div class="tailor-guide empty-state" id="tailor-guide">
+        <svg class="icon icon-lg" aria-hidden="true"><use href="#i-target"/></svg>
+        <p class="es-title">Nothing selected yet</p>
+        <p class="es-body">Identify a URL above and the components it contains — wikis, blogs, forums, files, highlights — appear here to choose from.</p>
+        <button class="btn" id="manual-setup" type="button">Set up manually instead</button>
+      </div>
+      <div id="tailor-body" hidden>
+        <div class="sel-group" id="scope-group">
+        <h2 class="group-head" id="scope-label">Scope <span class="g-note" id="tailor-meta" hidden></span></h2>
+        <div class="mode-grid" id="mode-grid" role="group" aria-labelledby="scope-label">
+          <button class="mode-btn active" data-app="wiki" data-scope="all" type="button">
+            <span class="mode-icon"><svg class="icon" aria-hidden="true"><use href="#i-reader"/></svg></span><span class="mode-label">Whole wiki</span>
+            <span class="mode-desc">All pages, hierarchy, comments</span>
+          </button>
+          <button class="mode-btn" data-app="wiki" data-scope="sub" type="button">
+            <span class="mode-icon"><svg class="icon" aria-hidden="true"><use href="#i-layers"/></svg></span><span class="mode-label">Wiki sub-tree</span>
+            <span class="mode-desc">A page and all its children</span>
+          </button>
+          <button class="mode-btn" data-app="wiki" data-scope="single" type="button">
+            <span class="mode-icon"><svg class="icon" aria-hidden="true"><use href="#i-manual"/></svg></span><span class="mode-label">Single wiki page</span>
+            <span class="mode-desc">One page with its comments</span>
+          </button>
+          <button class="mode-btn" data-app="blog" data-scope="all" type="button">
+            <span class="mode-icon"><svg class="icon" aria-hidden="true"><use href="#i-pen"/></svg></span><span class="mode-label">Whole blog</span>
+            <span class="mode-desc">All posts and comments</span>
+          </button>
+          <button class="mode-btn" data-app="blog" data-scope="single" type="button">
+            <span class="mode-icon"><svg class="icon" aria-hidden="true"><use href="#i-pen"/></svg></span><span class="mode-label">Single blog post</span>
+            <span class="mode-desc">One post with its comments</span>
+          </button>
+          <button class="mode-btn" data-app="forum" data-scope="all" type="button">
+            <span class="mode-icon"><svg class="icon" aria-hidden="true"><use href="#i-comment"/></svg></span><span class="mode-label">Whole forum</span>
+            <span class="mode-desc">All topics and replies</span>
+          </button>
+          <button class="mode-btn" data-app="forum" data-scope="single" type="button">
+            <span class="mode-icon"><svg class="icon" aria-hidden="true"><use href="#i-comment"/></svg></span><span class="mode-label">Single thread</span>
+            <span class="mode-desc">One topic and its replies</span>
+          </button>
+        </div>
+        </div>
+        <!-- ARCHIVE MODE: the ledger replaces the scope/component controls.
+             One row per component, saying what IS and asking what to do. -->
+        <div id="archive-ledger" class="archive-ledger sel-group" hidden>
+          <div class="ledger-head">
+            <h2 class="group-head">In the archive — and what this run should do</h2>
+            <p class="foot-note" id="ledger-since-line"></p>
+            <details class="advanced" id="ledger-date-override">
+              <summary>Use a different date</summary>
+              <div class="advanced-body">
+                <label for="field-since">Look for changes since</label>
+                <input type="datetime-local" id="field-since" />
+                <p class="foot-note">An earlier date re-checks more, never less. Leave it alone and the date comes from this archive's own last capture.</p>
+              </div>
+            </details>
+          </div>
+          <p class="foot-note" id="demo-time-row" hidden>
+            <button class="btn" id="demo-advance" type="button" title="Demo only. The fake deployment holds back a second wave of content — new posts and topics, and one reply on a topic that is otherwise untouched. This reveals it, so an update has something real to find.">Demo: let a week pass on the live system</button>
+            <span id="demo-time-status"></span>
+          </p>
+          <div id="ledger-rows" class="ledger-rows"></div>
+          <p class="foot-note" id="ledger-inherited"></p>
+          <p class="foot-note" id="ledger-estimate" role="status" aria-live="polite"></p>
+          <p class="foot-note">Items deleted on the live system stay in the archive: this is an archive, not a mirror. Nothing already captured is removed, and nothing is duplicated — a re-captured item replaces its own earlier copy.</p>
+        </div>
+        <div id="community-components" class="community-components sel-group" hidden autocomplete="off">
+          <h2 class="group-head" id="components-label">Communities to archive <span class="g-note">everything ticked is captured into one archive, and cross-links between them stay live</span></h2>
+          <div id="community-component-options" class="component-options" role="group" aria-labelledby="components-label"></div>
+          <div id="extra-community-groups"></div>
+          <div id="subcommunity-offer" class="subcommunity-offer" hidden>
+            <div class="subcommunity-offer-head" id="subcommunity-offer-head"></div>
+            <div id="subcommunity-candidates" role="group" aria-labelledby="subcommunity-offer-head"></div>
+          </div>
+          <div class="add-community">
+            <button class="btn" id="add-subcommunities" type="button" hidden></button>
+            <input id="add-community-url" type="text" autocomplete="off"
+                   placeholder="…or add another community by URL or uuid" />
+            <button class="btn" id="add-community" type="button">Add</button>
+            <span class="foot-note" id="add-community-status" role="status"></span>
+          </div>
+        </div>
+        <div class="sel-group" id="author-group">
+          <h2 class="group-head" id="author-label">Whose content to capture</h2>
+          <div class="author-row">
+            <div class="seg author-seg" role="group" aria-labelledby="author-label">
+              <button type="button" id="author-mode-everyone" aria-pressed="true">Everyone</button>
+              <button type="button" id="author-mode-me" aria-pressed="false">Only me</button>
+              <button type="button" id="author-mode-person" aria-pressed="false">A specific person</button>
+            </div>
+            <p class="foot-note author-note" id="author-mode-note">Captures everything in the selected components, whoever wrote it.</p>
+          </div>
+          <div id="author-person-wrap" hidden>
+            <input type="text" id="field-author" placeholder="Name, user id, or email" autocomplete="off" spellcheck="false" />
+            <p class="foot-note">Matched at capture time against the author name, user id, or contributor credit. Display names change over time — a user id matches most reliably.</p>
+            <div class="resolve-result" id="author-resolve-result" hidden></div>
+          </div>
+          <details class="advanced">
+            <summary>Advanced</summary>
+            <div class="advanced-body">
+              <span class="field-inline" id="single-component-target">
+                <label id="field-target-label" for="field-wiki-label">Wiki / Blog / Forum / Community ID</label>
+                <input type="text" id="field-wiki-label" placeholder="auto-detected from URL; community UUID supported" autocomplete="off" spellcheck="false" />
+              </span>
+              <button class="btn" id="author-me" type="button" aria-pressed="false" hidden>Use current user</button>
+              <button class="btn" id="author-resolve" type="button" title="Look up a stable user id from an email address via the Profiles service.">Look up a user id from an email</button>
+              <button class="btn" id="author-search-preview" type="button" title="Read-only: run the deployment's search for this person and show what it would return.">Preview what search finds</button>
+              <label class="pdf-opt" id="community-scope-wrap" hidden title="Experimental: also pin the search to the owning community, discovered from the container you identified."><input type="checkbox" id="community-scope" checked /> Limit search to the owning community <span id="community-scope-id" class="mono"></span></label>
+            </div>
+          </details>
+        </div>
+        <!-- The run bar. Sticky, so on a long component list Start and the
+             estimate stay in reach while you tick things -- and there is
+             exactly one Start on the screen, always in the same place. -->
+        <div class="run-bar" id="run-bar">
+          <div class="run-bar-controls">
+            <div class="size-chooser" id="size-chooser">
+              <div class="seg" role="group" aria-label="How much to ingest">
+                <button class="seg-opt active" id="size-all" type="button">All (<span id="size-all-n" class="mono">?</span>)</button>
+                <button class="seg-opt" id="size-preview" type="button">First</button>
+              </div>
+              <input type="number" id="size-count" min="1" value="10" aria-label="Preview: number of items to ingest" />
+              <span class="foot-note">per component</span>
+              <label class="pdf-opt rb-delay" title="Seconds to wait between requests. A large export is thousands of them — 3s overnight is kinder to a busy deployment than rushing it during the working day.">delay <input type="number" id="field-delay" min="0.2" step="0.1" value="1" aria-label="Delay between requests, seconds" /> s</label>
+            </div>
+            <div class="run-estimate foot-note" id="run-estimate" role="status" aria-live="polite"></div>
+            <div class="rb-actions">
+              <button class="btn accent" id="start-live-pdf" type="button" title="Renders directly from the source system — it needs that system online, and cannot be recreated from an archive later."><svg class="icon" aria-hidden="true"><use href="#i-globe"/></svg> Live PDF</button>
+              <button class="btn primary" id="start-ingest" type="button"><svg class="icon" aria-hidden="true"><use href="#i-play"/></svg> Start ingest</button>
+              <span class="foot-note" id="select-running" hidden>Ingest running — these are the settings it is using. The delay can still be changed.</span>
+            </div>
+          </div>
+          <div class="foot-note" id="size-note">Nothing runs until you press Start. The run continues on the server even if this window is closed.</div>
+          <span class="foot-note" id="live-pdf-hint" hidden></span>
+          <details class="cli-echo" id="cli-echo" hidden>
+            <summary class="cli-echo-title">The same capture, as a command</summary>
+            <div class="cli-body">
+              <code id="cli-command" class="cli-echo-code"></code>
+              <button class="btn" id="cli-copy" type="button">Copy</button>
+            </div>
+            <div class="foot-note cli-foot">Choose here, then paste this into a script to repeat the capture unattended. It reflects exactly what Start ingest would do.</div>
+          </details>
+        </div>
+      </div>
+  </section>
+
+  <!-- "Try the demo" is not repeated here: Overview owns it, and this screen
+       is for capturing something real. Live PDF moved into the run bar, beside
+       the Start it is an alternative to. -->
+  <button class="btn" id="run-demo" type="button" hidden></button>
+  </div>
+  </div>
+</div>
+
+  </section>
+  <section class="section-panel" id="panel-ingest" hidden>
+
+<div class="wrap screen" id="console-screen">
+  <div class="live-banner connecting" id="live-banner"><span class="dot"></span><span id="live-banner-text">Connecting to the live demo pipeline…</span></div>
+  <div class="topbar">
+    <div class="beam" id="beam"></div>
+    <div class="brand">
+      <div class="glyph" aria-hidden="true"><svg class="icon" aria-hidden="true"><use href="#i-brand"/></svg></div>
+      <div class="route">
+        <div class="title">Ingest</div>
+        <div class="path mono" id="route-path">
+          <span>Not started yet</span>
+        </div>
+      </div>
+    </div>
+    <div class="spacer"></div>
+    <span class="demo-badge" id="ingest-archive" title="The archive this run is writing to" hidden></span>
+    <div class="clocks">
+      <div class="clock"><span class="k">Elapsed</span><span class="v" id="elapsed">00:00</span></div>
+      <div class="clock"><span class="k">Est. left</span><span class="v" id="eta">—</span></div>
+    </div>
+    <div class="status-pill idle" id="statuspill"><span class="dot"></span><span id="statustext">Not started</span></div>
+    <button class="btn crit" id="stop-btn" title="Stop the import after the current item" style="display:none">
+      <svg class="icon" aria-hidden="true"><use href="#i-stop"/></svg> Stop
+    </button>
+    <button class="btn primary reader-cta" id="open-reader-top" disabled
+            title="Available as soon as the first page is imported"><svg class="icon" aria-hidden="true"><use href="#i-manual"/></svg> Open reader</button>
+    <button class="btn reader-cta" id="live-pdf-preview" disabled
+            title="Watch the export PDF build up as pages are imported"><svg class="icon" aria-hidden="true"><use href="#i-printer"/></svg> Live PDF preview</button>
+  </div>
+
+  <div class="overall">
+    <div class="bar"><div class="fill" id="ovfill"></div><div class="sheen" id="ovsheen" aria-hidden="true"></div></div>
+    <div class="lbl">
+      <span><span class="mono" id="ovpct">0%</span> of discovered pages archived</span>
+      <span class="mono"><span id="ovdone">0</span> / <span id="ovtotal">0</span></span>
+    </div>
+  </div>
+
+  <div class="kpis">
+    <div class="kpi accent"><div class="top"><span class="name">Discovered</span><span class="chip">queued</span></div><div class="num" id="k-disc">0</div><div class="sub">pages + feeds + assets</div></div>
+    <div class="kpi good"><div class="top"><span class="name">Fetched</span><span class="chip">saved</span></div><div class="num" id="k-ok">0</div><div class="sub">responses saved</div></div>
+    <div class="kpi" id="kpi-reused" hidden><div class="top"><span class="name">Reused</span><span class="chip">unchanged</span></div><div class="num" id="k-reused">0</div><div class="sub">already had, from the archive</div></div>
+    <div class="kpi warn"><div class="top"><span class="name">Retried</span><span class="chip">slowed down</span></div><div class="num" id="k-retry">0</div><div class="sub">server asked us to wait</div></div>
+    <div class="kpi crit"><div class="top"><span class="name">Failed</span><span class="chip">logged</span></div><div class="num" id="k-fail">0</div><div class="sub">kept, with the reason</div></div>
+    <div class="kpi" id="kpi-stopped" hidden><div class="top"><span class="name">Not attempted</span><span class="chip">stopped</span></div><div class="num" id="k-stopped">0</div><div class="sub">you stopped the run</div></div>
+    <div class="kpi"><div class="top"><span class="name">Throughput</span><span class="chip">per minute</span></div><div class="num" id="k-tp">0</div><div class="sub">requests / min</div></div>
+    <div class="kpi" id="kpi-latency" hidden><div class="top"><span class="name">Response</span><span class="chip">typical</span></div><div class="num" id="k-latency">—</div><div class="sub">the source system's own time</div></div>
+  </div>
+
+  <!-- Per-type counts, tallied live as items are fetched (pages, comments,
+       topics, replies, images, attachments, …). -->
+  <div class="type-counts" id="type-counts" hidden></div>
+
+  <div class="grid">
+    <div class="col">
+      <section class="panel">
+        <header>
+          <h2><span aria-hidden="true"><svg class="icon" aria-hidden="true"><use href="#i-archive"/></svg></span> Hierarchy</h2>
+          <span class="meta">click any node to inspect ingested data →</span>
+        </header>
+        <div class="tree" id="tree" role="tree" aria-label="Content hierarchy being archived"></div>
+      </section>
+    </div>
+    <div class="col">
+      <section class="panel">
+        <header><h2><span aria-hidden="true"><svg class="icon" aria-hidden="true"><use href="#i-layers"/></svg></span> Throughput</h2><span class="meta">pages archived / min</span></header>
+        <div class="spark-wrap">
+          <div class="spark-top">
+            <div class="spark-now"><span id="spark-now">0</span><small>/min now</small></div>
+            <div class="spark-peak">peak <span id="spark-peak" class="mono">0</span></div>
+          </div>
+          <svg class="spark" id="spark" viewBox="0 0 320 92" preserveAspectRatio="none" aria-hidden="true">
+            <line class="grid" x1="0" y1="30" x2="320" y2="30"></line>
+            <line class="grid" x1="0" y1="61" x2="320" y2="61"></line>
+            <path class="area" id="spark-area" d=""></path>
+            <path class="line" id="spark-line" d=""></path>
+            <circle class="end-halo" id="spark-halo" r="6" cx="0" cy="92"></circle>
+            <circle class="end" id="spark-end" r="3.5" cx="0" cy="92"></circle>
+          </svg>
+        </div>
+      </section>
+      <section class="panel">
+        <header><h2><span aria-hidden="true">⟳</span> Activity</h2><span class="meta">newest first</span></header>
+        <div class="log" id="log" role="log" aria-live="polite" aria-label="Fetch activity"></div>
+      </section>
+    </div>
+  </div>
+
+  <div class="alerts" id="alerts" aria-live="assertive">
+    <div class="alerts-empty" id="alerts-empty"><span class="ok-dot"></span> No data-loss warnings. Watching for truncation &amp; orphans…</div>
+  </div>
+
+  <div class="verdict" id="verdict">
+    <div class="vh"><span class="badge" id="verdict-badge">—</span><h3 id="verdict-title">Run complete</h3></div>
+    <div class="vgrid">
+      <div class="vg"><div class="k">Fetched (ok)</div><div class="v" id="v-ok">0</div></div>
+      <div class="vg" id="vg-pruned" hidden><div class="k">Pruned (filter)</div><div class="v" id="v-pruned">0</div></div>
+      <div class="vg"><div class="k">Failed</div><div class="v" id="v-fail">0</div></div>
+      <div class="vg"><div class="k">Warnings</div><div class="v" id="v-warn">0</div></div>
+      <div class="vg"><div class="k">Blobs (deduped)</div><div class="v" id="v-blobs">0</div></div>
+    </div>
+    <div class="type-counts" id="v-breakdown"></div>
+    <div class="v-communities" id="v-communities" hidden></div>
+  </div>
+
+  <!-- Authors seen in this import. Click one to re-import only their content,
+       using the exact stored name form (no guessing the format). -->
+  <div class="author-picker" id="author-picker" hidden></div>
+
+  <div class="controls">
+    <span class="demo-badge" id="mode-badge" title="hcl-serve --demo: the real crawler/derive pipeline against an in-process fake HCL server."><svg class="icon" aria-hidden="true"><use href="#i-flask"/></svg> Demo — connecting…</span>
+    <span class="foot-note" id="foot-note">Click any node to open its ingested data — live, as it arrives.</span>
+    <div class="spacer"></div>
+    <button class="btn" id="open-reader"><svg class="icon" aria-hidden="true"><use href="#i-manual"/></svg> Open reader</button>
+    <button class="btn primary" id="restart"><svg class="icon" aria-hidden="true"><use href="#i-restart"/></svg> Start again</button>
+  </div>
+</div>
+
+  </section>
+  <section class="section-panel" id="panel-reader" hidden>
+
+<div class="reader screen" id="reader-screen">
+  <div class="r-top" id="r-top">
+    <!-- Identity row: the things that are long and want to wrap get a line of
+         their own, instead of squeezing the search field down to nothing. -->
+    <div class="r-ident">
+      <div class="glyph" aria-hidden="true"><svg class="icon" aria-hidden="true"><use href="#i-manual"/></svg></div>
+      <div class="r-crumb" id="r-crumb"></div>
+      <span class="demo-badge" id="r-source">reconstructed archive</span>
+      <div class="spacer"></div>
+      <button class="btn ghost" id="r-exit"><svg class="icon" aria-hidden="true"><use href="#i-back"/></svg> Back to Ingest</button>
+    </div>
+    <!-- Actions row: search takes the room it needs; everything that only
+         matters when exporting lives behind the export menu. -->
+    <div class="r-actions">
+      <div class="r-search"><span class="si" aria-hidden="true"><svg class="icon" aria-hidden="true"><use href="#i-search"/></svg></span><input id="r-search-input" type="search" placeholder="Search this archive…" aria-label="Search the reconstructed archive" /></div>
+      <details class="menu" id="r-export-menu">
+        <summary class="btn"><svg class="icon" aria-hidden="true"><use href="#i-download"/></svg> Export <span class="caret" aria-hidden="true">&#9662;</span></summary>
+        <div class="menu-panel">
+          <label class="menu-field" for="r-pdf-scope">What to export
+            <select id="r-pdf-scope" aria-label="PDF export scope">
+              <option value="all">Whole archive</option>
+              <option value="item" disabled>Current item</option>
+              <option value="choose">Choose components…</option>
+            </select>
+          </label>
+          <div class="pdf-pick" id="pdf-pick" hidden>
+            <div class="pdf-pick-controls">
+              <button type="button" class="btn" data-pick="all">Select all</button>
+              <button type="button" class="btn" data-pick="none">Clear</button>
+            </div>
+            <div class="pdf-pick-tree" id="pdf-pick-tree"></div>
+          </div>
+          <label class="menu-check" title="Comments are always archived; untick to leave them out of the PDF."><input type="checkbox" id="r-pdf-comments" checked /> Include comments</label>
+          <div class="menu-sep"></div>
+          <button class="btn" id="r-pdf" title="Render this archive to a PDF"><svg class="icon" aria-hidden="true"><use href="#i-download"/></svg> Export PDF</button>
+          <button class="btn" id="r-preview" title="Preview the export page by page — watch it render and Stop early if the formatting or content is wrong"><svg class="icon" aria-hidden="true"><use href="#i-eye"/></svg> Preview first</button>
+          <button class="btn" id="r-live-pdf" title="Render from the live HCL system via browser.&#10;Works without a prior import — drag a page URL onto this button."><svg class="icon" aria-hidden="true"><use href="#i-globe"/></svg> Live PDF from source</button>
+        </div>
+      </details>
+    </div>
+  </div>
+  <div class="r-body">
+    <nav class="r-nav" id="r-nav" aria-label="Contents"></nav>
+    <article class="article" id="r-article"></article>
+  </div>
+</div>
+
+  </section>
+
+  <!-- One dialog for confirmations and messages. Native alert()/prompt() are
+       OS chrome: unstyled, unthemeable, blocking, and in the case of a delete
+       they ask you to transcribe a 40-character slug into a box with no
+       reference to what you are about to lose. -->
+  <div class="modal-scrim" id="modal-scrim" hidden>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+      <h2 id="modal-title"></h2>
+      <div class="modal-body" id="modal-body"></div>
+      <label class="modal-confirm" id="modal-confirm-wrap" hidden>
+        <span id="modal-confirm-label"></span>
+        <input type="text" id="modal-confirm-input" autocomplete="off" spellcheck="false" />
+      </label>
+      <div class="modal-actions">
+        <button class="btn" id="modal-cancel" type="button">Cancel</button>
+        <button class="btn danger" id="modal-ok" type="button">Confirm</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="archive-open-overlay" id="archive-open-overlay" hidden>
+    <div class="archive-open-card" role="status" aria-live="polite">
+      <div class="archive-open-kicker">Opening archive</div>
+      <h2 id="archive-open-title"></h2>
+      <div class="archive-open-progress"><span></span></div>
+      <div class="foot-note">Reading the archive and preparing its model…</div>
+    </div>
+  </div>
+  <section class="section-panel" id="panel-licenses" hidden>
+    <div class="wrap">
+      <h1 class="screen-title">Licenses</h1>
+      <p class="screen-sub">What this build contains, and the terms it comes under.
+        Each row links to its licence text.</p>
+      <div class="lic-actions">
+        <a class="btn" id="lic-all-texts" href="/api/licenses/all-texts" download>All licences (one text file)</a>
+        <a class="btn" id="lic-bundle" href="/api/licenses/bundle" download>Everything (zip)</a>
+        <a class="btn" id="lic-sbom" href="/api/licenses/sbom" download>SBOM (CycloneDX)</a>
+        <span class="foot-note">Or <code>connections-export licenses --texts</code></span>
+      </div>
+      <div id="licenses-body" class="lic-body"><div class="foot-note">Reading this build's inventory…</div></div>
+
+    </div>
+  </section>
+  <section class="section-panel" id="panel-manual" hidden>
+    <div class="wrap manual-wrap">
+      <!-- The manual is one document, docs/manual.md, rendered into this
+           article by the server before the page is sent (gui/manual.py).
+           Rendered ahead rather than fetched on first click, so the tab
+           opens with its text already there. -->
+      <article class="manual"><!--MANUAL--></article>
+    </div>
+  </section>
+
+  <section class="section-panel" id="panel-settings" hidden>
+    <div class="wrap settings-wrap">
+      <div class="page-heading"><div><h1>Settings</h1><p class="foot-note">Edit the non-secret defaults used by new ingests. Credentials remain in the configured environment and are never stored here.</p></div></div>
+      <div class="settings-grid" id="settings-grid">
+        <section class="panel settings-card">
+          <header><h2><span aria-hidden="true"><svg class="icon" aria-hidden="true"><use href="#i-brand"/></svg></span> Ingest defaults</h2></header>
+          <div class="settings-body">
+            <label class="settings-field">Authentication<select id="settings-auth-mode"><option value="sspi">Windows sign-in (SSPI)</option><option value="kerberos">Kerberos</option><option value="basic">Username and password</option><option value="paste_token">Paste a token</option></select></label>
+            <label class="settings-field">Request delay (seconds)<input id="settings-min-interval" type="number" min="0.2" step="0.1" value="1" /><span class="foot-note">An export is thousands of requests. 3s overnight is kinder to a busy deployment than rushing it during the working day.</span></label>
+            <label class="settings-field">Default author filter<input id="settings-author-filter" type="text" placeholder="Include everyone" /></label>
+            <div class="settings-actions"><button class="btn primary" id="settings-save" type="button">Save</button><span class="foot-note" id="settings-save-status" role="status"></span></div>
+          </div>
+        </section>
+        <section class="panel settings-card settings-card-wide">
+          <header><h2><span aria-hidden="true"><svg class="icon" aria-hidden="true"><use href="#i-pen"/></svg></span> PDF appearance</h2></header>
+          <div class="settings-body">
+            <div class="settings-row"><span class="k">Renderer</span><span class="v" id="set-pdf-status">—</span></div>
+            <div class="setup-note warn" id="set-pdf-detail" hidden></div>
+            <p class="foot-note">Sizes and colours used when rendering a PDF. Leave a field empty to keep the default shown in it. For anything not listed, <code>connections-export style --dump</code> writes the whole stylesheet out to edit.</p>
+            <div class="style-grid" id="style-grid"></div>
+            <h3 class="style-subhead">Header and footer</h3>
+            <p class="foot-note">Placeholders: <code>{page}</code>, <code>{pages}</code>, <code>{title}</code>, <code>{date}</code>, <code>{section}</code> — anything else is literal text. Empty means nothing is printed there. <code>{section}</code> names the wiki, blog or forum and the page you are on; where that cannot be known it falls back to the document title.</p>
+            <div class="style-grid" id="marks-grid"></div>
+            <div class="settings-actions">
+              <button class="btn primary" id="style-save" type="button">Save</button>
+              <button class="btn" id="style-preview" type="button"><svg class="icon" aria-hidden="true"><use href="#i-eye"/></svg> Preview</button>
+              <button class="btn" id="style-reset" type="button">Reset to defaults</button>
+              <span class="foot-note" id="style-save-status" role="status"></span>
+              <span class="foot-note" id="style-status" role="status"></span>
+            </div>
+            <div class="style-preview" id="style-preview-pane" hidden></div>
+          </div>
+        </section>
+        <section class="panel settings-card">
+          <header><h2><span aria-hidden="true"><svg class="icon" aria-hidden="true"><use href="#i-archive"/></svg></span> Archives</h2></header>
+          <div class="settings-body">
+            <label class="dz-label" for="set-archives-dir">Location</label>
+            <div class="dz-row" id="archives-dir-drop">
+              <input type="text" id="set-archives-dir" spellcheck="false" autocomplete="off" placeholder="/path/to/connections-export-archives" />
+              <button class="btn primary" id="set-archives-apply" type="button">Save</button>
+            </div>
+            <p class="dz-hint">Type a path, or <b>drag a folder</b> onto this field. It must already exist — nothing is created here, so a typo cannot turn into an empty archives directory.</p>
+            <p class="foot-note" id="set-archives-status" role="status"></p>
+            <div class="settings-row"><span class="k">Stored</span><span class="v" id="set-archives-count">—</span></div>
+            <div class="setup-note" id="set-archives-note">Also settable with the <code>CONNECTIONS_EXPORT_ARCHIVES_DIR</code> environment variable (use <code>.</code> for the current directory). Defaults to <code>./connections-export-archives</code> if unset.</div>
+          </div>
+        </section>
+        <section class="panel settings-card">
+          <header><h2><span aria-hidden="true"><svg class="icon" aria-hidden="true"><use href="#i-pen"/></svg></span> Appearance</h2></header>
+          <div class="settings-body">
+            <div class="settings-row">
+              <span class="k">Capture screens</span>
+              <span class="v">
+                <label class="pdf-opt" title="Hides Select &amp; Tailor, the ingest console, Extend or update and Live PDF — everything that needs the original system to answer. The reader, the exports and your archives are untouched, and nothing on disk changes.">
+                  <input type="checkbox" id="settings-archive-only" /> Hide them — I only work with archives I already have
+                </label>
+              </span>
+            </div>
+            <p class="foot-note" id="settings-appearance-status" role="status"></p>
+            <div class="settings-row"><span class="k">Theme</span><span class="v">The toggle lives in the sidebar — <button class="btn" id="settings-theme-btn" type="button"><svg class="icon" aria-hidden="true"><use href="#i-theme"/></svg> Cycle theme</button></span></div>
+          </div>
+        </section>
+      </div>
+    </div>
+  </section>
+  </main>
+</div>
+
+<div class="scrim" id="scrim"></div>
+<aside class="drawer" id="drawer" role="dialog" aria-modal="true" aria-label="Ingested data inspector" tabindex="-1">
+  <div class="dhead">
+    <div style="min-width:0;">
+      <div class="dtitle" id="d-title">—</div>
+      <div class="dpath" id="d-path"></div>
+      <div class="dstate" id="d-state"><span class="d"></span><span id="d-state-t">—</span></div>
+    </div>
+    <div class="dactions">
+      <button class="btn primary" id="d-reader" title="Open this page in the reader"><svg class="icon" aria-hidden="true"><use href="#i-manual"/></svg> Open in reader</button>
+      <button class="btn" id="d-close" aria-label="Close inspector"><svg class="icon" aria-hidden="true"><use href="#i-close"/></svg> Close</button>
+    </div>
+  </div>
+  <div class="dbody" id="d-body"></div>
+</aside>
+
+<!-- Vendored PDF.js (UMD, exposes window.pdfjsLib) -- powers the append-only
+     live PDF preview. Self-contained; served from /vendor, never a CDN. The
+     worker path is set in console.js (loaded next), keeping HTML script-free. -->
+<script type="module" src="vendor/pdfjs-boot.mjs"></script>
+<script src="console.js"></script>
+</body>
+</html>

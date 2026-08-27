@@ -1,0 +1,10 @@
+<entry xmlns:td="urn:ibm.com/td" xmlns="http://www.w3.org/2005/Atom">
+   <id>urn:lsid:ibm.com:td:06258acb-84a2-427b-85e5-9838ad536ff1</id>
+   <category term="navigation" scheme="tag:ibm.com,2006:td/type" label="navigation"/>
+   <td:uuid>06258acb-84a2-427b-85e5-9838ad536ff1</td:uuid>
+   <td:label>page2</td:label>
+   <link href="http://.../wikis/form/api/wiki/wiki0321/navigation/page2/entry" rel="self"/>
+   <title type="text">page2</title>
+   <td:parentUuid>dabe2234-bc56-4be3-bc9b-44943a766158</td:parentUuid>
+   <td:documentUuid>06258acb-84a2-427b-85e5-9838ad536ff1</td:documentUuid>
+</entry>
