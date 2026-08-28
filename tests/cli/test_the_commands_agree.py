@@ -30,7 +30,10 @@ def _advertised() -> set[str]:
 def _documented() -> set[str]:
     """The command names in the manual's command table."""
     text = MANUAL_DOC_PATH.read_text(encoding="utf-8")
-    table = text.split("## The command line", 1)[1].split("\n###", 1)[0]
+    # Anchored on the section's id, not its wording: the heading carries an
+    # `<a id>` so the anchor works in the console and on a forge alike, and
+    # matching the prose would break the next time either changes.
+    table = text.split('id="man-cli"', 1)[1].split("\n###", 1)[0]
     return set(re.findall(r"^\| `([a-z][a-z-]*)` \|", table, re.M))
 
 

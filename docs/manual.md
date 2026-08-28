@@ -15,7 +15,7 @@
   <a href="#man-marks">The running header and footer</a>
 </nav>
 
-## What this is {: #man-intro }
+## <a id="man-intro"></a>What this is
 
 `connections-export` reads the wikis, blogs, forums, community files, and Highlights pages in an HCL Connections deployment and writes what it finds into a self-contained archive on disk — a directory of files you hold yourself, not a database or a subscription. Once that archive exists, this console can browse it offline in the built-in Reader, and turn any part of it into a PDF, with no further contact with the source system. It's built for content you already have access to.
 
@@ -29,11 +29,11 @@ The **demo** (the "Try the demo" button on the Overview, or `--demo` on the comm
 
 In the demo you are signed in as **M. Lindqvist**, one of the people in that synthetic data — the demo impersonates them. They wrote something in every component, so **Only me** filters to a real subset rather than to nothing, and the identity comes back the same way it does from a real deployment: the tool asks the server who you are and is told.
 
-## The archive format {: #man-format }
+## <a id="man-format"></a>The archive format
 
 Every capture produces a **package**: a directory holding the normalized content of one or more wikis, blogs, forums, file libraries, and community front pages, built to be read by any program — not just this tool, and not only by something written by someone who knows what HCL Connections is. The full specification ships as `docs/reference/interchange-format.md` in the source tree, and a verbatim copy, `INTERCHANGE.md`, travels inside every package it describes. This section summarizes it.
 
-### Layout {: #man-format-layout }
+### <a id="man-format-layout"></a>Layout
 
 ```
 <package>/
@@ -49,17 +49,17 @@ Every capture produces a **package**: a directory holding the normalized content
 
 `interchange.json` is the whole content model in one JSON document: every wiki's pages, with hierarchy (`parent_id`/`child_ids`, already sorted), comments, version history, attachments, tags, and per-entity provenance; every blog's posts and comments; and every forum's topics with their arbitrarily deep reply trees. Order and grouping are always pre-computed for you — a reader walks a wiki's `root_page_ids` and each page's `child_ids` and never has to re-derive tree structure or sibling order itself.
 
-### Content-addressed blobs {: #man-format-blobs }
+### <a id="man-format-blobs"></a>Content-addressed blobs
 
 Every image and attachment's bytes are stored once in `blobs/`, named by the SHA-256 hash of their own content. A page's body keeps its original `<img src>`/`<a href>` values untouched; the capture-time meaning of each reference — whether the file was actually retrieved, and which blob holds it — is recorded separately as a resolved asset (`present`, `blob_hash`, `scope`). Because blobs are named by their own hash, identical files referenced from many pages are stored only once.
 
-### Provenance and honest gaps {: #man-format-provenance }
+### <a id="man-format-provenance"></a>Provenance and honest gaps
 
 Each page, post, and topic carries a `provenance` block recording where it came from, plus a human-readable `note` whenever capturing it was incomplete. Nothing is silently dropped: an asset from the same deployment that couldn't be retrieved shows up as `present: false`, never as a missing entry; a link is always classified as pointing inside the export, elsewhere on the same deployment, or fully external, rather than left for a reader to guess at. A `manifest.json` alongside the model summarizes all of this at a glance — counts, and whether version history, comment threading, and ACLs are actually present in this particular package — so an integrator knows what to expect before opening `interchange.json` itself.
 
 This is what "portable" means here: nothing about the format's shape assumes HCL Connections. Field names are generic (`pages`, `comments`, `body_html`, …); the one HCL-specific identifier (`provenance.hcl_id`) is confined to one place; and the package explains itself, since its own reference document ships inside it.
 
-### CSS fidelity: what travels with the archive {: #man-format-fidelity }
+### <a id="man-format-fidelity"></a>CSS fidelity: what travels with the archive
 
 HCL authors could style a page's own content with CSS (never JavaScript), and that **author CSS** is captured into the archive along with everything else. HCL Connections' own **platform/system CSS** — the chrome, fonts, and layout the live site wraps around that content — is a different thing entirely: it lives on the running HCL system itself, so it can only combine with a page's author CSS _while that system is online_. This capture never tries to retrieve it; every offline path built from the archive shows the same honest approximation of that platform look, never a silent guess presented as exact.
 
@@ -131,7 +131,7 @@ HCL authors could style a page's own content with CSS (never JavaScript), and th
               produced again from an archive later.</figcaption>
           </figure>
 
-### Full interchange format specification {: #man-format-spec }
+### <a id="man-format-spec"></a>Full interchange format specification
 
 The sections above summarize the shape reconstruction needs; the full document — every field, the capability manifest, and the target-integration contract in §7 — is the same `docs/reference/interchange-format.md` that ships as `INTERCHANGE.md` inside every package. It's this tool's own trusted documentation, so it's safe to render and read right here.
 
@@ -139,11 +139,11 @@ The sections above summarize the shape reconstruction needs; the full document �
 
 <div id="man-spec-container" class="manual-spec" hidden></div>
 
-## Export — reconstructing into other tools {: #man-export }
+## <a id="man-export"></a>Export — reconstructing into other tools
 
 A package on its own is just data. Turning it into something usable in another tool is the job of an **ingester**: a small program that reads an interchange package plus a way to fetch its blobs, and writes a target format. One ships today.
 
-### The Obsidian exporter {: #man-export-obsidian }
+### <a id="man-export-obsidian"></a>The Obsidian exporter
 
 The Obsidian ingester converts every wiki in a package into an Obsidian vault: one note per page, with the page hierarchy mirrored as nested folders. Links between pages inside the export become `[[wikilinks]]` to the target note; other links are kept as-is. Images and attachments are copied out of `blobs/` into the vault's `attachments/` folder and embedded by name (`![[file]]` / `[[file]]`) — an asset the package never captured becomes a visible marker instead of vanishing. Comments are appended under each note as a threaded list. YAML frontmatter carries the page's title, author, dates, and tags, plus its source provenance, and a `README.md` at the vault root indexes every wiki. Blog and forum content is captured in the package like everything else, but this first exporter doesn't yet lay it out as vault notes — see below.
 
@@ -162,7 +162,7 @@ connections-export ingest --format obsidian --package PATH/TO/PACKAGE --output P
 
 `--package` is a package directory written by a previous capture (or opened with `connections-export open`); `--output` is the vault directory to write. Nothing is read from or sent to the source deployment during ingest — it only ever touches the package on disk.
 
-### Building a new exporter {: #man-export-new }
+### <a id="man-export-new"></a>Building a new exporter
 
 An ingester needs no knowledge of HCL Connections at all — only of the interchange package. The contract it follows is written out step by step in `docs/reference/interchange-format.md` §7, "Reconstructing content in a target wiki": create every page first and keep an id mapping, set hierarchy and order from the pre-computed lists, attach comments/versions/attachments, then rewrite links and body assets using that id mapping, and finally record whatever the target format has no place for. The Obsidian ingester (`connections_export/ingest/obsidian.py`) is a worked, runnable example of exactly that shape — proof the contract is, in its own words, "buildable with no HCL knowledge."
 
@@ -173,7 +173,7 @@ A new exporter follows the same two-function shape:
 
 Export it from `connections_export/ingest/__init__.py` alongside the Obsidian one, and add its name to the `--format` choices in `ingest_main` (`connections_export/cli.py`) so `connections-export ingest --format <yours>` can reach it.
 
-## What gets captured — links and assets {: #man-scope }
+## <a id="man-scope"></a>What gets captured — links and assets
 
 An export captures **what you selected**. Understanding where that boundary falls saves a lot of puzzlement later.
 
@@ -220,7 +220,7 @@ The difference is what the target is. A file is a leaf — it has bytes and noth
 
 So an export is not a spidering crawl that follows links outward until it runs out of Connections. It captures what you chose, and is honest about the edges: a link out of the archive stays visible and clickable rather than quietly disappearing. If you want the target too, select it as well — everything selected in one run cross-links.
 
-## Reading an archive someone handed you {: #man-open }
+## <a id="man-open"></a>Reading an archive someone handed you
 
 The **Archives** screen lists what is in the archives folder. An archive you were given does not start there — it is a zip in Downloads, a folder on a share, a file synced out of OneDrive, or a link in a message. You do not have to file it first: **drop it anywhere on the console** and it opens in the Reader.
 
@@ -230,7 +230,7 @@ The **Archives** screen lists what is in the archives folder. An archive you wer
 
 Only archives are treated this way: a dropped Connections URL still starts a capture, as it always did. A zipped archive is **read-only** — it browses and exports to PDF, and “Extend & update” refuses rather than appearing to run.
 
-## Moving an archive around {: #man-move }
+## <a id="man-move"></a>Moving an archive around
 
 An archive is a directory of many small files. That is the right shape to write — each item lands as it is captured, and a run that stops halfway leaves everything up to that point readable — and an awkward shape to move. File sync (SharePoint, OneDrive) handles thousands of small files worst of all, and a copy that silently drops some of them is the failure mode an archive can least afford.
 
@@ -244,7 +244,7 @@ Both zip layouts work: the archive's files at the top of the zip, and the archiv
 
 A zipped archive is **read-only**. It browses and it exports to PDF; "Extend & update" refuses in words rather than appearing to run and landing nowhere. Unpack it to add to it.
 
-## Several communities in one archive {: #man-communities }
+## <a id="man-communities"></a>Several communities in one archive
 
 A run captures a **set** of communities, not one. Everything you tick goes into a single archive, and that is what makes the links between them survive.
 
@@ -274,7 +274,7 @@ During the ingest, the live tree groups what arrives **under the community it ca
 
 The archive is named after the first community you added, which is a guess rather than a decision — the archives list lets you rename it, and the new name is written beside the data rather than moving the directory, so every reference to it keeps working.
 
-## Adding to an archive later {: #man-update }
+## <a id="man-update"></a>Adding to an archive later
 
 An archive is not finished when the run ends. As long as the original system is still reachable you can come back to one and do two different things — often in the same visit:
 
@@ -299,7 +299,7 @@ The original system offers different help for each, and the difference is large 
 
 It is taken from the archive itself — when its last successful capture _started_, minus a minute. The start rather than the end, because an item edited while that capture was running would otherwise fall into the gap between one run finishing and the next one beginning. The spare minute covers small clock differences between your machine and the original system. Both choices can only cause a little re-checking; neither can lose anything. You can set a different date if you want, and an earlier one always re-checks more, never less.
 
-### New comments on old content {: #man-recheck }
+### <a id="man-recheck"></a>New comments on old content
 
 Asking a system “what changed since Tuesday” returns the items that _changed_, and someone adding a comment to a two-year-old post may not count as changing it. Whether that loses anything depends on the component:
 
@@ -309,13 +309,13 @@ Asking a system “what changed since Tuesday” returns the items that _changed
 
 **“Also re-check comments and replies”** re-reads comments for every item whether or not the item looks changed. Nothing above needs it — it is there for a deployment that behaves differently, and it costs roughly one extra request per item, which on a large wiki is thousands. It is wikis and forums it covers; a blog is asked its separate question either way.
 
-## Pacing, and running overnight {: #man-pacing }
+## <a id="man-pacing"></a>Pacing, and running overnight
 
 An export is thousands of requests against a live deployment. It waits **1 second between them** by default.
 
 For anything large, **3 seconds overnight** is the kinder choice. It is the same number of requests either way, and a slower export is one nobody has to notice — no rate limiting, no puzzled admin, no crawl competing with people trying to work. The control is on the Output step, and as a default under Settings.
 
-## The command line {: #man-cli }
+## <a id="man-cli"></a>The command line
 
 Everything this console does, it does by calling the same code a command can call directly. That matters when nobody is sitting in front of it: a capture that runs overnight from a scheduled task, a PDF rebuilt after a stylesheet change, an archive opened on a machine with no browser to hand.
 
@@ -333,7 +333,7 @@ Run `connections-export` with no arguments and you get this console with the dem
 | `probe` | Ask a live deployment a question that cannot be answered without one. |
 | `compare-author` | Compare what an author filter keeps against what the deployment’s own search returns. |
 
-### Saying which deployment, and how to sign in {: #man-cli-connection }
+### <a id="man-cli-connection"></a>Saying which deployment, and how to sign in
 
 The commands that talk to a deployment share these. All four have a configured default (see **Settings**, or `connections-export.toml`), so you usually pass none of them.
 
@@ -344,7 +344,7 @@ The commands that talk to a deployment share these. All four have a configured d
 | `--auth-root` | Which authentication path the deployment serves its API under — `basic` unless yours differs. |
 | `--config` | A configuration file other than the one found automatically. |
 
-### Capturing {: #man-cli-capture }
+### <a id="man-cli-capture"></a>Capturing
 
 `connections-export crawl <url>` — the URL is what to capture, exactly as on the setup screen: a wiki, a blog, a forum, or a community.
 
@@ -360,7 +360,7 @@ The commands that talk to a deployment share these. All four have a configured d
 | `--recheck-comments` | Re-read comments for every item, changed or not. [Nothing needs it](#man-recheck) on what has been measured. |
 | `--demo` | Capture the built-in synthetic deployment rather than a real one. |
 
-### Reading, printing, converting {: #man-cli-reading }
+### <a id="man-cli-reading"></a>Reading, printing, converting
 
 These need no deployment: they work from an archive or a package.
 
@@ -376,7 +376,7 @@ These need no deployment: they work from an archive or a package.
 Every one of these also takes `--author`, so a filtered reading, PDF or vault can be produced from an unfiltered archive without capturing again.
 {: .foot-note }
 
-## Changing how the PDF looks {: #man-style }
+## <a id="man-style"></a>Changing how the PDF looks
 
 The PDF stylesheet is built on a small set of **design tokens** — type sizes, line height, contents-list sizes, colours. Those are the supported surface: they keep working across versions, where the rules beneath them may be rearranged.
 
@@ -400,7 +400,7 @@ connections-export style --dump --output mystyle.css
 connections-export pdf --css mystyle.css --archive ./archive --output export.pdf
 ```
 
-### The running header and footer {: #man-marks }
+### <a id="man-marks"></a>The running header and footer
 
 What appears in the margins of every page is configured separately from the stylesheet — the two renderers build their margins by different mechanisms, so this is a set of named fields rather than markup you write.
 

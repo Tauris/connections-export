@@ -31,9 +31,14 @@ _PACKAGED_MANUAL = Path(__file__).parent.parent / "manual.md"
 _REPO_MANUAL = REPO_ROOT / "docs" / "manual.md"
 MANUAL_DOC_PATH = _PACKAGED_MANUAL if _PACKAGED_MANUAL.is_file() else _REPO_MANUAL
 
-#: `attr_list` carries the section ids the contents list links to;
 #: `tables` and `fenced_code` cover the reference tables and the
-#: configuration samples.
+#: configuration samples; `attr_list` carries the one class the manual
+#: sets on a paragraph.
+#:
+#: Section ids are NOT attr_list: they are `<a id>` anchors written into
+#: the headings, because `{: #man-intro }` is Python-Markdown's syntax and
+#: a forge rendering the same file shows it as punctuation in the heading.
+#: The document is read in both places.
 _EXTENSIONS = ["fenced_code", "tables", "attr_list"]
 
 # Rendering is pure and the source does not change under a running

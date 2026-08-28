@@ -54,7 +54,7 @@ and Windows).
 
 **No Python?** Each release also ships a single-file executable for Linux,
 macOS (Intel and Apple silicon) and Windows — download it from the
-[Releases](../../releases) page, make it executable, and run it. It needs no
+[Releases](https://github.com/Tauris/connections-export/releases) page, make it executable, and run it. It needs no
 Python and no install. See *PDF export needs a browser* below for its one
 external requirement.
 
@@ -110,7 +110,7 @@ connections-export serve --demo
 
 The console carries **the manual** — what an archive is, what a capture takes
 in and leaves out, what an update costs, and every command-line switch. It is
-the same document as [`docs/manual.md`](docs/manual.md) here, so everything
+the same document as [`docs/manual.md`](https://github.com/Tauris/connections-export/blob/main/docs/manual.md) here, so everything
 below is a summary of a page you already have.
 
 ### Or from the command line
@@ -177,7 +177,7 @@ connections-export crawl <URL> --delay 3
 ```
 
 The console has the same control on the Output step, and as a default under
-Settings. The [manual](docs/manual.md#man-pacing) says why 3 is the kinder
+Settings. The [manual](https://github.com/Tauris/connections-export/blob/main/docs/manual.md) says why 3 is the kinder
 number.
 
 ### Changing how the PDF looks
@@ -189,7 +189,7 @@ renders a real two-page sample. For anything they do not cover, have the program
 write its own stylesheet out with `style --dump`, edit that, and pass it back
 with `pdf --css`.
 
-The [manual](docs/manual.md#man-style) has each setting and what it does.
+The [manual](https://github.com/Tauris/connections-export/blob/main/docs/manual.md) has each setting and what it does.
 
 ## How it looks
 
@@ -262,11 +262,11 @@ An export captures **what you selected**, and is honest about the edges.
 ## The archive format
 
 For what a capture takes in, what it leaves out, and how an archive is added to
-later, the [manual](docs/manual.md#man-scope) is the full account; this is the
+later, the [manual](https://github.com/Tauris/connections-export/blob/main/docs/manual.md) is the full account; this is the
 shape of the thing it produces.
 
 The export is deliberately not a proprietary blob. It's an open interchange
-package described by [the format specification](docs/reference/interchange-format.md), a copy
+package described by [the format specification](https://github.com/Tauris/connections-export/blob/main/docs/reference/interchange-format.md), a copy
 of which travels inside every package — the Obsidian exporter is just a worked
 example of consuming it. Your content stays portable and readable long after the
 export.
@@ -317,7 +317,7 @@ their respective owners.
 ## Development
 
 Requires [`uv`](https://docs.astral.sh/uv/). Common tasks live in the
-[`justfile`](justfile) — run `just` to list them:
+[`justfile`](https://github.com/Tauris/connections-export/blob/main/justfile) — run `just` to list them:
 
 ```sh
 just sync     # create the venv and install dependencies
@@ -331,4 +331,4 @@ justfile, if you would rather not install `just`.
 
 ## License
 
-[BSD 3-Clause](LICENSE)
+[BSD 3-Clause](https://github.com/Tauris/connections-export/blob/main/LICENSE)
