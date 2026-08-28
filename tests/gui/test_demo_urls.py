@@ -162,11 +162,20 @@ def test_endpoint_returns_urls_when_demo_true():
     assert {item["kind"] for item in body["urls"]} >= {"wiki-all", "unrecognized"}
 
 
-def test_endpoint_returns_empty_when_demo_false():
-    app = make_app(demo=False)
-    response = _get(app, "/api/demo-urls")
-    assert response.status_code == 200
-    assert response.json() == {"urls": []}
+def test_the_urls_are_offered_however_the_server_was_started():
+    """They cost nothing to list and are the only thing to try on a machine
+    with no deployment configured. Gating them on a mode is what made the
+    mode necessary."""
+
+    async def ask(app):
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1") as c:
+            return (await c.get("/api/demo-urls")).json()["urls"]
+
+    for started_as in (True, False):
+        urls = asyncio.run(ask(make_app(demo=started_as)))
+
+        assert urls, f"no demo URLs offered when started with demo={started_as}"
 
 
 def test_community_all_round_trips():

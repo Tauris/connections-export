@@ -55,12 +55,23 @@ REQUIRED_MODULES = {
 }
 
 
+#: What SSPI needs at RUNTIME and no analysis can find. pywin32 imports
+#: `win32timezone` from inside `pywintypes`, lazily, when a timestamp is
+#: converted -- so nothing imports it anywhere a static analysis looks, it is
+#: not collected, and the executable is built, verified and shipped without
+#: it. The handshake then dies with "No module named win32timezone", which
+#: surfaces as every feed failing to authenticate and therefore as a
+#: community that appears to hold nothing: a failure landing nowhere near
+#: its cause.
+SSPI_RUNTIME_IMPORTS = ("win32timezone",)
+
+
 class BuildError(Exception):
     """The build failed, or produced an executable that is missing something."""
 
 
-def _run(cmd: list[str], *, cwd: Path | None = None) -> str:
-    proc = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
+def _run(cmd: list[str], *, cwd: Path | None = None, stdin: str | None = None) -> str:
+    proc = subprocess.run(cmd, cwd=cwd, input=stdin, capture_output=True, text=True)
     if proc.returncode != 0:
         tail = (proc.stdout + proc.stderr).strip().splitlines()[-30:]
         raise BuildError(f"{' '.join(cmd)} exited {proc.returncode}\n" + "\n".join(tail))
@@ -172,12 +183,44 @@ def _frozen_distributions(source: Path, bundled: set[str], interpreter: str) -> 
         "named = {c['name'].lower().replace('_','-') for c in doc['components']}\n"
         "named.add(doc['metadata']['component']['name'].lower())\n"
         "top = packages_distributions()\n"
-        "missing = sorted({d.lower().replace('_','-') for m in sys.argv[1:]\n"
+        "modules = sys.stdin.read().split()\n"
+        "missing = sorted({d.lower().replace('_','-') for m in modules\n"
         "                  for d in top.get(m, []) } - named)\n"
         "print(json.dumps(missing))\n"
     )
-    out = _run([interpreter, "-c", script, *sorted(bundled)], cwd=source)
+    # The module names go in on stdin, not as arguments. There are thousands
+    # of them on Windows once pywin32 is collected, and a command line has a
+    # length limit there -- passing them as argv failed the build with
+    # "The filename or extension is too long", which names neither the
+    # command nor the reason.
+    out = _run([interpreter, "-c", script], cwd=source, stdin="\n".join(sorted(bundled)))
     return json.loads(out.strip().splitlines()[-1])
+
+
+def _required_modules(importable) -> dict[str, str]:
+    """Modules the executable must contain, and what each one breaks.
+
+    On Windows that includes native authentication and everything it needs
+    at runtime. `auth_mode` defaults to sspi there, so an executable without
+    it cannot authenticate against a real deployment at all: it starts,
+    passes `--help`, and fails on the first request. Better a build that
+    refuses than a binary that ships broken for the platform most of its
+    users are on.
+    """
+    required = dict(REQUIRED_MODULES)
+    if sys.platform != "win32":
+        return required
+    if not importable("requests_negotiate_sspi"):
+        raise BuildError(
+            "requests_negotiate_sspi is not installed in the build "
+            "environment, so this Windows executable could not do native "
+            "SSPI auth -- which is the default auth mode.\n"
+            "  Install the extra before building: uv sync --all-extras"
+        )
+    required["requests_negotiate_sspi"] = "--auth sspi (the default on Windows)"
+    for module in SSPI_RUNTIME_IMPORTS:
+        required[module] = "--auth sspi at run time (pywin32 imports it lazily)"
+    return required
 
 
 def _bundled_modules(work_dir: Path) -> set[str]:
@@ -234,22 +277,9 @@ def build(
     # but the module only exists on Windows and only with the `sspi` extra --
     # so collect and require it exactly when the build environment has it,
     # rather than guessing from the platform.
-    required = dict(REQUIRED_MODULES)
+    required = _required_modules(lambda module: _importable(interpreter, module))
     if sys.platform == "win32":
-        # Required, not opportunistic. `auth_mode` defaults to sspi, so a
-        # Windows executable without it cannot authenticate against a real
-        # deployment at all -- it would start, pass --help, and fail on the
-        # first request. Better a build that refuses than a binary that ships
-        # broken for the platform most of its users are on.
-        if not _importable(interpreter, "requests_negotiate_sspi"):
-            raise BuildError(
-                "requests_negotiate_sspi is not installed in the build "
-                "environment, so this Windows executable could not do native "
-                "SSPI auth -- which is the default auth mode.\n"
-                "  Install the extra before building: uv sync --all-extras"
-            )
         collect_submodules.append("requests_negotiate_sspi")
-        required["requests_negotiate_sspi"] = "--auth sspi (the default on Windows)"
     cmd = [
         interpreter,
         "-m",
@@ -270,6 +300,11 @@ def build(
     ]
     for module in collect_submodules:
         cmd += ["--collect-submodules", module]
+    if sys.platform == "win32":
+        # Named, because they are imported at run time from inside pywin32
+        # and no analysis of the source can see them.
+        for module in SSPI_RUNTIME_IMPORTS:
+            cmd += ["--hidden-import", module]
     cmd.append(str(entry))
     _run(cmd, cwd=source)
 
@@ -318,17 +353,47 @@ def build(
     return exe, required
 
 
+def _scratch_copy(dist: Path) -> Path:
+    """A throwaway copy of this repository, for the build to write into.
+
+    Excludes what a build has no use for and would spend minutes copying:
+    the virtualenv, git's own store, caches, and any previous output.
+    """
+    scratch = dist.parent / "binary-source"
+    if scratch.exists():
+        shutil.rmtree(scratch)
+    skip = {".git", ".venv", "build", "dist", "__pycache__", ".pytest_cache", ".ruff_cache"}
+    shutil.copytree(
+        REPO_ROOT,
+        scratch,
+        ignore=lambda directory, names: {n for n in names if n in skip},
+        symlinks=True,
+    )
+    print(f"  building from a copy at {scratch}")
+    return scratch
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--source", type=Path, default=REPO_ROOT, help="tree to build from")
+    parser.add_argument(
+        "--source",
+        type=Path,
+        default=None,
+        help="tree to build from (default: a copy of this repository)",
+    )
     parser.add_argument("--dist", type=Path, default=REPO_ROOT / "build" / "binary")
     parser.add_argument("--name", default="connections-export")
     args = parser.parse_args()
 
+    # A build WRITES into the tree it is given: the licence bundle in its
+    # executable form, and the documents the program reads. Given the
+    # repository itself that rewrites tracked files and leaves three
+    # untracked ones behind, so building from here copies first. An explicit
+    # `--source` is taken at its word -- the caller chose that tree.
+    source = args.source.resolve() if args.source else _scratch_copy(args.dist.resolve())
+
     try:
-        exe, required = build(
-            source=args.source.resolve(), dist=args.dist.resolve(), name=args.name
-        )
+        exe, required = build(source=source, dist=args.dist.resolve(), name=args.name)
     except BuildError as exc:
         print(f"build failed: {exc}", file=sys.stderr)
         return 1

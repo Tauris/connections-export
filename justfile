@@ -31,10 +31,12 @@ check:
     uv run ruff format --check .
     uv run pytest
 
-# Watch a real crawl in the browser (real pipeline vs. the synthetic server).
-# Auto-picks a free port if the given one is busy; `just demo 8137` to choose.
-demo port="8000":
-    uv run connections-export serve --demo --port {{port}}
+# The console, in a browser. Drop one of the demo URLs it offers on the setup
+# screen to watch the real pipeline run against the synthetic server -- which
+# deployment gets read follows from the URL, so there is no mode to set here.
+# Auto-picks a free port if the given one is busy; `just console 8137` to choose.
+console port="8000":
+    uv run connections-export serve --open --port {{port}}
 
 # Install the headless browser Playwright needs for PDF export (Path A)
 browser:

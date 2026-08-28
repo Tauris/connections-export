@@ -45,8 +45,15 @@ def discover_components(
     base_url: str,
     fetch: Callable[[str], bytes | None],
     redirect_location: Callable[[str], str | None] | None = None,
+    auth_root: str = "basic",
 ) -> dict:
-    """What `community_uuid` contains, as far as `fetch` can see."""
+    """What `community_uuid` contains, as far as `fetch` can see.
+
+    `auth_root` is the path the deployment serves its wiki API under, from
+    the same configuration a crawl reads. Assuming it here would mean a
+    deployment whose root differs is asked at an address that does not
+    exist, and answers nothing -- which reads as a community with no wiki.
+    """
     community_uuid = (community_uuid or "").strip()
     if not community_uuid or not base_url:
         return {"components": [], "forums": [], "detail": "missing community or base URL"}
@@ -74,13 +81,32 @@ def discover_components(
 
     components: list[dict[str, Any]] = []
 
-    def parse_or_empty(parser, payload: bytes | None):
+    #: What was asked, and what came of it. Kept for the case where nothing is
+    #: found: a request that never returned, one that returned content parsing
+    #: to no entries, and one whose parse RAISED all produce the same empty
+    #: list, and the last is invisible without this -- a frozen executable
+    #: cannot be stepped through, and a library behaving differently there
+    #: than in a source install looks exactly like a community with nothing
+    #: in it.
+    attempts: list[dict[str, Any]] = []
+
+    def parse_or_empty(parser, payload: bytes | None, *, feed: str = "", url: str = ""):
+        record: dict[str, Any] = {"feed": feed, "url": url} if feed else {}
         if not payload:
+            if record:
+                attempts.append({**record, "fetched": False})
             return []
         try:
-            return parser(payload)
-        except Exception:  # noqa: BLE001
+            items = parser(payload)
+        except Exception as exc:  # noqa: BLE001 - one bad feed must not lose the rest
+            if record:
+                attempts.append(
+                    {**record, "fetched": True, "error": f"{type(exc).__name__}: {exc}"[:200]}
+                )
             return []
+        if record:
+            attempts.append({**record, "fetched": True, "items": len(items)})
+        return items
 
     def community_service_components(payload: bytes | None) -> list[dict[str, str]]:
         """Read component links from the community Atom instance document."""
@@ -166,7 +192,7 @@ def discover_components(
     feed_urls = {
         "blogs": blogs_list_url(base_url=base_url, homepage="homepage"),
         "forums": forums_list_url(base_url=base_url) + "?communityUuid=" + community_uuid,
-        "wikis": wikis_feed_url(base_url=base_url, auth_root="basic"),
+        "wikis": wikis_feed_url(base_url=base_url, auth_root=auth_root),
     }
     with ThreadPoolExecutor(max_workers=3) as pool:
         fetched = dict(zip(feed_urls, pool.map(fetch, feed_urls.values()), strict=True))
@@ -232,7 +258,7 @@ def discover_components(
         if key in service_blog_titles:
             component["title"] = service_blog_titles[key]
 
-    blogs = parse_or_empty(parse_blogs_feed, fetched["blogs"])
+    blogs = parse_or_empty(parse_blogs_feed, fetched["blogs"], feed="blogs", url=feed_urls["blogs"])
     for blog in blogs:
         if blog.community_uuid == community_uuid:
             kind = (
@@ -247,6 +273,8 @@ def discover_components(
     forums = parse_or_empty(
         parse_forums_feed,
         fetched["forums"],
+        feed="forums",
+        url=feed_urls["forums"],
     )
     if not forums:
         service = fetch(f"{base_url}/forums/atom/service")
@@ -291,7 +319,7 @@ def discover_components(
         {"kind": "forum", "id": forum.uuid, "title": forum.title or forum.uuid} for forum in forums
     )
 
-    wikis = parse_or_empty(parse_wikis_feed, fetched["wikis"])
+    wikis = parse_or_empty(parse_wikis_feed, fetched["wikis"], feed="wikis", url=feed_urls["wikis"])
     components.extend(
         {"kind": "wiki", "id": wiki.label, "title": wiki.title or wiki.label}
         for wiki in wikis
@@ -489,10 +517,34 @@ def discover_components(
             ).strip()
         except lxml.etree.XMLSyntaxError:
             community_title = None
+    # The community document and its feed list are asked for outside the three
+    # parsed feeds, so record them too: a community that answers neither is a
+    # different situation from one whose feeds are simply empty.
+    attempts.append({"feed": "community", "fetched": bool(community_service)})
+    attempts.append({"feed": "community-feeds", "fetched": bool(community_feeds)})
+
+    detail = None
+    if not components:
+        # Said in the order a reader would ask it: was anything returned at
+        # all, did anything fail to parse, or is the community simply empty.
+        errored = [a for a in attempts if a.get("error")]
+        answered = [a for a in attempts if a.get("fetched")]
+        if errored:
+            detail = "; ".join(f"{a['feed']}: {a['error']}" for a in errored)
+        elif not answered:
+            detail = "no feed returned anything for this community"
+        else:
+            detail = (
+                "every feed answered and none named a component -- "
+                "either this community holds none, or its feeds are shaped "
+                "differently from the ones this reads"
+            )
+
     return {
         "components": components,
         "forums": [component for component in components if component["kind"] == "forum"],
         "community": community_title or None,
+        **({"detail": detail, "attempts": attempts} if detail else {}),
         # Present only when Rich Content was NOT offered, saying which of the
         # three causes it was. A community that plainly has rich content and is
         # offered none is otherwise indistinguishable from one that has none.

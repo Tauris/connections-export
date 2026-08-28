@@ -29,20 +29,44 @@ def _lookup_base_auth(app, base_url_param: str | None):
     never have been attempted. `/api/start` already treats this host as
     the demo; the read-only lookups now agree.
     """
+    base, auth_mode, _auth_root = _lookup_deployment(app, base_url_param)
+    return base, auth_mode
+
+
+def _lookup_deployment(app, base_url_param: str | None):
+    """`(base, auth_mode, auth_root)` for a read-only lookup.
+
+    The ADDRESS comes from the URL in hand -- what was dropped on the setup
+    screen, or the live session's -- because that is what a person is asking
+    about. HOW to reach it is configuration: the authentication mode, and the
+    path the deployment serves its wiki API under.
+
+    Both are read whatever the address turns out to be. Reading them only
+    when no address was given means never reading them, since the console
+    sends what the dropped URL resolved to -- so a deployment configured for
+    `kerberos` was asked with the default, and one serving its wiki API under
+    another root was asked at `/wikis/basic/...`. The crawl reads both from
+    the configuration; a lookup that reaches the same deployment another way
+    is a second answer to a question with one right one.
+    """
+    from connections_export.config import load_config  # noqa: PLC0415
+
     base = (base_url_param or "").strip() or app.state.live_base_url
     if base and base.rstrip("/") == DEMO_SAMPLE_BASE_URL:
-        return None, None
-    auth_mode: str | None = None
-    if not base and not app.state.demo:
-        from connections_export.config import load_config  # noqa: PLC0415
+        return None, None, None
 
-        try:
-            cfg = load_config({})
-            base = cfg.base_url
-            auth_mode = cfg.auth_mode
-        except Exception:  # noqa: BLE001
-            base = None
-    return base, auth_mode
+    auth_mode: str | None = None
+    auth_root: str | None = None
+    try:
+        cfg = load_config({})
+        auth_mode = cfg.auth_mode
+        auth_root = cfg.auth_root
+        # A configured address is a fallback, not the answer: the address a
+        # capture uses comes from the URL you drop.
+        base = base or cfg.base_url
+    except Exception:  # noqa: BLE001 - unreadable configuration is not fatal to a lookup
+        pass
+    return base, auth_mode, auth_root
 
 
 def _authed_lookup(app, url: str, base: str | None, auth_mode: str | None):
@@ -65,7 +89,10 @@ def _authed_lookup(app, url: str, base: str | None, auth_mode: str | None):
     from connections_export.http.results import Fetched  # noqa: PLC0415
 
     try:
-        client = _build_default_client(Config(base_url=base or ""), os.environ)
+        client = _build_default_client(
+            Config(base_url=base or "", **({"auth_mode": auth_mode} if auth_mode else {})),
+            os.environ,
+        )
         res = client.get(url)
         for _ in range(3):
             if not isinstance(res, Fetched) or not 300 <= res.status < 400:

@@ -525,7 +525,10 @@ def test_community_forum_crawl_is_started_before_slower_components():
     assert "renderResolveResult(user, user)" in JS
     assert "payload.detail" in JS
     assert '"/api/current-user" + query' in JS
-    assert '"?base_url=" + encodeURIComponent(base)' in JS
+    # The deployment being asked about travels with the question. It is the
+    # demo's own address when the demo is what is in view, because the server
+    # decides which deployment to read from the address and nothing else.
+    assert '"?base_url=" + encodeURIComponent(base || (demoInView()' in JS
 
 
 def test_current_archive_is_shown_in_ingest_and_reader():

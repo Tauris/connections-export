@@ -9,6 +9,8 @@ So: the demo, on a port that is actually free, with a browser pointed at it.
 
 from __future__ import annotations
 
+import pytest
+
 from connections_export import cli
 
 
@@ -22,15 +24,27 @@ def test_a_bare_command_starts_the_console(monkeypatch):
     assert served["argv"] is not None
 
 
-def test_the_bare_command_runs_the_demo(monkeypatch):
-    """Nothing is configured yet on a fresh install, and a console with no
-    deployment behind it can still show what an archive looks like."""
-    captured: dict = {}
-    monkeypatch.setattr(cli, "serve_main", lambda argv, **kw: captured.update(argv=argv) or 0)
+def test_the_bare_command_opens_the_console_without_choosing_a_deployment():
+    """It used to pass `--demo`, which meant a console started this way read
+    the synthetic deployment whatever URL was dropped on it -- so a real
+    community came back empty and the console reported that the community
+    held nothing, rather than that it had not looked there.
 
-    cli.main([])
+    It asks for a browser and nothing else. Which deployment gets read
+    follows from the URL, as it does everywhere else; the demo is on the
+    setup screen either way, as URLs to try."""
+    seen = {}
 
-    assert "--demo" in captured["argv"]
+    def fake_serve(argv):
+        seen["argv"] = list(argv)
+        return 0
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(cli, "_serve_for_default_launch", fake_serve)
+        assert cli.main([]) == 0
+
+    assert "--demo" not in seen["argv"], "a bare launch still forces the demo"
+    assert "--open" in seen["argv"], "a bare launch should still open a browser"
 
 
 def test_the_bare_command_opens_a_browser(monkeypatch):

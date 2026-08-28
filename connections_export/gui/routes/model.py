@@ -28,7 +28,9 @@ def register(
 
     @app.get("/api/health")
     def health() -> dict:
-        return {"status": "ok", "demo": demo}
+        # Liveness only. Which deployment a request reads is decided per
+        # request, from its URL, so there is no server-wide demo to report.
+        return {"status": "ok"}
 
     @app.get("/api/model")
     def get_model() -> Response:
@@ -84,7 +86,6 @@ def register(
                 # read it, but it does not answer "is what I am looking at
                 # demo data" -- a real URL dropped into a `serve --demo`
                 # console produces a real archive.
-                "demo": app.state.demo,
                 # Whether THIS archive holds demo data, from its own name.
                 "is_demo_data": bool(name) and is_demo_archive(name),
             }

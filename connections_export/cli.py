@@ -398,6 +398,18 @@ def crawl_main(
     plan = resolve_update_plan(config)
     config = config.model_copy(update={"fetch": plan.fetch, "output_dir": plan.output_dir})
     if args.demo:
+        # Naming both a URL and the demo is a contradiction, and one of them
+        # would have to be ignored silently. Which is exactly the failure this
+        # switch is not allowed to have: a flag that overrides the address in
+        # front of it and says nothing.
+        if args.url:
+            print(
+                "connections-export crawl: --demo captures the built-in synthetic "
+                "deployment, so it cannot also capture a URL.\n"
+                "  Drop the --demo to capture the URL, or the URL to capture the demo.",
+                file=sys.stderr,
+            )
+            return 2
         result = _run_demo_into(config.output_dir, emit)
         _print_crawl_report(result.crawl_result)
         print(f"  archive: {result.archive_dir}")
@@ -838,14 +850,16 @@ def serve_main(
     (production leaves it unset and gets `uvicorn.run`).
     """
     parser = _build_parser("connections-export serve")
+    # Accepted, and doing nothing, so an existing command or script keeps
+    # working. The demo is a deployment at its own address, reached by
+    # reading that address; there is no mode for a switch to set. A switch
+    # that decided which deployment every later request read, whatever URL
+    # was in front of it, could only disagree with the URL -- and would
+    # win.
     parser.add_argument(
-        "--demo",
-        dest="demo",
-        action="store_true",
-        default=None,
-        help="Run against the in-process fakeserver (default: on iff base_url is unconfigured).",
+        "--demo", dest="demo", action="store_true", default=None, help=argparse.SUPPRESS
     )
-    parser.add_argument("--no-demo", dest="demo", action="store_false")
+    parser.add_argument("--no-demo", dest="demo", action="store_false", help=argparse.SUPPRESS)
     parser.add_argument("--host", dest="host", default="127.0.0.1")
     parser.add_argument("--port", dest="port", type=int, default=8000)
     parser.add_argument(
@@ -868,11 +882,10 @@ def serve_main(
     }
     config = load_config(cli_overrides, config_path=args.config_path, env=env)
 
-    demo = args.demo if args.demo is not None else not bool(config.base_url)
     host, port = args.host, args.port
     # Pass the bound host so LocalGuardMiddleware still admits requests
     # addressed to it (the localhost defaults are already allowlisted).
-    app = make_app(demo=demo, bound_host=host, author_filter=config.filter_author)
+    app = make_app(bound_host=host, author_filter=config.filter_author)
     if run is None:
         # Real launch path only: if the requested port is busy, pick the
         # next free one so a common conflict (e.g. another dev server on
@@ -1482,11 +1495,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(_MAIN_USAGE)
         return 0
     if not args:
-        # Bare `connections-export` shows the thing rather than describing it.
-        # A usage message is the right answer to a wrong command, not to a
-        # bare one -- and on a fresh install there is nothing configured to
-        # capture from anyway, so the demo is what there is to see.
-        return _serve_for_default_launch(["--demo", "--open"])
+        # Bare `connections-export` shows the thing rather than describing
+        # it. A usage message is the right answer to a wrong command, not to
+        # a bare one.
+        #
+        # It does NOT force the demo. It used to, which meant a console
+        # started this way read the synthetic deployment whatever URL was
+        # dropped on it -- so a real community came back empty, and the
+        # console said the community held nothing rather than that it had
+        # not looked. The demo is on the setup screen either way, as URLs to
+        # try.
+        return _serve_for_default_launch(["--open"])
     handler = _SUBCOMMANDS.get(args[0])
     if handler is None:
         print(f"connections-export: unknown command {args[0]!r}\n", file=sys.stderr)

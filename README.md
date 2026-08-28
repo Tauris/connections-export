@@ -102,10 +102,11 @@ connections-export serve
 ```
 
 To see the whole thing working with no deployment at all — against a synthetic
-one that ships inside the tool — add `--demo`:
+one that ships inside the tool — start the console and drop one of the demo
+URLs it offers on the setup screen:
 
 ```sh
-connections-export serve --demo
+connections-export serve
 ```
 
 The console carries **the manual** — what an archive is, what a capture takes
@@ -323,7 +324,7 @@ Requires [`uv`](https://docs.astral.sh/uv/). Common tasks live in the
 just sync     # create the venv and install dependencies
 just test     # run the test suite
 just check    # lint + format-check + tests (what CI runs)
-just demo     # watch a full run against the built-in synthetic server
+just console  # the console; drop a demo URL from its setup screen to try it
 ```
 
 Every task also works as the underlying `uv run …` command, shown in the

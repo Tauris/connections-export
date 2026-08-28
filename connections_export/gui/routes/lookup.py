@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from typing import Any
 
 from fastapi.responses import JSONResponse
 
@@ -24,6 +25,7 @@ from connections_export.gui.requests import (
 from connections_export.gui.routes._lookup import (
     _authed_lookup,
     _lookup_base_auth,
+    _lookup_deployment,
 )
 from connections_export.gui.support import (
     _demo_community_components,
@@ -32,6 +34,31 @@ from connections_export.gui.support import (
     _demo_subcommunities,
 )
 from connections_export.gui.wiki_url import parse_url
+
+
+def _why_nothing_was_read(transport: list[dict[str, Any]]) -> str:
+    """One sentence naming what stopped every request.
+
+    Ordered by what a reader can act on. An exception means the request
+    never reached a deployment -- a name that will not resolve, a
+    certificate that will not verify -- and the message is the finding. A
+    status means it arrived and was refused, and 401/403 is about
+    credentials rather than about the community.
+    """
+    errors = [entry["error"] for entry in transport if entry.get("error")]
+    if errors:
+        return f"no feed could be read: {errors[0]}"
+    statuses = sorted({entry["status"] for entry in transport if entry.get("status")})
+    if not statuses:
+        return "no feed returned anything for this community"
+    listed = "/".join(str(status) for status in statuses)
+    if any(status in (401, 403) for status in statuses):
+        return (
+            f"every feed was refused (HTTP {listed}). The deployment answered, and "
+            "declined — this is about who the console is signed in as, not about "
+            "the community."
+        )
+    return f"every feed was refused (HTTP {listed})."
 
 
 def register(
@@ -285,7 +312,10 @@ def register(
         a blank box are all the same answer here: no candidates.
         """
         community_uuid = community_uuid.strip()
-        if app.state.demo and community_uuid:
+        # No mode: `_demo_subcommunities` returns None for any community
+        # that is not the demo's, so asking it first costs nothing and
+        # answers whenever the demo is what is being read.
+        if community_uuid:
             demo_answer = _demo_subcommunities(community_uuid)
             if demo_answer is not None:
                 return JSONResponse({"children": demo_answer})
@@ -322,13 +352,17 @@ def register(
         short-circuit, and how this server authenticates a lookup.
         """
         community_uuid = community_uuid.strip()
-        # A demo chip's community: answer from the synth data, since the demo
-        # fakeserver is not reachable over HTTP at the placeholder host.
-        if app.state.demo and community_uuid:
+        # A demo chip's community answers from the synth data, since the
+        # fakeserver runs in-process and is never reachable over HTTP at the
+        # placeholder host. `_demo_community_components` returns None for any
+        # community that is not the demo's, so this decides itself: no flag
+        # can make it answer for a real one, and none can stop it answering
+        # for its own.
+        if community_uuid:
             demo_answer = _demo_community_components(community_uuid)
             if demo_answer is not None:
                 return JSONResponse(demo_answer)
-        base, auth_mode = _lookup_base_auth(_app, base_url)
+        base, auth_mode, auth_root = _lookup_deployment(_app, base_url)
         if not community_uuid or not base:
             return JSONResponse(
                 {"components": [], "forums": [], "detail": "missing community or base URL"}
@@ -336,26 +370,54 @@ def register(
 
         from connections_export.crawler.community import discover_components  # noqa: PLC0415
 
+        # What the deployment said, kept. `_authed_lookup` knows the status
+        # and the exception; discovery is handed only the bytes, so without
+        # this a refusal, an unreachable host and a community that genuinely
+        # holds nothing all arrive as the same empty list -- and each points
+        # at a different thing to go and fix.
+        transport: list[dict[str, Any]] = []
+
         def fetch(url: str) -> bytes | None:
-            status, content, _error = _authed_lookup(_app, url, base, auth_mode)
-            return content if status is not None and status < 400 and not _error else None
+            status, content, error = _authed_lookup(_app, url, base, auth_mode)
+            answered = status is not None and status < 400 and not error
+            if not answered:
+                transport.append(
+                    {"url": url, "status": status, "error": (error or "")[:200] or None}
+                )
+            return content if answered else None
 
         def redirect_location(url: str) -> str | None:
             from connections_export.cli import _build_default_client  # noqa: PLC0415
 
-            client = _build_default_client(
-                Config(base_url=base, auth_mode=auth_mode or "sspi"), os.environ
-            )
-            return client.get(url).headers.get("location", "")
+            # A lookup that cannot authenticate is an answer of "I could not
+            # see", not a reason for the request to fail: this runs while
+            # discovery is already collecting what each feed said, and an
+            # exception here would replace all of that with a 500.
+            try:
+                client = _build_default_client(
+                    Config(base_url=base, auth_mode=auth_mode or "sspi"), os.environ
+                )
+                return client.get(url).headers.get("location", "")
+            except Exception as exc:  # noqa: BLE001
+                transport.append({"url": url, "status": None, "error": str(exc)[:200]})
+                return None
 
-        return JSONResponse(
-            discover_components(
-                community_uuid=community_uuid,
-                base_url=base,
-                fetch=fetch,
-                redirect_location=redirect_location,
-            )
+        answer = discover_components(
+            community_uuid=community_uuid,
+            base_url=base,
+            fetch=fetch,
+            redirect_location=redirect_location,
+            auth_root=auth_root or "basic",
         )
+        if not answer.get("components") and transport:
+            answer["transport"] = transport[:8]
+            # ...but only speak for the whole answer when the FEEDS were what
+            # could not be read. An auxiliary lookup failing while every feed
+            # answered is worth recording and is not the finding: the finding
+            # is then that the feeds named no component.
+            if not any(attempt.get("fetched") for attempt in answer.get("attempts", [])):
+                answer["detail"] = _why_nothing_was_read(transport)
+        return JSONResponse(answer)
 
     @app.get("/api/current-user")
     def current_user(base_url: str = "") -> JSONResponse:
@@ -367,7 +429,10 @@ def register(
         )
 
         if not base:
-            if app.state.demo:
+            # `_lookup_base_auth` returns nothing for the demo's address, since
+            # its server is in-process rather than reachable over HTTP -- so
+            # the address asked about is what says whose identity this is.
+            if (base_url or "").strip().rstrip("/") == DEMO_SAMPLE_BASE_URL:
                 # The demo IS signed in, as one of the people in its own data
                 # -- otherwise "Only me" is the one question a demo cannot
                 # answer, and the path that answers it goes untested. This
@@ -377,6 +442,9 @@ def register(
                 if resolved is not None:
                     return JSONResponse(resolved)
                 return JSONResponse({"status": "unavailable"}, status_code=503)
+            # Nothing was named, so there is nobody to be. Answering with the
+            # demo's principal here is how a real archive came to be labelled
+            # with a synthetic person's name.
             return JSONResponse({"status": "no_base_url"}, status_code=503)
 
         url = profile_service_url(base_url=base)
@@ -435,12 +503,11 @@ def register(
         the placeholder host `DEMO_SAMPLE_BASE_URL`, which the demo
         fakeserver never actually serves over HTTP (it runs in-process
         behind `run_demo`), so the fetch below would always fail for
-        one. When `app.state.demo` is set and the parsed URL's
-        `base_url` is that placeholder, `_demo_feed_info` answers from
-        the same synth data instead -- the real name and item count,
-        not the raw handle/uuid and a missing count. Any other URL
-        (including `demo=True` apps hitting a real/test deployment,
-        as the existing tests do) always takes the HTTP path below."""
+        one. When the parsed URL's `base_url` is that placeholder,
+        `_demo_feed_info` answers from the same synth data instead -- the
+        real name and item count, not the raw handle/uuid and a missing
+        count. Any other URL takes the HTTP path below. The address is the
+        whole of the decision: no real deployment can occupy that host."""
         try:
             from connections_export.gui.wiki_url import parse_url as _parse  # noqa: PLC0415
 
@@ -448,7 +515,7 @@ def register(
             if not target.ok or not target.base_url:
                 return JSONResponse({"total": None})
 
-            if app.state.demo and target.base_url == DEMO_SAMPLE_BASE_URL:
+            if target.base_url == DEMO_SAMPLE_BASE_URL:
                 demo_result = _demo_feed_info(target)
                 if demo_result is not None:
                     return JSONResponse(demo_result)

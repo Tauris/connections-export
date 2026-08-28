@@ -94,7 +94,10 @@ def test_health_endpoint():
     response = _run(_do())
 
     assert response.status_code == 200
-    assert response.json() == {"status": "ok", "demo": True}
+    # No `demo` key: there is no mode to report. Which deployment gets read
+    # follows from the URL of each request, so a server-wide answer would be
+    # a claim this process is not entitled to make.
+    assert response.json() == {"status": "ok"}
 
 
 # --- POST /api/start {demo: true} -> /events streams run_started..run_complete
@@ -130,13 +133,37 @@ def test_run_events_are_persisted_next_to_archive(tmp_path, monkeypatch):
     assert all(record["timestamp"] for record in records)
 
 
-def test_start_without_base_url_also_runs_the_demo_pipeline():
-    """the design: "demo=true (or no real base_url): the real pipeline
-    against the fakeserver" -- an empty/omitted `base_url` is enough,
-    `demo` doesn't strictly need to be set."""
-    app = make_app(demo=True, demo_seed=11, demo_delay=0)
+def test_start_without_any_deployment_is_refused_rather_than_demoed():
+    """Reading an omitted `base_url` as "the demo" means a console with
+    nothing configured reads the synthetic deployment while a real
+    community is in front of it, and writes fabricated content into
+    whatever archive is open.
 
-    events = _run(_start_then_stream(app, {}))
+    Nothing to read is not a reason to read something else. It is refused,
+    and the refusal says where to get an address -- including that the demo
+    is one of the URLs on offer."""
+    app = make_app(demo_seed=11, demo_delay=0)
+
+    async def _do():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1") as client:
+            return await _post_json(client, "/api/start", {})
+
+    response = _run(_do())
+
+    assert response.status_code == 409, response.text
+    detail = response.json()["detail"]
+    assert "No deployment was given" in detail
+    assert "demo" in detail.lower(), "the refusal does not mention what can be tried"
+
+
+def test_naming_the_demos_address_runs_the_demo_pipeline():
+    """The demo is reached the way every deployment is: by its address."""
+    from connections_export.gui.demo import DEMO_SAMPLE_BASE_URL
+
+    app = make_app(demo_seed=11, demo_delay=0)
+
+    events = _run(_start_then_stream(app, {"base_url": DEMO_SAMPLE_BASE_URL}))
 
     assert events[0]["type"] == "run_started"
     assert events[-1]["type"] == "run_complete"

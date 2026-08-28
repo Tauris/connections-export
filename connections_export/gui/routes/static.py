@@ -205,4 +205,7 @@ def register(
         non-demo server (a real deployment's `hcl-serve`) has no fake
         dataset to draw sample URLs from, so it returns an empty list
         rather than the demo's fake-deployment URLs."""
-        return JSONResponse({"urls": demo_sample_urls() if app.state.demo else []})
+        # Always offered. They cost nothing to list, they are the only thing
+        # to try on a machine with no deployment configured, and gating them
+        # on a mode is what made the mode necessary.
+        return JSONResponse({"urls": demo_sample_urls()})

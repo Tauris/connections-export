@@ -214,12 +214,10 @@ def register(
         if community_uuid:
             try:
                 answer = None
-                if app.state.demo:
-                    # The fake server is not reachable at the demo's
-                    # placeholder host, so the demo answers from its own
-                    # synthesized data -- the same short-circuit the component
-                    # picker uses.
-                    answer = _demo_community_components(community_uuid)
+                # The fake server is not reachable at the demo's placeholder
+                # host, so the demo answers from its own synthesized data --
+                # and only for its own, which is why no flag is needed.
+                answer = _demo_community_components(community_uuid)
                 if answer is None:
                     from connections_export.crawler.community import (  # noqa: PLC0415
                         discover_components,

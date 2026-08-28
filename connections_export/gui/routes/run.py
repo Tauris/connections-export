@@ -664,7 +664,7 @@ def register(
         effective_min_interval = body.min_interval or editable["min_interval"]
         if not effective_base_url:
             effective_base_url = editable["base_url"]
-        if not effective_base_url and not body.demo and not app.state.demo:
+        if not effective_base_url and not body.demo:
             from connections_export.config import load_config  # noqa: PLC0415
 
             try:
@@ -701,12 +701,45 @@ def register(
         if not effective_base_url and archive_base:
             effective_base_url = archive_base
 
-        use_demo = (
-            body.demo
-            or not effective_base_url
-            or effective_base_url.rstrip("/") == DEMO_SAMPLE_BASE_URL
+        # "Run the demo pipeline" is a request to read a particular
+        # deployment -- the synthetic one -- so it says which, rather than
+        # setting a mode beside the address. After this line the address is
+        # the only thing that decides, here and in every lookup.
+        if body.demo and not effective_base_url:
+            effective_base_url = DEMO_SAMPLE_BASE_URL
+
+        # No mode. The demo is a deployment at an address no real system can
+        # occupy, so reading that address means reading it and reading any
+        # other means reading that one. `not effective_base_url` used to sit
+        # in this condition, which is how a console with nothing configured
+        # answered a real community with the demo's emptiness.
+        use_demo = bool(effective_base_url) and (
+            effective_base_url.rstrip("/") == DEMO_SAMPLE_BASE_URL
         )
-        # ...but never INTO an archive that came from somewhere real. Getting
+        # No address at all is a refusal. Reading it as "the demo" writes
+        # fabricated content into whatever archive is open; reading it as
+        # "carry on with nothing" starts a capture with nowhere to capture
+        # from. Not knowing which deployment to read is a reason to stop.
+        if not effective_base_url:
+            if body.into:
+                came_from = (
+                    f"This archive was captured from {archive_base}."
+                    if archive_base
+                    else "This archive does not say which deployment it came from."
+                )
+                detail = (
+                    f"{came_from} Updating it needs that deployment, and no address was "
+                    "given — refusing rather than writing demo content into it."
+                )
+            else:
+                detail = (
+                    "No deployment was given, and none is configured. Drop a URL from "
+                    "your deployment onto the setup screen, or try one of the demo URLs "
+                    "offered there to see how a capture works."
+                )
+            return JSONResponse({"status": "error", "detail": detail}, status_code=409)
+
+        # ...and never INTO an archive that came from somewhere real. Getting
         # this wrong costs the one thing an archive is for, so it is refused
         # rather than resolved to something plausible.
         if (

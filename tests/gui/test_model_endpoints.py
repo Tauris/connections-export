@@ -330,20 +330,28 @@ def test_identify_returns_community_uuid():
     assert response.json()["community_uuid"] == "comm-123"
 
 
-def test_current_user_is_answered_by_the_demo_itself():
+def test_current_user_is_answered_by_the_demo_when_the_demo_is_asked_about():
     """Answering that the demo has nobody would leave "Only me" unanswerable
-    in the one mode anyone can run without a deployment, and leave the
-    identity path untested."""
-    app = make_app(demo=True)
-    response = _run(_get(app, "/api/current-user"))
+    on the one deployment anyone can read without having one, and leave the
+    identity path untested. Asked about by address: no mode makes this the
+    demo's answer, only the address in the question."""
+    from connections_export.gui.demo import DEMO_SAMPLE_BASE_URL
+
+    app = make_app()
+    response = _run(_get(app, f"/api/current-user?base_url={DEMO_SAMPLE_BASE_URL}"))
+
     assert response.status_code == 200, response.text
     body = response.json()
     assert body["name"] and body["userid"]
     assert body["demo"] is True
 
 
-def test_current_user_without_a_deployment_and_without_the_demo_says_so():
-    app = make_app(demo=False)
+def test_current_user_without_a_deployment_says_so():
+    """Naming nobody is not a reason to answer with the demo's principal --
+    that is how a real archive came to be labelled with a synthetic person."""
+    app = make_app()
+
     response = _run(_get(app, "/api/current-user"))
+
     assert response.status_code == 503
     assert response.json()["status"] == "no_base_url"

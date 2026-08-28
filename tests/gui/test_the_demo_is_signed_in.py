@@ -101,7 +101,7 @@ def test_the_route_no_longer_says_the_demo_has_nobody():
     from connections_export.gui.app import make_app as make_console
 
     client = TestClient(make_console(demo=True), base_url="http://127.0.0.1")
-    response = client.get("/api/current-user")
+    response = client.get(f"/api/current-user?base_url={DEMO_SAMPLE_BASE_URL}")
 
     assert response.status_code == 200, response.text
     body = response.json()

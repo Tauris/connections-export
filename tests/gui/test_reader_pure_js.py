@@ -57,11 +57,16 @@ def _run_node(driver: str) -> object:
     """Run `PURE_JS` + `driver` (which must `console.log(JSON.stringify(...))`
     its result) under Node, and return the parsed JSON result."""
     script = PURE_JS + "\n" + driver
+    # Generous, because the number is only there to stop a hang becoming an
+    # hour. Every one of these pays Node's start-up cost, and on a loaded
+    # Windows runner that alone has exceeded thirty seconds -- turning a
+    # green test suite red for a reason that has nothing to do with the code
+    # under test, which is worse than a slow suite.
     result = subprocess.run(
         [NODE, "--input-type=commonjs", "-e", script],
         capture_output=True,
         text=True,
-        timeout=30,
+        timeout=180,
     )
     assert result.returncode == 0, f"node failed: {result.stderr}"
     return json.loads(result.stdout)

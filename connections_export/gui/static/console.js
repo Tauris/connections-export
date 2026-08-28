@@ -2672,6 +2672,20 @@
     if (badge) badge.textContent = "◆ " + ((lastStartBody && lastStartBody.demo) ? "Demo" : "Import") + " — unreachable";
   }
 
+  //: The deployment this run is reading, as a host. What every request in
+  //: the log is expected to have gone to.
+  function deploymentHost() {
+    const url =
+      (lastStartBody && lastStartBody.base_url) ||
+      identifiedBaseUrl ||
+      ($("field-base-url") ? $("field-base-url").value : "");
+    try {
+      return new URL(url).host;
+    } catch (_) {
+      return "";
+    }
+  }
+
   function shortLabel(url) {
     try {
       const u = new URL(url, location.href);
@@ -2680,7 +2694,15 @@
       // `feed` endpoint; showing only the final segment made every comment
       // request look identical and hid where pagination was stuck.
       const tail = parts.slice(-4).map((part) => decodeURIComponent(part)).join("/");
-      return (tail || u.pathname) + (u.search ? u.search : "");
+      const path = (tail || u.pathname) + (u.search ? u.search : "");
+      // The host, but only when it is not the one this run is against.
+      // Built from the path alone, a request answered by a machine nobody
+      // meant to ask reads exactly like a correct one -- and there are
+      // hundreds of them, all plausible. Repeating the expected host on
+      // every line would bury the one that differs among the ones that do
+      // not, which is the same failure with more ink.
+      const expectedHost = deploymentHost();
+      return u.host && u.host !== expectedHost ? u.host + " \u00b7 " + path : path;
     } catch (_) {
       return String(url);
     }
@@ -4376,7 +4398,13 @@
             if (!components.length) {
               const empty = document.createElement("div");
               empty.className = "component-loading foot-note";
-              empty.textContent = "No named components were found for this community.";
+              // The server says WHY it found none, and the three reasons are
+              // different situations: this console cannot see that deployment,
+              // no feed answered, or the community genuinely holds nothing.
+              // Replacing that with a sentence about the community states the
+              // one thing we do not know.
+              empty.textContent =
+                data.detail || "No named components were found for this community.";
               options.appendChild(empty);
             }
             // Rich Content is addressed by the community uuid rather than
@@ -5033,6 +5061,10 @@
   //: The synthetic deployment's host names -- the same ones the server reads
   //: archive names for (gui/archives.py DEMO_SOURCE_HOSTS).
   const DEMO_HOSTS = ["demo.connections.example", "example.corp"];
+  //: The demo's own address. Sent when the demo is what is being looked at,
+  //: because the server decides which deployment to read from the address it
+  //: is given and from nothing else.
+  const DEMO_BASE_URL = "https://demo.connections.example";
 
 
   // Does this drop name an archive rather than a deployment page?
@@ -5119,7 +5151,8 @@
         wrap.hidden = true;
         return;
       }
-      const query = base ? "?base_url=" + encodeURIComponent(base) : "";
+      const query =
+        "?base_url=" + encodeURIComponent(base || (demoInView() ? DEMO_BASE_URL : ""));
       const res = await fetch("/api/current-user" + query);
       const j = await res.json().catch(() => ({}));
       if (res.ok && j && (j.name || j.userid)) {
@@ -5132,6 +5165,21 @@
       if (demoInView()) {
         wrap.hidden = false;
         text.textContent = "Demo data";
+        return;
+      }
+      // A deployment that answered and declined is not the same as having
+      // nothing to say. Hiding the chip made a refusal -- wrong credentials,
+      // an unreachable host, a certificate that would not verify -- look
+      // exactly like a console that had not asked, so the one signal that
+      // something was wrong disappeared.
+      if (base && j && (j.detail || j.status)) {
+        wrap.hidden = false;
+        const why = j.detail || (j.status === "no_base_url"
+          ? "no deployment given"
+          : "the deployment did not say who you are");
+        text.innerHTML =
+          "Not signed in — " + escapeHtml(String(why).slice(0, 160));
+        text.title = String(why);
         return;
       }
       wrap.hidden = true;
@@ -5163,7 +5211,8 @@
     if (!force && (($("field-author") ? $("field-author").value : "").trim())) return;
     try {
       const base = ($("field-base-url") ? $("field-base-url").value : "").trim();
-      const query = base ? "?base_url=" + encodeURIComponent(base) : "";
+      const query =
+        "?base_url=" + encodeURIComponent(base || (demoInView() ? DEMO_BASE_URL : ""));
       const res = await fetch("/api/current-user" + query);
       const user = await res.json().catch(() => ({}));
       if (res.ok && user.userid && $("field-author")) {

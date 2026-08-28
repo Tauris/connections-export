@@ -106,7 +106,17 @@ def make_app(
     pdf_renderer: Any = None,
     author_filter: str | None = None,
 ) -> FastAPI:
-    """Build the `hcl-serve` app. `demo_seed`/`demo_delay` tune the
+    """Build the console app.
+
+    `demo` is accepted and ignored. There is no demo mode: the synthetic
+    deployment lives at an address no real system can occupy, so reading
+    that address reads it and reading any other reads that one. A flag
+    beside the address could only disagree with it, and when it did the
+    flag won -- which is how a real community, correctly identified and
+    answering every request, was reported as containing nothing. The
+    parameter stays so existing callers keep working.
+
+    `demo_seed`/`demo_delay` tune the
     demo pipeline (`connections_export.gui.demo.run_demo`) when a run is
     started with `demo=true` -- tests pass `demo_delay=0` to run the
     same, still entirely real, pipeline at full speed instead of the
@@ -140,7 +150,6 @@ def make_app(
                 pass
 
     app = FastAPI(lifespan=_lifespan)
-    app.state.demo = demo
 
     # Localhost hardening: reject requests whose Host
     # is not a permitted localhost name (DNS rebinding) and state-changing

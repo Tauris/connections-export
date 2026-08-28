@@ -25,7 +25,7 @@ The everyday flow lives in three console sections, in order:
 - **Ingest** — a live view of the capture in progress: pages discovered, fetched, and archived, with any truncation or data-loss warning surfaced as it happens rather than buried in a log afterward.
 - **Reader** — reconstructs the hierarchy, threads, and comments from the archive so you can read, search, and export any of it to PDF, entirely offline.
 
-The **demo** (the "Try the demo" button on the Overview, or `--demo` on the command line) runs this exact pipeline — the same crawler, the same archive format — against a small synthetic HCL server built into the tool, so you can see the whole Select → Ingest → Reader flow end to end before pointing it at anything real.
+The **demo** is a small synthetic HCL server built into the tool, and it runs this exact pipeline against it — the same crawler, the same archive format — so you can see the whole Select → Ingest → Reader flow end to end before pointing it at anything real. It is not a mode: it is a deployment like any other, at an address of its own, and the Select & Tailor screen offers its URLs to drop the way you would drop one of yours. Which deployment a capture reads follows from the URL you give it and from nothing else.
 
 In the demo you are signed in as **M. Lindqvist**, one of the people in that synthetic data — the demo impersonates them. They wrote something in every component, so **Only me** filters to a real subset rather than to nothing, and the identity comes back the same way it does from a real deployment: the tool asks the server who you are and is told.
 
@@ -319,12 +319,12 @@ For anything large, **3 seconds overnight** is the kinder choice. It is the same
 
 Everything this console does, it does by calling the same code a command can call directly. That matters when nobody is sitting in front of it: a capture that runs overnight from a scheduled task, a PDF rebuilt after a stylesheet change, an archive opened on a machine with no browser to hand.
 
-Run `connections-export` with no arguments and you get this console with the demo running. Every command below takes `--help`.
+Run `connections-export` with no arguments and you get this console, in a browser. Every command below takes `--help`.
 
 | Command | What it does |
 |---|---|
 | `crawl` | Capture a deployment into an archive. Takes the same URL you would drop onto the setup screen. |
-| `serve` | Start this console. `--demo` runs the synthetic deployment; `--open` opens a browser at it. |
+| `serve` | Start this console. `--open` opens a browser at it. |
 | `open` | Open an existing archive or package to read and export — no capture, so no deployment needed. |
 | `pdf` | Render an archive or package to PDF. |
 | `ingest` | Reconstruct a package into another tool. Today that means an Obsidian vault. |
@@ -358,7 +358,7 @@ The commands that talk to a deployment share these. All four have a configured d
 | `--into` ARCHIVE | Add to an existing archive instead of starting one. This is what makes the run an [update](#man-update), and the cutoff comes from that archive’s own record of when it last ran. |
 | `--since` | Override that cutoff. Earlier always re-checks more, never less. |
 | `--recheck-comments` | Re-read comments for every item, changed or not. [Nothing needs it](#man-recheck) on what has been measured. |
-| `--demo` | Capture the built-in synthetic deployment rather than a real one. |
+| `--demo` | Capture the built-in synthetic deployment. Needs no URL, no credentials and no network — everything it reads ships inside the program. Naming a URL as well is refused rather than one of them being ignored. |
 
 ### <a id="man-cli-reading"></a>Reading, printing, converting
 
