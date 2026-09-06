@@ -3,20 +3,27 @@ served app -- the single-page console (setup screen -> live console),
 a health check, `/api/model` + `/api/blob/{hash}`, and the run
 lifecycle: `POST /api/identify` (parse a dropped/pasted wiki URL),
 `POST /api/start` (start a crawl -- demo or real -- in a background
-thread feeding a shared queue), and `GET /events` (stream that shared
-queue).
+thread publishing to `app.state.event_stream`), and `GET /events`
+(stream it).
 
-**A run is started explicitly, not on `/events` connect**. `POST /api/start` creates a fresh
-`queue.Queue`, starts a background thread whose `emit` pushes
-JSON-serialized events onto it, and returns `{"started": true}`
+**A run is started explicitly, not on `/events` connect**. `POST /api/start` resets the
+`EventStream`, starts a background thread whose `emit` publishes
+JSON-serialized events to it, and returns `{"started": true}`
 immediately. `GET /events` waits (`make_app` gains an idle
-'no run yet' state so the console waits for a start) for that queue
-to exist, then drains it to the client as `data: {json}\\n\\n`, ending
-after the crawl's own final event -- normally `run_complete`. The
-crawl runs to completion in its own thread regardless of what the
-client does -- a disconnecting client just stops being drained; `emit`
-is already fire-and-forget (mirroring `crawler.events.safe_emit`), so
-a full/abandoned queue can never affect the crawl.
+'no run yet' state so the console waits for a start) for a run to
+begin, then sends the client what has happened so far followed by
+whatever happens next, as `data: {json}\\n\\n`, ending after the crawl's
+own final event -- normally `run_complete`.
+
+The stream is a broadcast with a memory, not a queue to be raced for:
+every reader gets the whole run, so a reconnecting console, a second
+tab or a re-established EventSource sees all of it rather than
+whichever fraction it was in the room for
+(`connections_export/gui/event_stream.py`). The crawl runs to
+completion in its own thread regardless of what the client does -- a
+disconnecting client is simply dropped as a subscriber; `emit` is
+fire-and-forget (mirroring `crawler.events.safe_emit`), so an
+abandoned reader can never affect the crawl.
 
 `POST /api/start`'s `demo` flag (or an absent/empty `base_url`) picks
 the demo pipeline -- the real crawler/derive machinery against the
@@ -40,7 +47,6 @@ subdirectory appended). See `_resolve_archives_base`/`ARCHIVES_BASE`.
 
 from __future__ import annotations
 
-import queue
 import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -48,6 +54,7 @@ from typing import Any
 
 from fastapi import FastAPI
 
+from connections_export.gui.event_stream import EventStream
 from connections_export.gui.model_source import ModelSource
 from connections_export.gui.requests import (  # noqa: F401 (public at this address)
     _ArchiveDeleteRequest,
@@ -142,10 +149,12 @@ def make_app(
     async def _lifespan(_app: FastAPI):
         yield
         # On shutdown: wake any open /events SSE stream so it exits its
-        # loop cleanly before uvicorn cancels the task.
-        if _app.state.event_queue is not None:
+        # loop cleanly before uvicorn cancels the task. Published through the
+        # stream, not put on a queue of its own: a terminator delivered by
+        # any other road reaches whoever happens to be reading that road.
+        if _app.state.event_stream.started:
             try:
-                _app.state.event_queue.put_nowait(_DONE)
+                _app.state.event_stream.publish(_DONE)
             except Exception:  # noqa: BLE001
                 pass
 
@@ -193,7 +202,8 @@ def make_app(
     #: bookkeeping: threads are daemons and self-remove nothing is
     #: required for correctness.
     app.state.run_threads: list[threading.Thread] = []
-    app.state.event_queue: queue.Queue | None = None
+    #: Every reader of an ingest run gets the whole run, ending included.
+    app.state.event_stream = EventStream()
     app.state.event_log_path: Path | None = None
     app.state.event_log_lock = threading.Lock()
     # Cookies + base_url from the last real (non-demo) crawl, reused by /api/live-pdf.

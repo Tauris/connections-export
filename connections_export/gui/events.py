@@ -162,6 +162,17 @@ def to_json(event: events.Event) -> dict[str, Any]:
             "author": event.author,
             "identities": list(event.identities),
         }
+    if isinstance(event, events.TopicSelection):
+        return {
+            "type": "topic_selection",
+            "selected": event.selected,
+            "hits": event.hits,
+            "pages_read": event.pages_read,
+            "complete": event.complete,
+            "used": event.used,
+            "detail": event.detail,
+            "ref": event.ref,
+        }
     if isinstance(event, events.RunComplete):
         return {"type": "run_complete", "report": _report_payload(event.report)}
     raise TypeError(f"unknown crawler event type: {type(event)!r}")

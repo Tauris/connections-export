@@ -2687,8 +2687,15 @@
   }
 
   function shortLabel(url) {
+    // Only a real address is parsed as one. `new URL(value, location.href)`
+    // resolves anything else against the console's own origin, so an id
+    // handed to this came back wearing `127.0.0.1` as its host -- and the
+    // host is shown precisely so that a request answered by the wrong
+    // machine is noticeable. Spending that signal on something that never
+    // happened is worse than not having it.
+    if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(String(url || ""))) return String(url);
     try {
-      const u = new URL(url, location.href);
+      const u = new URL(url);
       const parts = u.pathname.split("/").filter(Boolean);
       // Keep enough path context to identify the page behind a generic
       // `feed` endpoint; showing only the final segment made every comment
@@ -2721,6 +2728,8 @@
     if ($("type-counts")) { $("type-counts").hidden = true; $("type-counts").innerHTML = ""; }
     if ($("v-breakdown")) $("v-breakdown").innerHTML = "";
     if ($("vg-pruned")) $("vg-pruned").hidden = true;
+    if ($("kpi-pruned")) $("kpi-pruned").hidden = true;
+    if ($("k-pruned")) $("k-pruned").textContent = "0";
     if ($("author-picker")) { $("author-picker").hidden = true; $("author-picker").innerHTML = ""; }
     livePendingPageId = null; liveWikiGroups.clear(); livePageDepth.clear();
     liveCommunityGroups.clear(); liveCommunityTail.clear(); liveDepthOffset = 0;
@@ -3156,6 +3165,23 @@
     if (forKey && openId === forKey) renderDrawer(byId.get(forKey));
   }
 
+  // How an author-filtered forum capture chose the topics it read. Without
+  // this the capture is inexplicable from here: a community holding ten
+  // thousand topics shows a few hundred and nothing on screen says that
+  // Search picked them, out of how many hits -- or, the case that matters,
+  // that the answer was cut short and there may be more.
+  function liveTopicSelection(evt) {
+    const clean = evt.used && evt.complete === true;
+    raiseAlert(
+      clean ? "note" : "warn",
+      evt.used
+        ? "Search chose " + (evt.selected || 0) + " thread(s) to read"
+        : "Reading the forums in full",
+      escapeHtml(evt.detail || "") + (evt.ref ? ' — <code>' + escapeHtml(evt.ref) + "</code>" : ""),
+      null
+    );
+  }
+
   function liveRunComplete(evt) {
     // Each COMPONENT's crawl ends with one of these, and a run can be made of
     // five. Taking the first as the end of the run announced "Complete",
@@ -3248,6 +3274,7 @@
       case "warning": return liveWarning(evt);
       case "pruned": return livePruned(evt);
       case "author_filter_summary": return liveAuthorSummary(evt);
+      case "topic_selection": return liveTopicSelection(evt);
       case "run_complete":
         // A real run has just told the server which deployment it is
         // talking to, so the identity is resolvable now in a way it
@@ -3275,6 +3302,12 @@
   // honest (seen, not kept -- never a truly silent drop).
   function livePruned(evt) {
     prunedCount += 1;
+    // Live, not only in the verdict. A filtered run must read every thread
+    // to find out whether you are in it, so it fetches steadily while the
+    // kept tree stands still -- which reads as a stall unless something
+    // says what the reading is for.
+    if ($("kpi-pruned")) $("kpi-pruned").hidden = false;
+    if ($("k-pruned")) $("k-pruned").textContent = String(prunedCount);
     const prunedKey = keyByRawId.get(evt.id) || evt.id;
     const node = nodeEls.get(prunedKey);
     if (node) { node.remove(); nodeEls.delete(prunedKey); keyByRawId.delete(evt.id); }
@@ -3282,7 +3315,9 @@
     if (idx >= 0) items.splice(idx, 1);
     $("tree-count") && ($("tree-count").textContent = nodeEls.size);
     const why = PRUNE_REASON_TEXT[evt.reason] || PRUNE_REASON_TEXT["author-filter"];
-    logRow("PRUNE", "warn", shortLabel(evt.id), (evt.kind || "item") + " · " + why);
+    // An id, formatted as one. It names an item that was read and not kept,
+    // not somewhere a request went.
+    logRow("PRUNE", "warn", String(evt.id || "item"), (evt.kind || "item") + " · " + why);
   }
 
   // End-of-run author-filter summary: how many were kept, and (crucially when
@@ -4973,6 +5008,14 @@
   // Reveals the "scope to community" toggle when one is found.
   let discoveredCommunityUuid = null;
   let authorFilterMode = "none";
+  // The author filter's value when it came back from the DEPLOYMENT -- "Only
+  // me" resolving the signed-in principal, or an email looked up via
+  // /api/resolve-user -- rather than being typed. Only such a value may be
+  // handed to the Search person query: Search selects which forum threads a
+  // community capture reads, and selecting from a query built on a display
+  // name that Search happens to answer for would quietly read less than the
+  // full walk would. Typing in the field clears it.
+  let resolvedAuthorUserid = "";
   //  none  -> Everyone          (no filter)
   //  me    -> Only me            (resolved from the signed-in principal)
   //  custom-> A specific person  (typed name / user id / email)
@@ -5006,6 +5049,7 @@
     const everyone = $("author-mode-everyone");
     if (everyone) everyone.addEventListener("click", () => {
       if (field()) field().value = "";
+      resolvedAuthorUserid = "";
       setAuthorFilterMode("none");
     });
     const me = $("author-mode-me");
@@ -5217,6 +5261,7 @@
       const user = await res.json().catch(() => ({}));
       if (res.ok && user.userid && $("field-author")) {
         $("field-author").value = user.userid;
+        resolvedAuthorUserid = user.userid;
         setAuthorFilterMode("me");
         renderResolveResult(user, user);
       } else if (!res.ok) {
@@ -5241,6 +5286,7 @@
         return;
       }
       if ($("field-author")) $("field-author").value = j.userid;
+      resolvedAuthorUserid = j.userid || "";
       setAuthorFilterMode("custom");
       renderResolveResult(j, j);
     } catch (_) {
@@ -5690,7 +5736,12 @@
       $("author-me").addEventListener("click", () => resolveCurrentUser(true));
     }
     if ($("field-author")) {
-      $("field-author").addEventListener("input", () => setAuthorFilterMode("custom"));
+      $("field-author").addEventListener("input", () => {
+        // Typed, so no longer a resolved id: the run falls back to reading
+        // the selected forums in full rather than trusting a guess.
+        resolvedAuthorUserid = "";
+        setAuthorFilterMode("custom");
+      });
     }
 
     // #start-ingest is the ONLY explicit start path in this screen -- no
@@ -5732,6 +5783,12 @@
         // "Capture everything I authored": crawl the whole app, expose only
         // content this user authored/participated in (each with its full chain).
         author: author,
+        // The same person, as a value Search can be asked about -- sent only
+        // when the deployment itself gave it to us. It turns a community
+        // capture's forums from "read all of them and prune" into "ask which
+        // threads this person is in, then read those". Empty means the
+        // full walk, which is slower and always correct.
+        search_userid: author && author === resolvedAuthorUserid ? resolvedAuthorUserid : "",
         min_interval: requestDelaySeconds(),
         demo: false,
         // Archive mode: what this run is adding to, what it re-checks, and --

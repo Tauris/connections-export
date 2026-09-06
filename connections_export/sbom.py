@@ -460,18 +460,37 @@ def _vendored_component(item: Vendored) -> dict:
 
 
 def own_version() -> str:
+    """This tool's version, as INSTALLED.
+
+    Right at run time -- `connections-export licenses` describes the copy
+    doing the describing. Wrong when writing the bundle that goes INTO a
+    release: that runs in whatever environment is building, and the version
+    installed there is not necessarily the version being packaged. Pass
+    `version=` for that; see `build_sbom`.
+    """
     try:
         return metadata.version(OWN_NAME)
     except metadata.PackageNotFoundError:
         return "0.0.0+unknown"
 
 
-def build_sbom(*, also: frozenset[str] | set[str] = frozenset()) -> dict:
+def build_sbom(
+    *, also: frozenset[str] | set[str] = frozenset(), version: str | None = None
+) -> dict:
     """The SBOM for this environment, as a CycloneDX 1.5 document.
 
     The subject is this tool; the components are what it ships with. Built
     from the environment rather than from a hand-written list, because a
     hand-written list is a thing that goes stale silently.
+
+    `version` names the subject. Without it the subject is whatever version
+    is INSTALLED here, which is right at run time and wrong when writing the
+    bundle that ships inside a release: that runs in a build environment
+    whose installed copy need not be the one being packaged. It was not --
+    0.1.1 and 0.1.2 both shipped an SBOM and a NOTICE naming 0.1.0, because
+    a stale editable install answered for them. For a document whose whole
+    job is to say what this artifact is, that is the one field that must not
+    be inferred from the surroundings.
     """
     return {
         "bomFormat": "CycloneDX",
@@ -481,8 +500,8 @@ def build_sbom(*, also: frozenset[str] | set[str] = frozenset()) -> dict:
             "component": {
                 "type": "application",
                 "name": OWN_NAME,
-                "version": own_version(),
-                "purl": f"pkg:pypi/{OWN_NAME}@{own_version()}",
+                "version": version or own_version(),
+                "purl": f"pkg:pypi/{OWN_NAME}@{version or own_version()}",
                 "licenses": [{"license": {"id": OWN_LICENSE}}],
             },
         },
@@ -654,6 +673,7 @@ def write_license_bundle(
     *,
     also: frozenset[str] | set[str] = frozenset(),
     artifact: str = "package",
+    version: str | None = None,
 ) -> dict:
     """Write the SBOM, the licence texts and a NOTICE into `destination`.
 
@@ -663,10 +683,14 @@ def write_license_bundle(
     `artifact` decides how the NOTICE describes the relationship: a package
     REQUIRES its components, an executable CONTAINS them. The same sentence
     cannot be true of both.
+
+    `version` names the artifact being described -- pass the version being
+    RELEASED when writing a bundle to ship, rather than letting it be read
+    off whatever is installed in the build environment (see `build_sbom`).
     """
     destination = Path(destination)
     destination.mkdir(parents=True, exist_ok=True)
-    document = build_sbom(also=also)
+    document = build_sbom(also=also, version=version)
     texts = collect_license_texts(destination, also=also)
     (destination / SBOM_FILENAME).write_text(
         json.dumps(document, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"

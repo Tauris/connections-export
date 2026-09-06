@@ -125,10 +125,20 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
           path: dist/
           merge-multiple: true
+      # `--generate-notes` lists the commits between two tags. This repository
+      # is cut fresh with ONE commit per release, so there are none to list and
+      # the generated body is empty. The changelog is the only place that can
+      # say what changed, so the release is created from it -- and if the
+      # version has no section, that is a failure rather than an empty release.
+      - name: Read this version's release notes
+        run: |
+          python3 tools/release_notes.py "$GITHUB_REF_NAME" > release-notes.md
+          test -s release-notes.md
       # `gh release upload` fails if no Release object exists, and release.yml
       # only publishes to PyPI -- pushing a tag does not create one. Create it
       # if absent, then upload; `--clobber` makes a re-run idempotent.
@@ -140,5 +150,5 @@ jobs:
             || gh release create "$GITHUB_REF_NAME" \
                  --repo "$GITHUB_REPOSITORY" \
                  --title "$GITHUB_REF_NAME" \
-                 --generate-notes
+                 --notes-file release-notes.md
           gh release upload "$GITHUB_REF_NAME" dist/* --clobber --repo "$GITHUB_REPOSITORY"

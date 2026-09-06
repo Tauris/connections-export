@@ -491,7 +491,14 @@ def list_archives(base: Path) -> list[ArchiveInfo]:
                 item_count=_item_count(child),
             )
         )
-    return sorted(infos, key=lambda i: i.mtime, reverse=True)
+    # Name breaks the tie, because mtime alone does not: two archives written
+    # in the same second -- a batch, or one run started right after another --
+    # carry the same mtime, and `iterdir` order is then whatever the
+    # filesystem feels like. The list would reorder itself between two
+    # listings of an unchanged directory. Name is stable, and an archive name
+    # carries its own timestamp, so it agrees with mtime rather than fighting
+    # it.
+    return sorted(infos, key=lambda i: (i.mtime, i.name), reverse=True)
 
 
 def resolve_archive(base: Path, name: str) -> Path | None:

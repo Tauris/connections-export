@@ -29,6 +29,16 @@ The **demo** is a small synthetic HCL server built into the tool, and it runs th
 
 In the demo you are signed in as **M. Lindqvist**, one of the people in that synthetic data — the demo impersonates them. They wrote something in every component, so **Only me** filters to a real subset rather than to nothing, and the identity comes back the same way it does from a real deployment: the tool asks the server who you are and is told.
 
+### <a id="man-one-person"></a>Capturing one person’s share of a community
+
+A busy community is mostly other people’s writing, and asked for “only me”, a capture would have to read all of it anyway — every forum topic and every reply — because whether a thread is yours is only knowable once its replies have been read. In a busy community that is tens of thousands of entries fetched to keep a few hundred threads.
+
+It does not work that way. When you press **Only me** (or resolve a person by email), the console gets a user id back from the deployment itself, and the capture asks the deployment’s own Search which threads in this community that person is in. Search answers with whole threads: reply forty times in one and it comes back once; reply once in someone else’s and it still comes back. Those threads are then read in full — topic, every reply, attachments and images — and the author filter still decides what is kept. Search chooses what to read; it never stands in for the content, and it never decides what is yours.
+
+Three things this deliberately does not do. It does not run on a name you typed: only an id the deployment gave back is used, because a name Search happens to answer for could quietly return less than reading everything would. It does not run without a community, because a person query spanning a whole deployment is far more likely to be cut short. And if Search refuses, returns nothing, or names something this tool doesn’t recognise, the capture reads the forums in full instead and says so in the Ingest view — the one thing it must never do is quietly capture less. The same line tells you when Search’s own answer was cut short at this tool’s page limit.
+
+The CLI does the same when given `--search-userid` with `--author` and a community URL. It is an explicit option there because the command line cannot tell a resolved id from a typed one.
+
 ## <a id="man-format"></a>The archive format
 
 Every capture produces a **package**: a directory holding the normalized content of one or more wikis, blogs, forums, file libraries, and community front pages, built to be read by any program — not just this tool, and not only by something written by someone who knows what HCL Connections is. The full specification ships as `docs/reference/interchange-format.md` in the source tree, and a verbatim copy, `INTERCHANGE.md`, travels inside every package it describes. This section summarizes it.
@@ -353,6 +363,7 @@ The commands that talk to a deployment share these. All four have a configured d
 | `--output-dir` | Where the archive goes. |
 | `--component` KIND | Capture only these parts of a community. Repeatable; without it you get all of them. |
 | `--author` | Keep only what this person wrote or took part in. |
+| `--search-userid` | A user id the deployment’s Search knows. With `--author` and a community URL, the community’s forums are chosen by asking Search which threads this person is in, rather than reading every topic and reply to find out. See [Capturing one person’s share of a community](#man-one-person). |
 | `--delay` | Seconds between requests. See [Pacing](#man-pacing) — 3 overnight is the kinder choice. |
 | `--max-entries` | Stop after this many items. For a look before committing to the whole thing. |
 | `--into` ARCHIVE | Add to an existing archive instead of starting one. This is what makes the run an [update](#man-update), and the cutoff comes from that archive’s own record of when it last ran. |

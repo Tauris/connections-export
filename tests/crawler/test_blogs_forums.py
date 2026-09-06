@@ -369,7 +369,7 @@ def test_forums_traversal_emits_forumtopicderived_with_flags(tmp_path):
 
 
 def test_search_seeded_fast_path_restricts_to_one_forum(tmp_path):
-    """Two seeded topics from two DIFFERENT forums, `restrict_to_forum_uuid`
+    """Two seeded topics from two DIFFERENT forums, `restrict_to_forum_uuids`
     pinned to one: only that forum's topic is derived/kept; the other is
     pruned (`reason="wrong-forum"`) BEFORE its replies feed (or anything
     else about it) is ever fetched -- the whole point of restricting
@@ -390,7 +390,7 @@ def test_search_seeded_fast_path_restricts_to_one_forum(tmp_path):
         topic_ids=[topic_a.uuid, topic_b.uuid],
         forum_uuids=None,
         direct_topic_only=True,
-        restrict_to_forum_uuid=forum_a.uuid,
+        restrict_to_forum_uuids=[forum_a.uuid],
     )
     assert result.ok is True
 
@@ -576,3 +576,108 @@ def test_a_wiki_scoped_by_label_reports_its_real_title(tmp_path):
     assert [w.title for w in model.wikis] == [target.title], (
         f"expected {target.title!r}, got {[w.title for w in model.wikis]}"
     )
+
+
+# --- search-selected community capture ---------------------------------
+# For an author-filtered community capture, the community-scoped person
+# Search feed picks the root topics and the crawl fetches each of those as a
+# whole thread. Search is documented as a SUPERSET of authorship (author OR
+# contributor OR community member), so the seeded path has to keep applying
+# the author filter -- otherwise a selector that is occasionally too generous
+# becomes a capture that is wrong.
+
+
+def test_seeded_topics_still_pass_the_author_filter(tmp_path):
+    """A seeded topic nobody asked for is pruned, not kept because Search
+    named it. Before this, the seeded fast path emitted every topic it
+    fetched: an "only me" capture seeded from a person query would have kept
+    whatever the superset dragged in, under a filter that said otherwise."""
+    seed = _seed()
+    app, _, forumset = _app(seed)
+    forum = forumset.forums[0]
+    mine, theirs = forum.topics[0], forum.topics[1]
+    client = make_client(app)
+    archive = Archive.open(tmp_path / "archive")
+
+    seen: list = []
+    crawl_forums(
+        config=_config(tmp_path, page_size=2),
+        client=client,
+        archive=archive,
+        emit=seen.append,
+        topic_ids=[mine.uuid, theirs.uuid],
+        forum_uuids=None,
+        direct_topic_only=True,
+        author=mine.author,
+    )
+
+    derived = [e for e in seen if isinstance(e, events.ForumTopicDerived)]
+    kept = {e.topic_id for e in derived}
+    assert mine.uuid in kept
+    assert theirs.uuid not in kept or theirs.author == mine.author
+    # And the run says what it filtered, exactly as the full walk does --
+    # a capture that quietly drops threads is the same defect either way.
+    summaries = [e for e in seen if isinstance(e, events.AuthorFilterSummary)]
+    assert len(summaries) == 1
+    assert summaries[0].total == 2
+    assert summaries[0].author == mine.author
+
+
+def test_seeded_topics_honour_the_preview_limit(tmp_path):
+    """The Preview limit is the console's "just show me a bit of it" control.
+    The seeded path ignored `max_topics` entirely, so a preview of a
+    search-selected community capture fetched every selected thread."""
+    seed = _seed()
+    app, _, forumset = _app(seed)
+    forum = forumset.forums[0]
+    client = make_client(app)
+    archive = Archive.open(tmp_path / "archive")
+
+    seen: list = []
+    result = crawl_forums(
+        config=_config(tmp_path, page_size=2),
+        client=client,
+        archive=archive,
+        emit=seen.append,
+        topic_ids=[t.uuid for t in forum.topics],
+        forum_uuids=None,
+        direct_topic_only=True,
+        max_topics=1,
+    )
+    assert result.ok is True
+    derived = [e for e in seen if isinstance(e, events.ForumTopicDerived)]
+    assert len(derived) == 1
+    # The topics past the limit were never fetched at all.
+    urls = archive.seen_urls()
+    for topic in forum.topics[1:]:
+        assert not any(f"topicUuid={topic.uuid}" in u for u in urls)
+
+
+def test_seeded_topics_restrict_to_every_selected_forum(tmp_path):
+    """A community capture selects a SET of forums, not one. Search is pinned
+    to the community, so it returns topics from forums the user did not tick;
+    restricting to a single uuid could not express "these two, not that
+    third one"."""
+    seed = _seed(forum_count=3)
+    app, _, forumset = _app(seed)
+    kept_forums = forumset.forums[:2]
+    dropped = forumset.forums[2]
+    client = make_client(app)
+    archive = Archive.open(tmp_path / "archive")
+
+    seen: list = []
+    crawl_forums(
+        config=_config(tmp_path, page_size=2),
+        client=client,
+        archive=archive,
+        emit=seen.append,
+        topic_ids=[f.topics[0].uuid for f in forumset.forums],
+        forum_uuids=None,
+        direct_topic_only=True,
+        restrict_to_forum_uuids=[f.uuid for f in kept_forums],
+    )
+
+    derived = {e.topic_id for e in seen if isinstance(e, events.ForumTopicDerived)}
+    assert derived == {f.topics[0].uuid for f in kept_forums}
+    pruned = [e for e in seen if isinstance(e, events.Pruned) and e.reason == "wrong-forum"]
+    assert [e.id for e in pruned] == [dropped.topics[0].uuid]

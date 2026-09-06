@@ -20,11 +20,11 @@ rebound request. The `/events` streaming assertion proves the guard
 from __future__ import annotations
 
 import asyncio
-import json
 
 import httpx
 
 from connections_export.gui.app import make_app
+from tests.gui.conftest import read_sse
 
 
 def _run(coro):
@@ -146,13 +146,7 @@ def test_events_still_streams_under_the_guard():
             async with client.stream("GET", "/events") as response:
                 assert response.status_code == 200
                 assert response.headers["content-type"].startswith("text/event-stream")
-                buffer = ""
-                async for chunk in response.aiter_text():
-                    buffer += chunk
-                    while "\n\n" in buffer:
-                        raw, buffer = buffer.split("\n\n", 1)
-                        if raw.startswith("data: "):
-                            collected.append(json.loads(raw[len("data: ") :]))
+                await read_sse(response, collected)
             return collected
 
     events = _run(_do())

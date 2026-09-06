@@ -14,6 +14,7 @@ import queue
 import threading
 from pathlib import Path
 
+from fastapi import Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from connections_export import apps
@@ -25,6 +26,7 @@ from connections_export.crawler.crawl import crawl_blogs as run_crawl_blogs
 from connections_export.crawler.crawl import crawl_forums as run_crawl_forums
 from connections_export.crawler.dispatch import run_selection
 from connections_export.crawler.events import Emit, safe_emit
+from connections_export.crawler.forum_selection import forum_topic_id
 from connections_export.crawler.report import CrawlReport
 from connections_export.crawler.session import resolve_update_plan
 from connections_export.derive import derive as run_derive
@@ -196,47 +198,6 @@ def register(
     #: has a query parameter called `app` (the HCL app kind).
     _app = app
 
-    def _forum_topic_id(url: str | None) -> str | None:
-        """The forum topic uuid from a URL. Tries the shared `parse_url`
-        first, then falls back to a `topicUuid=`/`topicId=`/`id=` query param
-        (real search permalinks vary in shape). Works equally on a hit's HTML
-        `alternate_url` or its Atom API `via_url` -- both are plain URLs, and
-        the query-param fallback is shape-agnostic.
-
-        Community-hosted forums often route through a hash-fragment UI URL
-        (`.../communityview?communityUuid=...#fullpageWidgetId=...&topicId=...`,
-        mirroring the wiki hash-route `#/wiki/{label}/...`), where the id sits
-        in the fragment, not the query string -- so the fragment is checked
-        the same way, both as a `key=value&...` string and as `/`-separated
-        path segments (`#/forums/topic/{uuid}`)."""
-        if not url:
-            return None
-        target = parse_url(url)
-        if target.app == "forum" and target.topic_id:
-            return target.topic_id
-        from urllib.parse import parse_qs, urlsplit  # noqa: PLC0415
-
-        split = urlsplit(url)
-        keys = ("topicUuid", "topicId", "id")
-        qs = parse_qs(split.query)
-        for key in keys:
-            if qs.get(key) and qs[key][0].strip():
-                return qs[key][0].strip()
-        if split.fragment:
-            frag_qs = parse_qs(split.fragment.lstrip("/"))
-            for key in keys:
-                if frag_qs.get(key) and frag_qs[key][0].strip():
-                    return frag_qs[key][0].strip()
-            frag_segments = [s for s in split.fragment.split("/") if s]
-            for index, segment in enumerate(frag_segments):
-                if segment in ("topic", "topicId", "thread", "threadTopic") and index + 1 < len(
-                    frag_segments
-                ):
-                    candidate = frag_segments[index + 1].split("?")[0].strip()
-                    if candidate:
-                        return candidate
-        return None
-
     def _search_seeds(hcl_app: str, userid: str, community_uuid: str, base: str, auth_mode):
         """Run the person (+community) Search server-side and turn the hits into
         crawl seeds: forum topic ids (each expanded to a whole thread) or blog
@@ -303,7 +264,7 @@ def register(
             if not hit.alternate_url and not hit.via_url:
                 continue
             if hcl_app == "forum":
-                tid = _forum_topic_id(hit.via_url) or _forum_topic_id(hit.alternate_url)
+                tid = forum_topic_id(hit.via_url) or forum_topic_id(hit.alternate_url)
                 if tid and tid not in topic_ids:
                     topic_ids.append(tid)
                 elif not tid and len(unmatched_samples) < 5:
@@ -346,6 +307,7 @@ def register(
         into: Path | None = None,
         recheck_comments: bool = False,
         scope_components: dict[str, list[str]] | None = None,
+        search_userid: str | None = None,
     ) -> None:
         """A real (non-demo) start: build a
         real HttpClient + auth strategy and crawl the identified app --
@@ -494,6 +456,13 @@ def register(
                     # a scoped crawl skips.
                     community_uuid=community.uuid,
                     community_title=community.title,
+                    # With an author filter, this turns the community's
+                    # forums from "read every topic and every reply, then
+                    # prune" into "ask Search which threads this person is
+                    # in, then read those in full". Sent only when the
+                    # deployment itself resolved the id; anything else falls
+                    # back to the full walk, saying so.
+                    search_userid=search_userid,
                     # The cutoff, when this run is adding to an existing
                     # archive. None for a fresh capture, which is every
                     # crawl's default.
@@ -553,7 +522,7 @@ def register(
             # `forum_uuid` (singular -- the one container the user separately
             # identified/dragged) then becomes a CLIENT-SIDE restriction on
             # which forum a seeded topic must belong to, not the crawl
-            # strategy -- see `crawl_forums`'s `restrict_to_forum_uuid`.
+            # strategy -- see `crawl_forums`'s `restrict_to_forum_uuids`.
             is_search_driven = bool(topic_ids)
             run_crawl_forums(
                 config=config,
@@ -562,7 +531,7 @@ def register(
                 emit=emit,
                 forum_uuids=(None if is_search_driven else ([forum_uuid] if forum_uuid else None)),
                 topic_ids=forum_topic_ids,
-                restrict_to_forum_uuid=forum_uuid if is_search_driven else None,
+                restrict_to_forum_uuids=([forum_uuid] if is_search_driven and forum_uuid else None),
                 # Single-thread / seeded scope: only fetch these topics (each a
                 # whole thread), don't widen to the whole forum.
                 direct_topic_only=bool(topic_ids)
@@ -605,8 +574,7 @@ def register(
         runs the demo pipeline (as `hcl-serve --demo` always has);
         otherwise a real crawl against `base_url` (see `_run_real`).
         """
-        event_queue: queue.Queue = queue.Queue()
-        app.state.event_queue = event_queue
+        app.state.event_stream.reset()
         # Reset the stop event so a new run starts clean.
         app.state.stop_event.clear()
 
@@ -627,7 +595,7 @@ def register(
             moment the run ended is missing the part you go looking for.
             """
             try:
-                event_queue.put(payload)
+                app.state.event_stream.publish(payload)
                 log_path = app.state.event_log_path
                 if log_path is not None:
                     record = {
@@ -986,7 +954,7 @@ def register(
                         # When a forum search wasn't scoped to one identified forum
                         # (`forum_uuid` blank -- HCL Search has no server-side
                         # per-forum-instance filter, only community-level; see
-                        # `crawl_forums`'s `restrict_to_forum_uuid`), say so up
+                        # `crawl_forums`'s `restrict_to_forum_uuids`), say so up
                         # front so threads spanning several real forums the person
                         # posted in are never mistaken for a bug.
                         unscoped_note = (
@@ -1080,6 +1048,7 @@ def register(
                             if into_dir is not None
                             else None
                         ),
+                        search_userid=(body.search_userid or "").strip() or None,
                     )
                     # Best-effort: derive the final archive and stash it so
                     # the reader keeps working (and is marked `complete`)
@@ -1132,7 +1101,12 @@ def register(
                             "report": _merged_report(component_reports),
                         }
                     )
-                event_queue.put(_DONE)
+                # The end of the run is an event like any other, so it is
+                # in the history too and a reader that arrives afterwards
+                # replays its way to it. Handed only to whoever was
+                # listening at the time, it would leave every later reader
+                # waiting forever on a run that had already finished.
+                app.state.event_stream.publish(_DONE)
 
         thread = threading.Thread(target=_run_in_background, daemon=True)
         app.state.run_threads.append(thread)
@@ -1168,27 +1142,51 @@ def register(
         return JSONResponse({"stopped": True})
 
     @app.get("/events")
-    async def stream_events() -> StreamingResponse:
+    async def stream_events(request: Request) -> StreamingResponse:
+        # SSE's own resume header, sent by the browser on an auto-reconnect
+        # without the page being involved. A dropped EventSource is
+        # indistinguishable from a new reader at the socket, and the console
+        # is not idempotent -- it counts what it is sent -- so replaying the
+        # run to a reconnecting browser doubles every counter, log row and
+        # tree node it already had.
+        last_event_id = request.headers.get("last-event-id")
+
         async def _generate():
             loop = asyncio.get_event_loop()
-            # Idle "no run yet" state: wait for `/api/start`
-            # to create a queue instead of erroring or starting a run
-            # itself. A client that connects before any start just sees
-            # an open stream that produces nothing yet -- exactly what a
-            # setup screen that hasn't started an import should see.
-            while app.state.event_queue is None:
+            # Idle "no run yet" state: wait for `/api/start` to begin one
+            # instead of erroring or starting a run itself. A client that
+            # connects before any start just sees an open stream that
+            # produces nothing yet -- exactly what a setup screen that
+            # hasn't started an import should see.
+            while not app.state.event_stream.started:
                 await asyncio.sleep(_IDLE_POLL_SECONDS)
-            event_queue = app.state.event_queue
-            while True:
-                # Use a short timeout so the async task remains
-                # cancellable during server shutdown without blocking
-                # indefinitely in the thread-pool executor.
-                try:
-                    item = await loop.run_in_executor(None, lambda: event_queue.get(timeout=0.5))
-                except queue.Empty:
-                    continue
-                if item is _DONE:
-                    break
-                yield f"data: {json.dumps(item)}\n\n"
+            subscription = app.state.event_stream.subscribe(last_event_id)
+            history = subscription.history
+            index = subscription.start
+            try:
+                while True:
+                    # What this reader still owes, then what happens next.
+                    # The two are contiguous by construction: `subscribe`
+                    # slices the history and registers the queue under one
+                    # lock, so an event landing at that moment is in exactly
+                    # one of them.
+                    if history:
+                        item = history.pop(0)
+                    else:
+                        try:
+                            item = await loop.run_in_executor(
+                                None, lambda: subscription.queue.get(timeout=0.5)
+                            )
+                        except queue.Empty:
+                            continue
+                    if item is _DONE:
+                        break
+                    # The `id:` the browser hands back if this connection
+                    # drops. Without it there is nothing to resume from and
+                    # every reconnect is a replay from the beginning.
+                    yield f"id: {subscription.event_id(index)}\ndata: {json.dumps(item)}\n\n"
+                    index += 1
+            finally:
+                app.state.event_stream.unsubscribe(subscription.queue)
 
         return StreamingResponse(_generate(), media_type="text/event-stream")

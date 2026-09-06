@@ -9,7 +9,7 @@ The `since` cutoff goes as epoch milliseconds (`profiles.FORUMS`).
 from __future__ import annotations
 
 import threading
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from urllib.parse import parse_qs, urlsplit
 
 from connections_export import paging
@@ -55,11 +55,14 @@ from connections_export.crawler.engine import (
     finish_run,
 )
 from connections_export.crawler.events import Emit
+from connections_export.crawler.forum_selection import select_community_forum_topics
 from connections_export.http.client import HttpClient
 
 
 def _enrich_forum_attachment_filenames(fetcher, entries, discovered_from: str) -> None:
     """Recover filenames that the Atom feed replaces with ``name=blob``."""
+    if not fetcher.config.capture_assets:
+        return
     for entry in entries:
         if not entry.alternate_url:
             continue
@@ -100,7 +103,9 @@ def crawl_forums(
     forum_uuids: list[str] | None = None,
     topic_ids: list[str] | None = None,
     direct_topic_only: bool = False,
-    restrict_to_forum_uuid: str | None = None,
+    restrict_to_forum_uuids: Sequence[str] | None = None,
+    search_userid: str | None = None,
+    community_uuid: str | None = None,
     author: str | None = None,
     stop_event: threading.Event | None = None,
 ) -> CrawlResult:
@@ -119,15 +124,40 @@ def crawl_forums(
     query-param), so the replies feed URL is built from the topic's
     uuid via `replies_url`.
 
-    `restrict_to_forum_uuid`: used with `topic_ids` + `forum_uuids=None`
-    (the search-driven fast path below) when the user ALSO identified one
-    specific forum -- a seeded topic whose OWN `forum_uuid` (read off its
-    `thr:in-reply-to`) doesn't match this uuid is dropped entirely, never
-    fetched further or kept. The Search API itself has no server-side
-    per-forum-instance filter,
-    so without this, a person's search hits from every forum they've ever
-    posted in (or, unpinned, the whole deployment) all land in the
-    hierarchy even when they identified one forum to scope to.
+    `restrict_to_forum_uuids`: used with `topic_ids` + `forum_uuids=None`
+    (the search-driven fast path below) when the caller knows which forums
+    the seeds are allowed to come from -- a seeded topic whose OWN
+    `forum_uuid` (read off its `thr:in-reply-to`) is not among them is
+    dropped entirely, never fetched further or kept. The Search API has no
+    server-side per-forum-instance filter (only the community-level one), so
+    without this a person's search hits from every forum they've ever posted
+    in (or, unpinned, the whole deployment) all land in the hierarchy even
+    when the run was scoped to particular forums.
+
+    It is a SET rather than one uuid because a community capture ticks a set
+    of forums and the person query is pinned to the community, so it returns
+    topics from the forums that were not ticked as well; one uuid could not
+    express "these two, not that third one".
+
+    The seeded path applies the same author filter and the same
+    `max_topics` limit as the full walk below. Search is documented as a
+    superset of authorship (author OR contributor OR community member), so a
+    seed is a candidate to read, never a decision to keep.
+
+    `search_userid` + `community_uuid`: with an `author` filter and a list of
+    `forum_uuids`, this crawl asks the community-scoped person query which
+    root topics to read and turns itself into the seeded path above, rather
+    than page-walking every forum's topics feed and fetching every topic's
+    replies to find out who was in them. For a busy community that is the
+    difference between reading the threads one person is in and reading the
+    whole thing to find them.
+
+    It is a selection, never a filter and never the content: Search returns
+    topic URLs and no reply records at all, so each selected topic's replies
+    feed is still fetched in full, and the author filter still decides what
+    is kept. If the query is refused, returns nothing, or names nothing this
+    build recognises, the crawl falls back to the full walk and says so --
+    the one thing it must not do is quietly capture less.
     """
     emit = emit if emit is not None else events.default_emit
     clock = clock or default_clock
@@ -164,6 +194,26 @@ def crawl_forums(
     thread_facts: list[ThreadFacts] = []
     kept_topics = 0
 
+    def _emit_author_summary() -> None:
+        """What the filter kept, out of what it read. Emitted on EVERY way
+        out of this crawl -- the seeded path returns early, and used to
+        return without it, so a search-selected capture could prune threads
+        and never say that it had."""
+        if not thread_facts:
+            return
+        involvements = [tf.topic for tf in thread_facts]
+        for tf in thread_facts:
+            involvements.extend(tf.replies)
+        events.safe_emit(
+            emit,
+            events.AuthorFilterSummary(
+                kept=kept_topics,
+                total=len(thread_facts),
+                author=author or "",
+                identities=format_identities(involvements),
+            ),
+        )
+
     # Fast path: when specific topic_ids are given but no forum_uuid is known
     # (e.g. a threadTopic URL with only `id=`), skip the full forums list crawl
     # and fetch each topic + its replies directly. This avoids hammering every
@@ -182,11 +232,83 @@ def crawl_forums(
     # be) fetched below -- at most one lightweight request per distinct
     # forum, never per topic.
     forum_titles_fetched: dict[str, str | None] = {}
+    # `None` (no restriction) is not the same as an empty set (restricted to
+    # nothing), and a caller passing an empty list means it selected no
+    # forums -- so `or None` here would turn "keep none" into "keep all".
+    restrict_set = set(restrict_to_forum_uuids) if restrict_to_forum_uuids is not None else None
+
+    if (
+        forum_uuids
+        and topic_ids is None
+        and author_target is not None
+        and search_userid
+        # The community pin is required, not optional. Without it the person
+        # query spans every forum on the deployment they have ever posted in,
+        # which for a prolific user is far more likely to be cut short at the
+        # page limit -- and after restricting the survivors to the selected
+        # forums, the capture would quietly be thinner than the full walk.
+        # Pinned to one community, the answer stays small enough to page
+        # through comfortably.
+        and community_uuid
+    ):
+        # See the docstring. Only ever a narrowing of what to
+        # READ: the forums the caller selected stay the boundary
+        # (`restrict_set`), and the author filter below still decides what is
+        # kept.
+        selection = select_community_forum_topics(
+            fetch=lambda url: fetcher.get_content(
+                url,
+                "search",
+                None,
+                # The answer to "which of this person's threads are in this
+                # community" -- an archived answer to that question can only
+                # repeat itself, and a resumed run that skipped it would have
+                # no seeds at all.
+                policy=CachePolicy.ALWAYS,
+            ),
+            base_url=session.base_url,
+            userid=search_userid,
+            community_uuid=community_uuid,
+        )
+        events.safe_emit(
+            emit,
+            events.TopicSelection(
+                selected=len(selection.topic_ids),
+                hits=selection.hits,
+                pages_read=selection.pages_read,
+                complete=selection.complete,
+                used=selection.usable,
+                detail=selection.summary,
+                ref=selection.url,
+            ),
+        )
+        for alternate, via in selection.samples:
+            # The shapes the seed parser choked on, in the run log -- so an
+            # unrecognised permalink form is diagnosable where it happened
+            # rather than only visible as "search selected nothing".
+            print(
+                "connections-export: search hit named no topic — "
+                f"alternate_url={alternate!r} via_url={via!r}",
+                flush=True,
+            )
+        if selection.usable:
+            # Become the seeded path: read these topics directly, bounded to
+            # the forums this run was asked for.
+            restrict_set = set(forum_uuids)
+            topic_ids = list(selection.topic_ids)
+            forum_uuids = None
+            direct_topic_only = True
 
     if topic_ids is not None and forum_uuids is None:
         recovered_forum_uuids: list[str] = []
         for tid in topic_ids:
             if stop_event is not None and stop_event.is_set():
+                break
+            # The Preview limit, checked BEFORE the seed is fetched: this
+            # path had no `max_topics` check at all, so previewing a
+            # search-selected capture read every selected thread and the
+            # limit only ever applied to the full walk below.
+            if max_topics is not None and topics_crawled >= max_topics:
                 break
             t_url = topic_url(base_url=session.base_url, topic_uuid=tid)
             t_content = fetcher.get_content(t_url, "topic", None)
@@ -197,9 +319,9 @@ def crawl_forums(
                 continue
             topic = topics_parsed[0]
             if (
-                restrict_to_forum_uuid
+                restrict_set is not None
                 and topic.forum_uuid
-                and topic.forum_uuid != restrict_to_forum_uuid
+                and topic.forum_uuid not in restrict_set
             ):
                 # A search hit from a DIFFERENT forum than the one this run
                 # is restricted to -- the client-side "just this one forum"
@@ -238,38 +360,85 @@ def crawl_forums(
                         atom.feed_title(title_content) if title_content is not None else None
                     )
                 forum_title = forum_titles_fetched[topic.forum_uuid]
+            # Deferred exactly as in the full walk below: whether this
+            # thread is kept is not known until its replies have been read
+            # (the author may appear only in one), so scanning its bodies and
+            # queueing its attachments now would pay for threads that are
+            # about to be pruned.
+            ops: list[Callable[[], None]] = []
             if topic.content_html:
-                asset_capture.scan_body(
-                    topic.content_html, base=session.base_url, discovered_from=t_url
+                ops.append(
+                    lambda h=topic.content_html, u=t_url: asset_capture.scan_body(
+                        h, base=session.base_url, discovered_from=u
+                    )
                 )
             for attachment in topic.attachments:
                 if attachment.enclosure_href:
-                    asset_capture.handle(
-                        attachment.enclosure_href,
-                        base=session.base_url,
-                        discovered_from=t_url,
-                        kind="attachments",
+                    ops.append(
+                        lambda h=attachment.enclosure_href, u=t_url: asset_capture.handle(
+                            h,
+                            base=session.base_url,
+                            discovered_from=u,
+                            kind="attachments",
+                        )
                     )
             topic_replies_url = replies_url(base_url=session.base_url, topic_uuid=tid)
             replies = paginate(topic_replies_url, parse_replies_feed, "reply", t_url)
             _enrich_forum_attachment_filenames(fetcher, [topic, *replies], t_url)
             for reply in replies:
                 if reply.content_html:
-                    asset_capture.scan_body(
-                        reply.content_html,
-                        base=session.base_url,
-                        discovered_from=topic_replies_url,
+                    ops.append(
+                        lambda h=reply.content_html, u=topic_replies_url: asset_capture.scan_body(
+                            h, base=session.base_url, discovered_from=u
+                        )
                     )
                 for attachment in reply.attachments:
                     if attachment.enclosure_href:
-                        asset_capture.handle(
-                            attachment.enclosure_href,
-                            base=session.config.base_url,
-                            discovered_from=topic_replies_url,
-                            kind="attachments",
+                        ops.append(
+                            lambda h=attachment.enclosure_href, u=topic_replies_url: (
+                                asset_capture.handle(
+                                    h,
+                                    base=session.config.base_url,
+                                    discovered_from=u,
+                                    kind="attachments",
+                                )
+                            )
                         )
             build_reply_tree(replies)
             topics_crawled += 1
+
+            # The same two-pass author filter the full walk applies, for the
+            # same reason and with the same summary at the end. A seed is a
+            # candidate: the person query that produced it is documented as a
+            # superset (author OR contributor OR community member), so
+            # emitting every seeded topic would have made an "only me"
+            # capture keep whatever the superset dragged in, under a filter
+            # that said otherwise.
+            topic_inv = Involvement(
+                author=topic.author,
+                author_userid=topic.author_userid,
+                contributors=tuple(topic.contributors or ()),
+            )
+            reply_invs = tuple(
+                Involvement(
+                    author=r.author,
+                    author_userid=r.author_userid,
+                    contributors=tuple(r.contributors or ()),
+                )
+                for r in replies
+            )
+            thread_facts.append(ThreadFacts(topic_id=topic.id, topic=topic_inv, replies=reply_invs))
+            involved = (
+                author_target is None
+                or topic_inv.matches(author_target)
+                or any(iv.matches(author_target) for iv in reply_invs)
+            )
+            if not involved:
+                events.safe_emit(emit, events.Pruned(kind="topic", id=topic.id))
+                continue
+            kept_topics += 1
+            for op in ops:
+                op()
             events.safe_emit(
                 emit,
                 events.ForumTopicDerived(
@@ -288,6 +457,7 @@ def crawl_forums(
         # When direct_topic_only=True (scope="single" in the UI), stay with
         # only what was directly fetched above.
         if not recovered_forum_uuids or direct_topic_only:
+            _emit_author_summary()
             return finish_run(session, orphans=[], pages_crawled=topics_crawled)
         # Widen to full-forum crawl using the recovered forum UUIDs.
         # Clear topic_ids so the full crawl isn't limited to the one prefetched
@@ -500,18 +670,5 @@ def crawl_forums(
                 ),
             )
 
-    if thread_facts:
-        involvements = [tf.topic for tf in thread_facts]
-        for tf in thread_facts:
-            involvements.extend(tf.replies)
-        events.safe_emit(
-            emit,
-            events.AuthorFilterSummary(
-                kept=kept_topics,
-                total=len(thread_facts),
-                author=author or "",
-                identities=format_identities(involvements),
-            ),
-        )
-
+    _emit_author_summary()
     return finish_run(session, orphans=[], pages_crawled=topics_crawled)

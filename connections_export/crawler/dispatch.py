@@ -90,6 +90,7 @@ def run_selection(
     stop_event: Any = None,
     community_uuid: str | None = None,
     community_title: str | None = None,
+    search_userid: str | None = None,
 ) -> list[CrawlResult]:
     """Run one crawl per selected app, into one archive.
 
@@ -100,6 +101,14 @@ def run_selection(
     `single` carries the per-app single-item scopes a dropped URL can name
     (`{"entries": [...], "topics": [...]}`) -- unchanged from what the CLI and
     the console already pass.
+
+    `search_userid` is the person the Search API can be asked about -- a user
+    id, which is what `author` already is when the filter came from "Only me"
+    or from a resolved identity. With it, a community capture's forums are
+    selected by the community-scoped person query instead of read whole (see
+    `crawl_forums`). Passing it is safe when it is wrong: a value Search does
+    not know returns nothing, the selection is unusable, and the crawl falls
+    back to the full walk saying why.
     """
     single = single or {}
     results: list[CrawlResult] = []
@@ -132,7 +141,15 @@ def run_selection(
         if app.kind == "forum":
             common["topic_ids"] = list(single.get("topics") or ()) or None
             if restrict_to_forum_uuid:
-                common["restrict_to_forum_uuid"] = restrict_to_forum_uuid
+                common["restrict_to_forum_uuids"] = [restrict_to_forum_uuid]
+            # Forums recover their community from a feed they already fetch,
+            # so this is not provenance -- it is the second half of the
+            # person query, which is only worth asking inside one community.
+            # Without an author filter there is nothing to select FOR, and
+            # `crawl_forums` ignores both.
+            if search_userid and community_uuid and author:
+                common["search_userid"] = search_userid
+                common["community_uuid"] = community_uuid
 
         if app.id_arity == "list":
             results.append(crawler(**common, **{app.id_kwarg: ids}))

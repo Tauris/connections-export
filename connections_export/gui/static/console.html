@@ -385,6 +385,11 @@
     <div class="kpi accent"><div class="top"><span class="name">Discovered</span><span class="chip">queued</span></div><div class="num" id="k-disc">0</div><div class="sub">pages + feeds + assets</div></div>
     <div class="kpi good"><div class="top"><span class="name">Fetched</span><span class="chip">saved</span></div><div class="num" id="k-ok">0</div><div class="sub">responses saved</div></div>
     <div class="kpi" id="kpi-reused" hidden><div class="top"><span class="name">Reused</span><span class="chip">unchanged</span></div><div class="num" id="k-reused">0</div><div class="sub">already had, from the archive</div></div>
+    <!-- Only with an author filter, and only once something has been pruned:
+         a filtered run reads everything and keeps what you are in, so the
+         Fetched number climbs while the tree does not grow. Without this the
+         run reads as stalled at exactly the moment it is working hardest. -->
+    <div class="kpi" id="kpi-pruned" hidden><div class="top"><span class="name">Read, not kept</span><span class="chip">your filter</span></div><div class="num" id="k-pruned">0</div><div class="sub">not yours — read to find out</div></div>
     <div class="kpi warn"><div class="top"><span class="name">Retried</span><span class="chip">slowed down</span></div><div class="num" id="k-retry">0</div><div class="sub">server asked us to wait</div></div>
     <div class="kpi crit"><div class="top"><span class="name">Failed</span><span class="chip">logged</span></div><div class="num" id="k-fail">0</div><div class="sub">kept, with the reason</div></div>
     <div class="kpi" id="kpi-stopped" hidden><div class="top"><span class="name">Not attempted</span><span class="chip">stopped</span></div><div class="num" id="k-stopped">0</div><div class="sub">you stopped the run</div></div>

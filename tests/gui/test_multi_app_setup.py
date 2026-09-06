@@ -13,6 +13,7 @@ import httpx
 
 from connections_export.gui.app import make_app
 from connections_export.gui.wiki_url import parse_url
+from tests.gui.conftest import read_sse
 
 BASE = "https://example.corp"
 
@@ -104,15 +105,7 @@ def test_real_blog_start_reaches_the_crawl_and_surfaces_the_auth_gap():
             )
             assert start.status_code == 200
             async with c.stream("GET", "/events") as resp:
-                import json as _json
-
-                buf = ""
-                async for chunk in resp.aiter_text():
-                    buf += chunk
-                    while "\n\n" in buf:
-                        raw, buf = buf.split("\n\n", 1)
-                        if raw.startswith("data: "):
-                            collected.append(_json.loads(raw[6:]))
+                await read_sse(resp, collected)
         return collected
 
     events = _run(_do())

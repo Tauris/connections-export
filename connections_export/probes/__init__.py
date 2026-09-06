@@ -17,10 +17,16 @@ from connections_export.probes.files_since import (
     plan_files_since_probe,
     probe_files_since,
 )
+from connections_export.probes.search_reach import (
+    SearchReachVerdict,
+    probe_search_reach,
+)
 
 __all__ = [
     "FilesSinceVerdict",
+    "SearchReachVerdict",
     "interpret_files_since",
     "plan_files_since_probe",
     "probe_files_since",
+    "probe_search_reach",
 ]

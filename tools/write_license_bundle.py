@@ -43,11 +43,24 @@ def main() -> int:
             "(pip installs them alongside); an executable CONTAINS them."
         ),
     )
+    parser.add_argument(
+        "--version",
+        default=None,
+        help=(
+            "The version this bundle describes. Without it the subject is "
+            "whatever version is INSTALLED here, which during a release build "
+            "is the build environment's copy rather than the one being "
+            "packaged -- how 0.1.1 and 0.1.2 came to ship an SBOM naming "
+            "0.1.0."
+        ),
+    )
     args = parser.parse_args()
 
     destination = args.into or sbom.bundled_dir()
     also = {name.strip() for name in args.also.split(",") if name.strip()}
-    document = sbom.write_license_bundle(destination, also=also, artifact=args.artifact)
+    document = sbom.write_license_bundle(
+        destination, also=also, artifact=args.artifact, version=args.version
+    )
     components = len(document["components"])
     print(f"{components} components -> {destination}")
     print(f"  {sbom.SBOM_FILENAME}, {sbom.NOTICE_FILENAME}, and one folder of texts each")

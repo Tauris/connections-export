@@ -1,3 +1,4 @@
+import os
 import sys
 import tempfile
 from pathlib import Path
@@ -35,15 +36,43 @@ def _mk(base: Path, name: str) -> Path:
     return d
 
 
+def _age(path: Path, seconds: int) -> None:
+    """Give `path` an mtime `seconds` after a fixed epoch.
+
+    Set explicitly rather than by creating one directory after another and
+    calling `touch`: two things made in the same second share an mtime, and
+    then the order under test is `iterdir` order, which is the filesystem's
+    business and differs between machines. This test passed here and failed
+    on CI for exactly that reason -- it was reading a coin toss.
+    """
+    stamp = 1_700_000_000 + seconds
+    os.utime(path, (stamp, stamp))
+
+
 def test_list_archives_newest_first_and_flags_demo(tmp_path):
     _mk(tmp_path, "export-host-20260101-000000-aaaa")
     _mk(tmp_path, "DEMO-FAKE-DATA-20260102-000000-bbbb")
-    # make the demo one newer
-    (tmp_path / "DEMO-FAKE-DATA-20260102-000000-bbbb").touch()
+    _age(tmp_path / "export-host-20260101-000000-aaaa", 0)
+    _age(tmp_path / "DEMO-FAKE-DATA-20260102-000000-bbbb", 60)
     infos = list_archives(tmp_path)
     assert [i.name for i in infos][0].startswith("DEMO-FAKE-DATA")
     assert all(isinstance(i, ArchiveInfo) for i in infos)
     assert any(i.is_demo for i in infos) and any(not i.is_demo for i in infos)
+
+
+def test_archives_written_in_the_same_second_still_have_an_order(tmp_path):
+    """mtime does not distinguish them, and `iterdir` order is not an order
+    -- it varies by filesystem and can change between two listings of a
+    directory nobody touched. The console's archive list would reshuffle for
+    no reason."""
+    for name in ("export-a-20260101-000000-aaaa", "export-b-20260101-000000-bbbb"):
+        _age(_mk(tmp_path, name), 0)
+
+    once = [i.name for i in list_archives(tmp_path)]
+    again = [i.name for i in list_archives(tmp_path)]
+
+    assert once == again
+    assert once == sorted(once, reverse=True)
 
 
 def test_list_archives_missing_base_is_empty(tmp_path):

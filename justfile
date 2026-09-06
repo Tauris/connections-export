@@ -13,6 +13,10 @@ default:
 sync:
     uv sync
 
+# Create/sync the venv with Windows integrated-auth support
+sync-sspi:
+    uv sync --extra sspi
+
 # Run the test suite (pass args through, e.g. `just test tests/derive -k links`)
 test *args:
     uv run pytest {{args}}
@@ -36,7 +40,7 @@ check:
 # deployment gets read follows from the URL, so there is no mode to set here.
 # Auto-picks a free port if the given one is busy; `just console 8137` to choose.
 console port="8000":
-    uv run connections-export serve --open --port {{port}}
+    uv run --extra sspi connections-export serve --open --port {{port}}
 
 # Install the headless browser Playwright needs for PDF export (Path A)
 browser:

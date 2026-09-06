@@ -250,3 +250,37 @@ def test_what_is_not_shipped_is_data_rather_than_a_sentence():
     assert sbom.NOT_SHIPPED
     for item in sbom.NOT_SHIPPED:
         assert item.name and item.why and item.how
+
+
+# --- the subject version is stated, not inferred -----------------------
+# The SBOM's subject says what this artifact IS. Read off the INSTALLED
+# distribution, it says what the build environment happened to have -- which
+# during a release is routinely a version behind. Two published releases
+# carried an SBOM and a NOTICE naming an older version because of it, visible
+# only to somebody who unzipped the wheel to read a document nobody opens
+# until they have to.
+
+
+def test_the_subject_version_can_be_stated_rather_than_looked_up(tmp_path):
+    document = sbom.write_license_bundle(tmp_path, version="9.9.9")
+
+    subject = document["metadata"]["component"]
+    assert subject["version"] == "9.9.9"
+    assert subject["purl"].endswith("@9.9.9")
+
+
+def test_the_notice_names_the_stated_version(tmp_path):
+    """The NOTICE takes its version from the same document, so a bundle
+    cannot end up with the two disagreeing."""
+    sbom.write_license_bundle(tmp_path, version="9.9.9")
+
+    assert "connections-export 9.9.9" in (tmp_path / "NOTICE.txt").read_text(encoding="utf-8")
+
+
+def test_without_one_it_still_describes_what_is_installed(tmp_path):
+    """At run time that is the right answer -- `connections-export licenses`
+    describes the copy doing the describing -- so the default must not
+    change."""
+    document = sbom.write_license_bundle(tmp_path)
+
+    assert document["metadata"]["component"]["version"] == sbom.own_version()

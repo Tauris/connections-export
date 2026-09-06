@@ -27,10 +27,10 @@ the second, page-scoped shape.
 import re
 from collections.abc import Callable
 from dataclasses import fields, is_dataclass, replace
-from typing import Any
+from typing import Annotated, Any
 
 import httpx
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, PlainTextResponse, Response
 
 from connections_export.adapters import profiles
@@ -347,26 +347,46 @@ def _build_fastapi(
 
     @api.get("/search/atom/mysearch/results")
     @api.get("/search/atom/search/results")
-    def search_results_route(request: Request, userid: str = "", social: str = "", query: str = ""):
-        """The cross-component Search person query (subset: wiki pages the
-        person authored). The person comes from the `social` clause
-        (`{"type":"personUserId","id":<uuid>}`) -- the real query-optional
-        person filter -- or the legacy `userid` param. `query`/`page`/`scope`
-        are accepted and ignored beyond the person filter (demo scope)."""
+    def search_results_route(
+        request: Request,
+        userid: str = "",
+        social: Annotated[list[str] | None, Query()] = None,
+        query: str = "",
+        scope: str = "",
+    ):
+        """The cross-component Search person query: wiki pages the person
+        authored, or -- with `scope=forums:...` -- the forum topics they are
+        in (searchfeed.py explains why those two answer differently).
+
+        `social` is **repeatable**, and that is the whole point: the person
+        clause (`{"type":"personUserId","id":...}`) and the community clause
+        (`{"type":"community","id":...}`) AND-combine, which is how a capture
+        pins the query to one community. Bound as a single string, this route
+        saw only the last one -- so the person filter silently vanished and
+        the feed came back empty, which a client would have read as "this
+        person wrote nothing here"."""
         import json as _json  # noqa: PLC0415
 
         from connections_export.fakeserver.searchfeed import search_results_feed  # noqa: PLC0415
 
-        person = userid
-        if social:
+        person, community = userid, ""
+        for clause_text in social or ():
             try:
-                clause = _json.loads(social)
-                if clause.get("type") in ("personUserId", "personEmail"):
-                    person = clause.get("id", "")
+                clause = _json.loads(clause_text)
             except (ValueError, TypeError):
-                person = userid
+                continue
+            if clause.get("type") in ("personUserId", "personEmail"):
+                person = clause.get("id", "")
+            elif clause.get("type") == "community":
+                community = clause.get("id", "")
         xml = search_results_feed(
-            wikiset, userid=person, base_url=str(request.base_url).rstrip("/"), auth_root=auth_root
+            wikiset,
+            userid=person,
+            base_url=str(request.base_url).rstrip("/"),
+            auth_root=auth_root,
+            scope=scope or None,
+            forumset=forumset,
+            community_uuid=community or None,
         )
         return Response(content=xml, media_type="application/atom+xml")
 

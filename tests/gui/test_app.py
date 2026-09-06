@@ -27,6 +27,7 @@ import pytest
 from connections_export.gui import support as gui_support
 from connections_export.gui.app import make_app
 from tests._hostcheck import find_disallowed_hosts
+from tests.gui.conftest import read_sse
 
 
 def _run(coro):
@@ -37,27 +38,33 @@ async def _post_json(client: httpx.AsyncClient, path: str, body: dict) -> httpx.
     return await client.post(path, json=body)
 
 
-async def _stream_events(app, *, read_limit: int | None = None) -> list[dict]:
-    """Connect to `/events` and collect every `data: {json}` event
-    (optionally stopping after `read_limit` events, leaving the
-    connection open -- the caller then exits the `async with` block,
-    which is what actually disconnects the client)."""
+async def _stream_events(
+    app,
+    *,
+    read_limit: int | None = None,
+    last_event_id: str | None = None,
+    ids: list[str] | None = None,
+) -> list[dict]:
+    """Connect to `/events` and collect every event.
+
+    A real SSE event is a block of `field: value` lines, not one `data:`
+    line -- this reads them the way a browser does, so a stream that also
+    carries `id:` (the thing a browser hands back when it reconnects) is
+    parsed rather than skipped. `ids` collects those, and `last_event_id`
+    sends one, which is how a dropped-and-resumed connection is reproduced
+    without a real network.
+
+    `read_limit` stops early, leaving the connection open -- the caller then
+    exits the `async with` block, which is what actually disconnects.
+    """
     transport = httpx.ASGITransport(app=app)
+    headers = {"Last-Event-ID": last_event_id} if last_event_id else {}
     collected: list[dict] = []
     async with httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1") as client:
-        async with client.stream("GET", "/events") as response:
+        async with client.stream("GET", "/events", headers=headers) as response:
             assert response.status_code == 200
             assert response.headers["content-type"].startswith("text/event-stream")
-            buffer = ""
-            async for chunk in response.aiter_text():
-                buffer += chunk
-                while "\n\n" in buffer:
-                    raw, buffer = buffer.split("\n\n", 1)
-                    if not raw.startswith("data: "):
-                        continue
-                    collected.append(json.loads(raw[len("data: ") :]))
-                    if read_limit is not None and len(collected) >= read_limit:
-                        return collected
+            await read_sse(response, collected, read_limit=read_limit, ids=ids)
     return collected
 
 
@@ -70,16 +77,7 @@ async def _start_then_stream(app, body: dict, *, read_limit: int | None = None) 
         collected: list[dict] = []
         async with client.stream("GET", "/events") as response:
             assert response.status_code == 200
-            buffer = ""
-            async for chunk in response.aiter_text():
-                buffer += chunk
-                while "\n\n" in buffer:
-                    raw, buffer = buffer.split("\n\n", 1)
-                    if not raw.startswith("data: "):
-                        continue
-                    collected.append(json.loads(raw[len("data: ") :]))
-                    if read_limit is not None and len(collected) >= read_limit:
-                        return collected
+            await read_sse(response, collected, read_limit=read_limit)
     return collected
 
 
@@ -116,6 +114,131 @@ def test_start_demo_then_events_streams_run_started_to_run_complete():
     for event in events:
         assert isinstance(event, dict)
         assert "type" in event
+
+
+def test_two_event_streams_each_receive_the_complete_run_history():
+    """Two readers, each getting the whole run.
+
+    One shared queue meant they stole events from each other -- a
+    reconnecting console, a second tab, or a browser re-establishing a
+    dropped EventSource each got a fraction of the run and no sign that
+    anything was missing.
+
+    The second connects strictly AFTER the first has seen the run end, which
+    is the case that matters and the harder one: everything it is owed has
+    already been sent to somebody else. Under a timeout, because the failure
+    mode here is a stream that never ends rather than one that ends wrong --
+    a hang is a failure, and a test that hangs reports nothing.
+    """
+    app = make_app(demo=True, demo_seed=10, demo_delay=0)
+
+    async def _do():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1") as client:
+            response = await _post_json(client, "/api/start", {"demo": True})
+            assert response.status_code == 200
+        first = await asyncio.wait_for(_stream_events(app), timeout=60)
+        # The run is over: `_stream_events` only returns when the stream
+        # terminates, and the stream only terminates at the end of the run.
+        second = await asyncio.wait_for(_stream_events(app), timeout=60)
+        return first, second
+
+    first, second = _run(_do())
+
+    assert first
+    assert first == second
+    assert first[0]["type"] == "run_started"
+    assert first[-1]["type"] == "run_complete"
+    assert any(event["type"] == "forum_topic_derived" for event in first)
+
+
+def test_a_stream_opened_after_the_run_ended_still_ends():
+    """The replayed history has to carry the run's ending, not just its
+    events.
+
+    A console reloaded after a capture finishes replays every event and then
+    waits -- forever, if the terminator was only ever delivered live to
+    whoever was listening at the time. Nothing on screen says so: the run
+    reads as complete because the events say so, while the connection stays
+    open behind it.
+    """
+    app = make_app(demo=True, demo_seed=10, demo_delay=0)
+
+    async def _do():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1") as client:
+            response = await _post_json(client, "/api/start", {"demo": True})
+            assert response.status_code == 200
+        # Drain it once so the run is definitely over and its terminator has
+        # definitely been handed to somebody else.
+        await asyncio.wait_for(_stream_events(app), timeout=60)
+        return await asyncio.wait_for(_stream_events(app), timeout=30)
+
+    replayed = _run(_do())
+    assert replayed[-1]["type"] == "run_complete"
+
+
+def test_a_dropped_connection_resumes_instead_of_replaying_the_run():
+    """A browser re-establishing a dropped EventSource, over HTTP.
+
+    The console aggregates in the browser -- the counters, the tree, the log
+    rows are JS accumulators fed by these events, and the server keeps no
+    running totals. So a reconnect that is answered with the run so far does
+    not just waste bytes: every number on screen counts it twice, while the
+    server-computed report in `run_complete` does not, and the discrepancy
+    reads as a bug in the crawler rather than in the transport.
+
+    EventSource sends `Last-Event-ID` on its own, without the page knowing
+    it happened, so this is what a dropped connection silently does.
+    """
+    app = make_app(demo=True, demo_seed=10, demo_delay=0)
+
+    async def _do():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1") as client:
+            response = await _post_json(client, "/api/start", {"demo": True})
+            assert response.status_code == 200
+        # Read a few events, then drop the connection mid-run.
+        ids: list[str] = []
+        first = await asyncio.wait_for(_stream_events(app, read_limit=5, ids=ids), timeout=60)
+        # ...and come back the way the browser does.
+        rest = await asyncio.wait_for(_stream_events(app, last_event_id=ids[-1]), timeout=60)
+        return first, rest
+
+    first, rest = _run(_do())
+
+    assert len(first) == 5
+    assert rest, "the resumed connection got nothing"
+    # Not one event delivered twice: the two halves are disjoint and, put
+    # end to end, are the run.
+    assert not [event for event in rest if event in first]
+    assert first[0]["type"] == "run_started"
+    assert rest[-1]["type"] == "run_complete"
+
+
+def test_server_shutdown_wakes_an_open_event_stream():
+    """The shutdown terminator has to travel the stream, not a queue beside
+    it.
+
+    An open SSE connection is a task uvicorn will otherwise cancel mid-read;
+    the lifespan wakes it first so it closes cleanly. That wake-up went to a
+    queue that stopped being the one readers listen on, and nothing failed --
+    the reader simply stopped being woken, which shows up as a shutdown that
+    hangs rather than as a test that goes red.
+    """
+
+    app = make_app(demo=True, demo_seed=10, demo_delay=0)
+    app.state.event_stream.reset()
+    subscription = app.state.event_stream.subscribe()
+    assert subscription.history == []
+
+    async def _cycle_lifespan():
+        async with app.router.lifespan_context(app):
+            pass
+
+    _run(_cycle_lifespan())
+
+    assert subscription.queue.get_nowait() is gui_support._DONE
 
 
 def test_run_events_are_persisted_next_to_archive(tmp_path, monkeypatch):

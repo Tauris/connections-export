@@ -43,6 +43,11 @@ ResourceKind = Literal[
     "rich_content",
     # A community's own document, and the picture it names.
     "community",
+    # A page of the Search person query, read to decide WHICH topics an
+    # author-filtered capture has to read. Its own kind because a failure
+    # here means "we could not choose", not "we lost a topic" -- and those
+    # must not read the same in a report.
+    "search",
 ]
 FailedKind = Literal["transport", "timeout", "http_error", "unparsed"]
 #: `placed_not_written` is the odd one out and deliberately so: the other four
@@ -257,6 +262,32 @@ class AuthorFilterSummary:
 
 
 @dataclass(frozen=True)
+class TopicSelection:
+    """How an author-filtered forum capture chose the topics it read.
+
+    Emitted once, before any topic is fetched. Without it the capture is
+    inexplicable from the outside: a community with ten thousand topics
+    scrolls past a few hundred and there is nothing on screen saying that
+    Search picked them, how many hits that came from, or -- the case that
+    matters -- that the answer was cut short and more may exist.
+
+    `complete` is three-valued for the reason it is everywhere else here:
+    True (Search's answer ended on a short page), False (cut short at the
+    page limit this run imposes), None (the deployment did not answer).
+    `used` is False when the selection was not usable and the run fell back
+    to reading the selected forums in full.
+    """
+
+    selected: int
+    hits: int
+    pages_read: int
+    complete: bool | None
+    used: bool
+    detail: str
+    ref: str | None = None
+
+
+@dataclass(frozen=True)
 class Pruned:
     """An entity crawled for structure/text but pruned by the author filter:
     its images/attachments were NOT fetched and it is not in the export. Seen,
@@ -290,6 +321,7 @@ Event = (
     | Warning
     | Pruned
     | AuthorFilterSummary
+    | TopicSelection
     | RunComplete
 )
 

@@ -39,6 +39,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tomllib
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -89,6 +90,18 @@ def _importable(interpreter: str, module: str) -> bool:
     )
 
 
+def _source_version(source: Path) -> str:
+    """The version of the tree being built, from its own `pyproject.toml`.
+
+    Not `importlib.metadata`: that answers for the environment running the
+    build, which during a release is routinely a version behind the tree
+    being packaged -- and an inventory that names the wrong release looks
+    exactly like one that names the right one.
+    """
+    pyproject = tomllib.loads((source / "pyproject.toml").read_text(encoding="utf-8"))
+    return pyproject["project"]["version"]
+
+
 def _license_bundle(source: Path, interpreter: str, also: list[str] | None = None) -> None:
     """Write the SBOM and licence texts into the tree being frozen.
 
@@ -116,6 +129,12 @@ def _license_bundle(source: Path, interpreter: str, also: list[str] | None = Non
         # requires them and pip installs them alongside.
         "--artifact",
         "executable",
+        # ...and describes THIS build's version, read from the tree being
+        # built rather than from whatever is installed in the environment
+        # building it. Left to the environment, it names the wrong release
+        # and looks right.
+        "--version",
+        _source_version(source),
     ]
     if also:
         cmd += ["--also", ",".join(sorted(also))]

@@ -13,6 +13,7 @@ import webbrowser
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qs, urlsplit
 
 from connections_export import apps
 from connections_export.archive.store import Archive
@@ -106,6 +107,16 @@ def _build_parser(prog: str) -> argparse.ArgumentParser:
         help="Only expose content this user authored/participated in (name or "
         "user id) — each kept entity with its full chain. The archive stays "
         "complete; only the derived/served/exported model is filtered.",
+    )
+    parser.add_argument(
+        "--search-userid",
+        default=None,
+        help="A user id the deployment's Search API knows. With --author and a "
+        "community URL, the community's forums are chosen by asking Search "
+        "which threads this person is in, instead of reading every topic and "
+        "every reply to find out. Each chosen thread is still read in full and "
+        "still passes --author. Omit it and the forums are read whole, which "
+        "is slower and always correct.",
     )
     return parser
 
@@ -261,7 +272,13 @@ def _targets_from_urls(urls: Sequence[str]) -> tuple[dict[str, list[str]], dict]
     from connections_export.gui.wiki_url import parse_url  # noqa: PLC0415
 
     grouped: dict[str, list[str]] = {kind: [] for kind in COMPONENT_KINDS}
-    identity: dict = {"base_url": None, "auth_root": None, "community_uuid": None, "single": {}}
+    identity: dict = {
+        "base_url": None,
+        "auth_root": None,
+        "community_uuid": None,
+        "community_title": None,
+        "single": {},
+    }
     for url in urls:
         parsed = parse_url(url)
         if not parsed.ok:
@@ -469,8 +486,10 @@ def crawl_main(
             kind, ident = component.get("kind"), component.get("id")
             if kind in selected and ident and ident not in selected[kind]:
                 selected[kind].append(ident)
-        if discovered.get("community") and not args.target_label:
-            args.target_label = discovered["community"]
+        if discovered.get("community"):
+            identity["community_title"] = discovered["community"]
+            if not args.target_label:
+                args.target_label = discovered["community"]
         if not any(selected.values()):
             print(
                 "connections-export crawl: that community reports no wiki, blog "
@@ -494,6 +513,7 @@ def crawl_main(
         identity=identity,
         max_entries=args.max_entries,
         author=config.filter_author,
+        search_userid=(args.search_userid or "").strip() or None,
         # `plan.since` is the whole point of `--into`: the cutoff read from the
         # target archive's own provenance. It was computed above and never
         # passed, so every `--into` run re-crawled everything unfiltered while
@@ -533,7 +553,17 @@ def _discover_community(config: Config, client, community_uuid: str) -> dict:
 
 
 def _run_selected_crawls(
-    *, config, client, archive, emit, selected, identity, max_entries, author, since=None
+    *,
+    config,
+    client,
+    archive,
+    emit,
+    selected,
+    identity,
+    max_entries,
+    author,
+    since=None,
+    search_userid=None,
 ) -> int:
     """Run one crawl per app for whatever was selected, into one archive.
 
@@ -555,6 +585,14 @@ def _run_selected_crawls(
         author=author,
         since=since,
         single=identity.get("single") or {},
+        # The console has always passed these and this path never did, so a
+        # community captured from the CLI produced wikis that did not record
+        # which community they were for -- and, now, forums that could not be
+        # selected by the person query. Same selection, same run, whichever
+        # front end asked.
+        community_uuid=identity.get("community_uuid") or None,
+        community_title=identity.get("community_title") or None,
+        search_userid=search_userid,
     )
     for result in results:
         _print_crawl_report(result)
@@ -1042,20 +1080,50 @@ def _free_port(host: str, preferred: int) -> int:
 
 
 # --- single entry point ------------------------------------------------
-def _print_comparison(cmp) -> None:
+def _print_comparison(
+    cmp,
+    *,
+    search_returned_unfiltered: int | None = None,
+    truncation_note: str | None = None,
+) -> None:
     def row(label: str, value: int, note: str = "") -> None:
         print(f"  {label:<22}{value:>4}  {note}".rstrip())
 
     print(f"Author-filter comparison for: {cmp.author}\n")
     row("naive scan", cmp.naive_count, "authored/participated-in items")
-    row("search returned", cmp.search_returned, "the superset")
+    if search_returned_unfiltered is not None:
+        # Before narrowing, because this is the number a page ceiling shows
+        # up in: "returned everything" and "returned the first N" are told
+        # apart here and nowhere else.
+        row("search returned", search_returned_unfiltered, "for the whole community")
+        row("  ...in this forum", cmp.search_returned, "narrowed, see the note below")
+    else:
+        row("search returned", cmp.search_returned, "the superset")
     row("search authored", cmp.search_authored, "re-filtered to authorship")
     row("agreed", len(cmp.agreed))
     row("MISSED by search", len(cmp.missed_by_search), "search never returned it")
     row("extra from search", len(cmp.extra_from_search))
     row("superset noise", len(cmp.superset_noise), "returned, not authored")
+    if search_returned_unfiltered is not None:
+        print(
+            "\n  Search is scoped to the community, which holds other forums, so its\n"
+            "  results are narrowed to this one -- by topic id, and the ids come from\n"
+            "  the crawl above. So `extra from search` and `superset noise` are held\n"
+            "  at zero by that narrowing rather than measured, and `...in this forum`\n"
+            "  is the size of the overlap. `MISSED by search` is unaffected: narrowing\n"
+            "  what Search returned cannot turn a miss into a hit."
+        )
+    # Before the verdict, because it decides whether there is one to read: an
+    # answer cut short at our own page limit makes "search agrees" a statement
+    # about what we asked for rather than about what exists.
+    if truncation_note:
+        print("\n  INCOMPLETE — Search's answer was cut short\n")
+        print(truncation_note)
+
     verdict = "AGREES" if cmp.search_agrees else "DISAGREES"
     tail = "" if cmp.search_agrees else "  -- do not trust search alone yet"
+    if truncation_note and cmp.search_agrees:
+        tail = "  -- but only across the part of its answer that was read"
     print(f"\n  => search {verdict} with the naive scan{tail}")
     if cmp.missed_by_search:
         print("\n  missed by search (naive kept, search never returned):")
@@ -1063,6 +1131,94 @@ def _print_comparison(cmp) -> None:
             print(f"    - {title}")
         if len(cmp.missed_by_search) > 20:
             print(f"    ... and {len(cmp.missed_by_search) - 20} more")
+
+
+def _comparison_progress():
+    """An `emit` that shows the baseline crawl is alive.
+
+    The comparison reads a whole forum before it can compare anything, at a
+    request a second, and it writes into a temporary directory that is
+    deleted -- so with events discarded there is no output and no archive
+    growing on disk. An hour of silence is indistinguishable from a hang, and
+    whoever is running this is usually not the person who wrote it.
+
+    Counted rather than echoed: a line per request would be thousands of
+    lines, which hides the progress as effectively as printing nothing.
+    """
+    import time  # noqa: PLC0415
+
+    state = {"fetched": 0, "items": 0, "last": 0.0}
+
+    def emit(event) -> None:
+        name = type(event).__name__
+        if name == "Fetched":
+            state["fetched"] += 1
+        elif name in ("ForumTopicDerived", "BlogPostDerived", "PageDerived"):
+            state["items"] += 1
+        else:
+            return
+        now = time.monotonic()
+        if now - state["last"] < 2.0:
+            return
+        state["last"] = now
+        print(
+            f"\r  {state['fetched']} request(s), {state['items']} item(s) read",
+            end="",
+            file=sys.stderr,
+            flush=True,
+        )
+
+    return emit
+
+
+def _search_pagination_note(
+    *, pages_read: int, last_batch: int, page_size: int, page_limit: int
+) -> str | None:
+    """A warning when Search's answer was cut short by OUR page limit.
+
+    The walk stops on a short page -- that was all of it -- or on running
+    out of pages, which means only that we stopped looking. The two endings
+    produce identical output otherwise, and the second one invalidates the
+    conclusion the whole comparison exists to reach: `MISSED by search = 0`
+    then says nothing was missed among what we asked for, which is not the
+    question.
+
+    It is an ordinary outcome at real sizes. A forum of 2,000 topics sits in
+    a community holding others, and the person query is scoped to the
+    community.
+    """
+    if pages_read < page_limit or last_batch < page_size:
+        return None
+    seen = pages_read * page_size
+    return (
+        f"  Search filled every one of the {page_limit} pages this asks for "
+        f"({seen:,} results)\n"
+        f"  and was still returning a full page. Its answer was cut short HERE, not\n"
+        f"  by the deployment -- so anything past {seen:,} was never looked at, and\n"
+        f"  `MISSED by search` cannot be read as complete recall. Narrow the query\n"
+        f"  (a smaller community, or a scope with fewer items) and run it again."
+    )
+
+
+def _search_topic_id(result) -> str | None:
+    for url in (result.via_url, result.alternate_url):
+        if not url:
+            continue
+        split = urlsplit(url)
+        query = parse_qs(split.query)
+        for name in ("topicUuid", "topicId"):
+            values = query.get(name)
+            if values and values[0]:
+                return values[0]
+        if "threadTopic" in split.path:
+            values = query.get("id")
+            if values and values[0]:
+                return values[0]
+    return None
+
+
+def _filter_search_results_to_topics(results, topic_ids: set[str]):
+    return [result for result in results if _search_topic_id(result) in topic_ids]
 
 
 def compare_author_main(
@@ -1107,6 +1263,10 @@ def compare_author_main(
     from connections_export.adapters.search import parse_search_results  # noqa: PLC0415
     from connections_export.compare.author_compare import compare_author  # noqa: PLC0415
 
+    # Set for both paths: the demo neither narrows nor paginates, and the
+    # live path assigns these only when it does.
+    unfiltered: int | None = None
+    truncation: str | None = None
     if args.demo:
         import tempfile  # noqa: PLC0415
 
@@ -1147,15 +1307,21 @@ def compare_author_main(
         except AuthError as error:
             print(f"connections-export compare-author: {error}", file=sys.stderr)
             return 3
+        progress = _comparison_progress()
         with tempfile.TemporaryDirectory() as tmp:
             archive = Archive.open(Path(tmp) / "archive")
+            print(
+                f"reading {args.app}s directly — this is the baseline, and it reads "
+                "everything before it can compare anything",
+                flush=True,
+            )
             if args.app == "forum":
                 crawl_forums(
                     config=config,
                     client=client,
                     archive=archive,
                     forum_uuids=[args.forum_uuid] if args.forum_uuid else None,
-                    emit=lambda _event: None,
+                    emit=progress,
                 )
             else:
                 crawl_blogs(
@@ -1163,18 +1329,22 @@ def compare_author_main(
                     client=client,
                     archive=archive,
                     blogs_homepage=args.blogs_homepage,
-                    emit=lambda _event: None,
+                    emit=progress,
                 )
+            print(file=sys.stderr)
             interchange = derive(archive, base_url=args.base_url)
             search_results = []
-            for page in range(1, 41):
+            print("asking the deployment's own Search for the same thing", flush=True)
+            page_limit, page_size = 40, 150
+            pages_read, last_batch = 0, 0
+            for page in range(1, page_limit + 1):
                 search_url = search_results_url(
                     base_url=args.base_url,
                     userid=args.author,
                     community_uuid=args.community_uuid,
                     scope="blogs:entry" if args.app == "blog" else "forums:topic",
                     page=page,
-                    page_size=150,
+                    page_size=page_size,
                 )
                 response = client.get(search_url)
                 if not isinstance(response, Fetched) or response.status >= 400:
@@ -1187,10 +1357,27 @@ def compare_author_main(
                     break
                 batch = parse_search_results(response.content)
                 search_results.extend(batch)
-                if len(batch) < 150:
+                pages_read, last_batch = page, len(batch)
+                print(f"  search page {page}: {len(batch)} hit(s)", flush=True)
+                if len(batch) < page_size:
                     break
+            if args.app == "forum" and args.forum_uuid:
+                # Kept, because it is the only place a page ceiling shows: a
+                # Search that stopped at its limit and one that returned
+                # everything are indistinguishable after narrowing.
+                unfiltered = len(search_results)
+                forum_topic_ids = {
+                    topic.id for forum in interchange.forums for topic in forum.topics.values()
+                }
+                search_results = _filter_search_results_to_topics(search_results, forum_topic_ids)
+            truncation = _search_pagination_note(
+                pages_read=pages_read,
+                last_batch=last_batch,
+                page_size=page_size,
+                page_limit=page_limit,
+            )
             comparison = compare_author(interchange, search_results, author=args.author)
-    _print_comparison(comparison)
+    _print_comparison(comparison, search_returned_unfiltered=unfiltered, truncation_note=truncation)
     return 0
 
 
@@ -1378,18 +1565,32 @@ def probe_main(argv: Sequence[str] | None = None) -> int:
     Reads two feed pages and writes nothing: no archive, no file, no change to
     the deployment.
     """
-    from connections_export.probes import probe_files_since  # noqa: PLC0415
+    from connections_export.probes import (  # noqa: PLC0415
+        probe_files_since,
+        probe_search_reach,
+    )
 
     parser = argparse.ArgumentParser(
         prog="connections-export probe",
         description="Ask a live deployment a question that cannot be answered offline.",
     )
-    parser.add_argument("question", choices=["files-since"], help="which question to ask")
+    parser.add_argument(
+        "question", choices=["files-since", "search-reach"], help="which question to ask"
+    )
     parser.add_argument(
         "--community",
-        required=True,
         metavar="UUID",
-        help="the community whose file library to ask about",
+        help="the community to ask about (required for files-since; scopes search-reach)",
+    )
+    parser.add_argument(
+        "--author",
+        metavar="USERID",
+        help="search-reach: whose items to ask Search for",
+    )
+    parser.add_argument(
+        "--scope",
+        default="forums:topic",
+        help="search-reach: the Search scope to ask under (default: forums:topic)",
     )
     parser.add_argument("--base-url", default=None, help="deployment root (default: configured)")
     parser.add_argument("--auth", default=None, help="auth mode (default: configured)")
@@ -1414,9 +1615,59 @@ def probe_main(argv: Sequence[str] | None = None) -> int:
         )
         return 2
 
+    # Before a client is built, let alone a request made: a forgotten flag
+    # surfacing as an authentication stack trace tells the reader about the
+    # wrong problem, and costs nothing to check here.
+    if args.question == "search-reach" and not args.author:
+        print(
+            "connections-export probe search-reach: --author is required — the "
+            "question is how far one person's query reaches.",
+            file=sys.stderr,
+        )
+        return 2
+    if args.question == "files-since" and not args.community:
+        print(
+            "connections-export probe files-since: --community is required — the "
+            "question is about one community's file library.",
+            file=sys.stderr,
+        )
+        return 2
+
     import os  # noqa: PLC0415
 
-    client = _build_default_client(config, env=os.environ)
+    try:
+        client = _build_default_client(config, env=os.environ)
+    except AuthError as error:
+        # Every other command turns this into something to act on. This one is
+        # run by whoever has the deployment rather than by whoever wrote it,
+        # which makes a stack trace worth even less than usual.
+        print(f"connections-export probe: {error}", file=sys.stderr)
+        return 3
+
+    if args.question == "search-reach":
+        reach = probe_search_reach(
+            client=client,
+            base_url=config.base_url,
+            userid=args.author,
+            community_uuid=args.community,
+            scope=args.scope,
+        )
+        print("question:  how far does one person's Search query reach before we stop reading?")
+        print(f"asked of:  {config.base_url}  (source_version {config.source_version})")
+        print(f"  scope:           {args.scope}")
+        print(f"  community:       {args.community or '(none — the whole deployment)'}")
+        print(f"  results read:    {reach.total:,} over {reach.pages_read} page(s)")
+        print(f"  last page:       {reach.last_page} of {reach.page_size}")
+        print(f"verdict:   {reach.summary}")
+        if reach.complete is False:
+            # The one outcome that invalidates a recall result taken with the
+            # same limit, so it is said as a conclusion and not left implied.
+            print(
+                "\n  A recall comparison run with this limit cannot be read as "
+                "complete:\n  it only saw the part of the answer above."
+            )
+        return 0 if reach.complete else 1
+
     verdict = probe_files_since(
         client=client, base_url=config.base_url, community_uuid=args.community
     )
