@@ -206,7 +206,13 @@ def _resolve_auth_strategy(config: Config, env: Mapping[str, str] | None) -> Aut
     return SspiAuth(base_url=config.require_base_url())  # config.auth_mode == "sspi", the default
 
 
-def _build_default_client(config: Config, env: Mapping[str, str] | None) -> HttpClient:
+def _build_default_client(
+    config: Config,
+    env: Mapping[str, str] | None,
+    *,
+    min_interval: float | None = None,
+    timeout: float | None = None,
+) -> HttpClient:
     """A real `HttpClient` for a real deployment -- never exercised by
     offline tests, which always inject their own `client`.
 
@@ -214,8 +220,17 @@ def _build_default_client(config: Config, env: Mapping[str, str] | None) -> Http
     message. Authentication failing is an ordinary thing to get wrong -- a
     missing optional package, no domain to authenticate against, credentials
     not set -- and it should read as instructions, not as a crash.
+
+    `min_interval` and `timeout` override the crawl's defaults for a client
+    that is not crawling: a read-only lookup makes a handful of requests and
+    has no business being paced like a walk over thousands of feeds, and may
+    reasonably wait longer for each one. `Config` refuses a pacing below its
+    floor, which is right for a crawl; this is the seam for the other case.
     """
-    client = HttpClient(min_interval=config.min_interval)
+    client = HttpClient(
+        min_interval=config.min_interval if min_interval is None else min_interval,
+        **({"timeout": timeout} if timeout is not None else {}),
+    )
     auth = _resolve_auth_strategy(config, env)
     if auth is not None:
         auth.prepare(client)

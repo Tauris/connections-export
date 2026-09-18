@@ -386,7 +386,9 @@ def test_community_component_selection_is_wired():
     assert "renderCommunityComponents" in JS
     assert "selectedCommunityComponents" in JS
     assert "community_components" in JS
-    assert "/api/community-components?community_uuid=" in JS
+    # The console reads the STREAM, which reports progress; the plain JSON
+    # route stays for a person reading it in a browser.
+    assert "/api/community-components/stream?community_uuid=" in JS
     assert "forum:" in JS
     assert "data.components" in JS
     assert "Select all" in JS

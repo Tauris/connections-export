@@ -1,10 +1,10 @@
 """When no feed can be read, the answer names what the deployment said.
 
-`_authed_lookup` returns `(status, content, error)` -- an HTTP status, or
-the exception that stopped the request reaching one. The component
-lookup kept only the content, so a 401 on every feed, a certificate that
-would not verify, and a community that genuinely holds nothing all
-arrived as the same empty list.
+A lookup session's `get` returns `(status, content, error)` -- an HTTP
+status, or the exception that stopped the request reaching one. The
+component lookup kept only the content, so a 401 on every feed, a
+certificate that would not verify, and a community that genuinely holds
+nothing all arrived as the same empty list.
 
 The distinction is the whole answer. "Every request was refused, 401"
 points at credentials; "certificate verify failed" points at a trust
@@ -31,11 +31,24 @@ def client(tmp_path, monkeypatch):
     return TestClient(make_app(demo_delay=0), base_url="http://127.0.0.1")
 
 
+class _Session:
+    """A lookup session whose every request answers `answer`."""
+
+    def __init__(self, answer):
+        self.answer = answer
+
+    def get(self, url):
+        return self.answer
+
+    def redirect_location(self, url):
+        return None
+
+
 def _ask(client, monkeypatch, answer):
     """Every lookup answers `answer`, a `(status, content, error)` triple."""
     # Patched where it is USED: `lookup.py` imports the name, so rebinding
     # it on the module it came from would leave this call site untouched.
-    monkeypatch.setattr(lookup_routes, "_authed_lookup", lambda *a, **k: answer)
+    monkeypatch.setattr(lookup_routes, "_lookup_session", lambda *a, **k: _Session(answer))
     return client.get(
         f"/api/community-components?community_uuid={UUID}&base_url={REAL_BASE}"
     ).json()

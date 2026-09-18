@@ -325,6 +325,8 @@ An export is thousands of requests against a live deployment. It waits **1 secon
 
 For anything large, **3 seconds overnight** is the kinder choice. It is the same number of requests either way, and a slower export is one nobody has to notice — no rate limiting, no puzzled admin, no crawl competing with people trying to work. The control is on the Output step, and as a default under Settings.
 
+The pacing is for the export. Working out what a community holds — the dozen or so reads behind the component list on Select & Tailor — is not paced, and is made through one signed-in session rather than one per read. While it runs the console says which phase it is in and how many requests it has made, and it gives up only after **two minutes of silence**, not two minutes of work: a slow deployment that is still answering is still answering.
+
 ## <a id="man-cli"></a>The command line
 
 Everything this console does, it does by calling the same code a command can call directly. That matters when nobody is sitting in front of it: a capture that runs overnight from a scheduled task, a PDF rebuilt after a stylesheet change, an archive opened on a machine with no browser to hand.

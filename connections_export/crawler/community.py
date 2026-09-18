@@ -46,6 +46,7 @@ def discover_components(
     fetch: Callable[[str], bytes | None],
     redirect_location: Callable[[str], str | None] | None = None,
     auth_root: str = "basic",
+    progress: Callable[[str], None] | None = None,
 ) -> dict:
     """What `community_uuid` contains, as far as `fetch` can see.
 
@@ -53,10 +54,23 @@ def discover_components(
     the same configuration a crawl reads. Assuming it here would mean a
     deployment whose root differs is asked at an address that does not
     exist, and answers nothing -- which reads as a community with no wiki.
+
+    `progress` is told what is being read as each phase begins. Discovery is
+    ten to fifteen requests with fallbacks between them, and on a slow
+    deployment that is long enough that silence reads as a hang -- and was
+    treated as one, by a console that gave up while the answer was still
+    on its way.
     """
     community_uuid = (community_uuid or "").strip()
     if not community_uuid or not base_url:
         return {"components": [], "forums": [], "detail": "missing community or base URL"}
+
+    def step(what: str) -> None:
+        if progress is not None:
+            try:
+                progress(what)
+            except Exception:  # noqa: BLE001 - a listener must not stop the discovery
+                pass
 
     import re  # noqa: PLC0415
     from concurrent.futures import ThreadPoolExecutor  # noqa: PLC0415
@@ -194,9 +208,11 @@ def discover_components(
         "forums": forums_list_url(base_url=base_url) + "?communityUuid=" + community_uuid,
         "wikis": wikis_feed_url(base_url=base_url, auth_root=auth_root),
     }
+    step("reading the blogs, forums and wikis lists")
     with ThreadPoolExecutor(max_workers=3) as pool:
         fetched = dict(zip(feed_urls, pool.map(fetch, feed_urls.values()), strict=True))
 
+    step("reading the community's own documents")
     community_service = fetch(
         f"{base_url}/communities/service/atom/community/instance?communityUuid={community_uuid}"
     )
@@ -277,6 +293,7 @@ def discover_components(
         url=feed_urls["forums"],
     )
     if not forums:
+        step("looking for the forum another way")
         service = fetch(f"{base_url}/forums/atom/service")
         if service:
             try:
@@ -331,6 +348,7 @@ def discover_components(
     ):
         import lxml.html  # noqa: PLC0415
 
+        step("reading the community's front page")
         community_page = fetch(
             f"{base_url}/communities/service/html/communitystart?communityUuid={community_uuid}"
         )
@@ -417,6 +435,7 @@ def discover_components(
         except Exception:  # noqa: BLE001
             component["count"] = None
 
+    step(f"counting what each of {len(components)} component(s) holds")
     with ThreadPoolExecutor(max_workers=max(1, len(components))) as pool:
         list(pool.map(component_count, components))
     # Files. Unlike the others, nothing has to be DISCOVERED: the library is
@@ -431,6 +450,7 @@ def discover_components(
         parse_library_feed,
     )
 
+    step("checking the file library")
     library_body = fetch(community_library_url(base_url=base_url, community_uuid=community_uuid))
     if library_body:
         try:
@@ -464,6 +484,7 @@ def discover_components(
         widget_layout_url,
     )
 
+    step("checking Highlights")
     layout_url = widget_layout_url(base_url=base_url, community_uuid=community_uuid)
     layout_body = fetch(layout_url)
     # Why Rich Content was or was not offered. A community that plainly HAS

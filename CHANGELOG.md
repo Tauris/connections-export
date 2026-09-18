@@ -5,6 +5,34 @@ Notable changes to `connections-export`, newest first. Versions follow
 the archive format may still change between minor versions — the format's own
 version is recorded inside every archive.
 
+## 0.1.4 — 2026-09-18
+
+### Working out what a community holds
+
+On a real deployment the component list on Select & Tailor came back empty,
+and the cause was the console's own patience: it gave up after 35 seconds
+while the answer was still on its way.
+
+- Discovery makes its ten to fifteen reads through **one signed-in session**
+  instead of opening a new one for each. With integrated authentication a new
+  session is a full handshake, so each read was paying for two or three round
+  trips before the one it was for.
+- Those reads are no longer paced like an export. The delay between requests
+  exists so a capture of thousands of feeds is a good citizen; a dozen reads to
+  list a community's parts are not that.
+- Each read may take up to two minutes, rather than the thirty seconds a
+  capture allows. A slow deployment that answers in forty seconds is
+  answering.
+- The console shows what discovery is doing — which phase it is in, and how
+  many requests it has made — and gives up only after **two minutes of
+  silence**, not two minutes of work. When it does give up, it says which
+  phase the deployment went quiet in.
+- Sub-communities added to a run are read the same way, with the same
+  patience. They previously had no time limit at all.
+- A sign-in that cannot even begin — the Windows authentication package
+  missing, no domain to authenticate against — is reported as the reason the
+  list is empty, rather than as a server error.
+
 ## 0.1.3 — 2026-09-06
 
 ### Capturing one person's share of a community

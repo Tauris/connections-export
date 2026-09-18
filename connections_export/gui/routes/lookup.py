@@ -9,11 +9,14 @@ feel broken.
 
 from __future__ import annotations
 
-import os
+import json
+import queue
+import threading
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 
 from connections_export.config import Config
 from connections_export.gui.demo import (
@@ -26,8 +29,10 @@ from connections_export.gui.routes._lookup import (
     _authed_lookup,
     _lookup_base_auth,
     _lookup_deployment,
+    _lookup_session,
 )
 from connections_export.gui.support import (
+    _DONE,
     _demo_community_components,
     _demo_current_user,
     _demo_feed_info,
@@ -342,16 +347,26 @@ def register(
             }
         )
 
-    @app.get("/api/community-components")
-    def community_components(community_uuid: str = "", base_url: str = "") -> JSONResponse:
-        """Discover named community components for the setup picker.
+    def _discover(
+        community_uuid: str,
+        base_url: str,
+        *,
+        on_event: Callable[[dict[str, Any]], None] | None = None,
+    ) -> dict[str, Any]:
+        """Discover a community's components, telling `on_event` as it goes.
 
-        The discovery itself lives in `crawler.community`, so the command line
-        can expand a community URL the same way rather than being handed the
-        answer. What stays here is what is genuinely console-specific: the demo
-        short-circuit, and how this server authenticates a lookup.
+        Shared by the plain JSON route and the streaming one so they cannot
+        disagree: the stream is the same discovery with a window into it.
+        Events are `{"type": "step", "step": ...}` as each phase begins and
+        `{"type": "request", "n": ..., "url": ..., "status": ...}` as each
+        request completes.
         """
         community_uuid = community_uuid.strip()
+
+        def emit(event: dict[str, Any]) -> None:
+            if on_event is not None:
+                on_event(event)
+
         # A demo chip's community answers from the synth data, since the
         # fakeserver runs in-process and is never reachable over HTTP at the
         # placeholder host. `_demo_community_components` returns None for any
@@ -361,46 +376,57 @@ def register(
         if community_uuid:
             demo_answer = _demo_community_components(community_uuid)
             if demo_answer is not None:
-                return JSONResponse(demo_answer)
+                return demo_answer
         base, auth_mode, auth_root = _lookup_deployment(_app, base_url)
         if not community_uuid or not base:
-            return JSONResponse(
-                {"components": [], "forums": [], "detail": "missing community or base URL"}
-            )
+            return {"components": [], "forums": [], "detail": "missing community or base URL"}
 
         from connections_export.crawler.community import discover_components  # noqa: PLC0415
 
-        # What the deployment said, kept. `_authed_lookup` knows the status
-        # and the exception; discovery is handed only the bytes, so without
-        # this a refusal, an unreachable host and a community that genuinely
-        # holds nothing all arrive as the same empty list -- and each points
-        # at a different thing to go and fix.
+        # ONE session for the whole discovery. Ten to fifteen requests each
+        # opening its own -- each a full integrated-auth handshake -- is what
+        # made this slow enough for the console to give up on; see
+        # `LookupSession`. Failing to open it is an answer, not an exception:
+        # the same answer every feed would then have given.
+        try:
+            session = _lookup_session(_app, base, auth_mode)
+        except Exception as exc:  # noqa: BLE001
+            failure = {"url": base, "status": None, "error": str(exc)[:200]}
+            return {
+                "components": [],
+                "forums": [],
+                "transport": [failure],
+                "detail": _why_nothing_was_read([failure]),
+            }
+
+        # What the deployment said, kept. The session knows the status and the
+        # exception; discovery is handed only the bytes, so without this a
+        # refusal, an unreachable host and a community that genuinely holds
+        # nothing all arrive as the same empty list -- and each points at a
+        # different thing to go and fix.
         transport: list[dict[str, Any]] = []
+        requests_made = 0
+        counter_lock = threading.Lock()
 
         def fetch(url: str) -> bytes | None:
-            status, content, error = _authed_lookup(_app, url, base, auth_mode)
+            nonlocal requests_made
+            status, content, error = session.get(url)
             answered = status is not None and status < 400 and not error
             if not answered:
                 transport.append(
                     {"url": url, "status": status, "error": (error or "")[:200] or None}
                 )
+            with counter_lock:
+                requests_made += 1
+                n = requests_made
+            emit({"type": "request", "n": n, "url": url, "status": status, "ok": answered})
             return content if answered else None
 
         def redirect_location(url: str) -> str | None:
-            from connections_export.cli import _build_default_client  # noqa: PLC0415
-
-            # A lookup that cannot authenticate is an answer of "I could not
-            # see", not a reason for the request to fail: this runs while
-            # discovery is already collecting what each feed said, and an
-            # exception here would replace all of that with a 500.
-            try:
-                client = _build_default_client(
-                    Config(base_url=base, auth_mode=auth_mode or "sspi"), os.environ
-                )
-                return client.get(url).headers.get("location", "")
-            except Exception as exc:  # noqa: BLE001
-                transport.append({"url": url, "status": None, "error": str(exc)[:200]})
-                return None
+            location = session.redirect_location(url)
+            if location is None:
+                transport.append({"url": url, "status": None, "error": "did not answer"})
+            return location
 
         answer = discover_components(
             community_uuid=community_uuid,
@@ -408,6 +434,7 @@ def register(
             fetch=fetch,
             redirect_location=redirect_location,
             auth_root=auth_root or "basic",
+            progress=lambda what: emit({"type": "step", "step": what}),
         )
         if not answer.get("components") and transport:
             answer["transport"] = transport[:8]
@@ -417,7 +444,76 @@ def register(
             # is then that the feeds named no component.
             if not any(attempt.get("fetched") for attempt in answer.get("attempts", [])):
                 answer["detail"] = _why_nothing_was_read(transport)
-        return JSONResponse(answer)
+        return answer
+
+    @app.get("/api/community-components")
+    def community_components(community_uuid: str = "", base_url: str = "") -> JSONResponse:
+        """Discover named community components for the setup picker.
+
+        The discovery itself lives in `crawler.community`, so the command line
+        can expand a community URL the same way rather than being handed the
+        answer. What stays here is what is genuinely console-specific: the demo
+        short-circuit, and how this server authenticates a lookup.
+
+        The whole answer at once. `/api/community-components/stream` is the
+        same discovery with progress, and is what the console uses; this one
+        stays for anything that wants the JSON in one piece -- including a
+        person reading it in a browser to see what each feed said.
+        """
+        return JSONResponse(_discover(community_uuid, base_url))
+
+    @app.get("/api/community-components/stream")
+    async def community_components_stream(
+        community_uuid: str = "", base_url: str = ""
+    ) -> StreamingResponse:
+        """The same discovery, as an event stream that shows its working.
+
+        Discovery is ten to fifteen requests with fallbacks between them, and
+        against a slow deployment it can run past a minute. A plain request
+        for that is silence until it ends -- and a console that has to decide
+        when silence means failure will decide wrong in one direction or the
+        other. So each phase and each request is reported as it happens; the
+        console shows them and treats only silence as a reason to give up.
+
+        Events are JSON: `step`, `request`, and finally one `result` carrying
+        exactly what the plain route would have returned. The stream then
+        closes. It never emits `id:`, and the console closes it on `result`:
+        a browser that reconnected an event stream on its own would start the
+        discovery over.
+        """
+        import asyncio  # noqa: PLC0415
+
+        events: queue.Queue = queue.Queue()
+
+        def work() -> None:
+            try:
+                answer = _discover(community_uuid, base_url, on_event=events.put)
+                events.put({"type": "result", **answer})
+            except Exception as exc:  # noqa: BLE001 - the stream must still end
+                events.put(
+                    {
+                        "type": "result",
+                        "components": [],
+                        "forums": [],
+                        "detail": f"discovery failed: {type(exc).__name__}: {exc}"[:300],
+                    }
+                )
+            events.put(_DONE)
+
+        threading.Thread(target=work, daemon=True).start()
+        loop = asyncio.get_event_loop()
+
+        async def _generate():
+            while True:
+                try:
+                    item = await loop.run_in_executor(None, lambda: events.get(timeout=0.5))
+                except queue.Empty:
+                    continue
+                if item is _DONE:
+                    break
+                yield f"data: {json.dumps(item)}\n\n"
+
+        return StreamingResponse(_generate(), media_type="text/event-stream")
 
     @app.get("/api/current-user")
     def current_user(base_url: str = "") -> JSONResponse:

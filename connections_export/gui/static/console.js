@@ -4407,12 +4407,12 @@
     if ($("extra-community-groups")) $("extra-community-groups").innerHTML = "";
     offerSubcommunities();
       if (identifiedCommunityUuid) {
-        const controller = new AbortController();
-        componentsInFlight = controller;
-        const timeout = setTimeout(() => controller.abort(), 35000);
-        fetch("/api/community-components?community_uuid=" + encodeURIComponent(identifiedCommunityUuid) +
-          "&base_url=" + encodeURIComponent($("field-base-url").value.trim()), { signal: controller.signal })
-          .then((r) => r.json())
+        const discovery = discoverCommunityComponents(identifiedCommunityUuid, (progress) => {
+          if (thisRender !== componentsRender) return;
+          loading.textContent = discoveryProgressText(progress);
+        });
+        componentsInFlight = discovery;
+        discovery.promise
           .then((data) => {
             // A later render has already cleared the container and is asking
             // its own question; this answer is about a list that is gone.
@@ -4459,16 +4459,99 @@
             // first child, and re-inserting it is what put a DETACHED copy
             // back into a container another render had cleared.
           })
-          .catch(() => {
+          .catch((err) => {
             if (thisRender !== componentsRender) return;   // superseded, not failed
-            loading.textContent = "Could not read community components (timeout or unavailable).";
+            // Say what happened, not "timeout or unavailable": the two point
+            // at different things, and the inactivity error names the phase
+            // the deployment went quiet in.
+            loading.textContent = "Could not read community components — " +
+              ((err && err.message) || "no answer") + ".";
           })
           .finally(() => {
-            clearTimeout(timeout);
-            if (componentsInFlight === controller) componentsInFlight = null;
+            if (componentsInFlight === discovery) componentsInFlight = null;
             if (thisRender === componentsRender) setAnalysing(false);
           });
       }
+  }
+
+  // How long discovery may go without a word before the console gives up.
+  // Inactivity, not duration: discovery is ten to fifteen requests against a
+  // deployment that may take a while over each, and a plain 35-second
+  // deadline gave up on real communities while their answer was still on
+  // its way. The server reports each phase and each request as it happens,
+  // so silence -- and only silence -- is the signal that something is wrong.
+  const DISCOVERY_INACTIVITY_MS = 120000;
+
+  // Discover a community's components over the event stream, reporting each
+  // phase to `onProgress` and resolving with the same answer the plain JSON
+  // route gives. Returns {promise, abort}: `abort` closes the stream, which
+  // is what a superseding render or a changed URL calls.
+  //
+  // Closed on `result` and on `error` explicitly: a browser re-establishes a
+  // dropped EventSource on its own, and this stream carries no position to
+  // resume from -- a reconnect would start the whole discovery over.
+  function discoverCommunityComponents(uuid, onProgress) {
+    const url = "/api/community-components/stream?community_uuid=" + encodeURIComponent(uuid) +
+      "&base_url=" + encodeURIComponent($("field-base-url").value.trim());
+    let source = null, timer = null, settled = false;
+    let lastStep = "", requests = 0;
+    const promise = new Promise((resolve, reject) => {
+      const finish = (fn, value) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        if (source) { try { source.close(); } catch (_) { /* already closed */ } }
+        fn(value);
+      };
+      const arm = () => {
+        clearTimeout(timer);
+        timer = setTimeout(() => {
+          finish(reject, new Error(
+            "no word from the deployment for " + Math.round(DISCOVERY_INACTIVITY_MS / 1000) +
+            " seconds" + (lastStep ? " while " + lastStep : "")
+          ));
+        }, DISCOVERY_INACTIVITY_MS);
+      };
+      try {
+        source = new EventSource(url);
+      } catch (err) {
+        finish(reject, err);
+        return;
+      }
+      arm();
+      source.addEventListener("message", (ev) => {
+        let data;
+        try { data = JSON.parse(ev.data); } catch (_) { return; }
+        if (data.type === "result") { finish(resolve, data); return; }
+        if (data.type === "step") lastStep = data.step || "";
+        if (data.type === "request") requests = data.n || requests + 1;
+        if (onProgress) onProgress({ step: lastStep, requests: requests });
+        arm();
+      });
+      source.addEventListener("error", () => {
+        // The stream ended without a result: unreachable, or the server
+        // closed it. Either way there is nothing to wait for.
+        finish(reject, new Error("the discovery stream ended without an answer"));
+      });
+    });
+    return { promise, abort: () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (source) { try { source.close(); } catch (_) { /* already closed */ } }
+    } };
+  }
+
+  // What the loading line says while discovery runs: the phase, and a
+  // request count climbing so that a slow deployment reads as slow rather
+  // than as stuck.
+  function discoveryProgressText(progress) {
+    let text = "Reading community components…";
+    if (progress && progress.step) text += " " + progress.step;
+    if (progress && progress.requests) {
+      text += " · " + progress.requests + " request" + (progress.requests === 1 ? "" : "s") + " so far";
+    }
+    return text;
   }
 
   function selectedCommunityComponents() {
@@ -4519,9 +4602,14 @@
     host.appendChild(group);
     const record = { uuid, title, el: group };
     extraCommunities.push(record);
-    return fetch("/api/community-components?community_uuid=" + encodeURIComponent(uuid) +
-      "&base_url=" + encodeURIComponent($("field-base-url").value.trim()))
-      .then((r) => r.json())
+    // The same stream as the first community, with the same patience: an
+    // added community is read from the same deployment and takes as long.
+    const progressLine = group.querySelector(".component-loading");
+    return discoverCommunityComponents(uuid, (progress) => {
+      if (progressLine && progressLine.isConnected) {
+        progressLine.textContent = discoveryProgressText(progress);
+      }
+    }).promise
       .then((data) => {
         const components = (data && data.components) || [];
         record.title = title || (data && data.community) || uuid;

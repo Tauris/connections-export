@@ -79,7 +79,7 @@ def test_the_client_a_lookup_builds_carries_the_configured_auth_mode(configured,
     lookup authenticated as whatever the default happened to be."""
     seen = {}
 
-    def capture(config, env):
+    def capture(config, env, **overrides):
         seen["auth_mode"] = config.auth_mode
         raise RuntimeError("stop here: the config is what is being tested")
 
