@@ -8,6 +8,8 @@ from typing import Annotated, Any
 from fastapi import Query
 from fastapi.responses import JSONResponse, Response
 
+from connections_export.config import load_config
+
 
 def register(
     app,
@@ -308,9 +310,18 @@ def register(
                 status_code=503,
             )
 
+        from connections_export.http.proxy import resolve_proxy  # noqa: PLC0415
         from connections_export.pdf.live import render_live_pdf  # noqa: PLC0415
 
-        result = render_live_pdf(live_urls, cookies=app.state.live_cookies or None)
+        # The browser visits the deployment; it goes there the way the
+        # tool's own requests do, loopback bypassed, rather than deciding
+        # for itself from the system PAC.
+        try:
+            proxy_setting = load_config({}).proxy
+        except Exception:  # noqa: BLE001 - unreadable configuration means no explicit proxy
+            proxy_setting = None
+        decision = resolve_proxy(live_urls[0], explicit=proxy_setting) if live_urls else None
+        result = render_live_pdf(live_urls, cookies=app.state.live_cookies or None, proxy=decision)
         if not result.pdf_bytes:
             return JSONResponse(
                 {

@@ -76,7 +76,7 @@ def _launch_candidates(env: Mapping[str, str]) -> Iterator[dict]:
     yield {}
 
 
-def launch_browser(playwright, env: Mapping[str, str] | None = None):
+def launch_browser(playwright, env: Mapping[str, str] | None = None, *, proxy=None):
     """Launch the first browser in the `_launch_candidates` order that
     starts; re-raise the last error if none do.
 
@@ -90,10 +90,21 @@ def launch_browser(playwright, env: Mapping[str, str] | None = None):
     launch fails.
     """
     env = os.environ if env is None else env
+    # `proxy` is a decision for the deployment the browser will visit
+    # (`http.proxy.ProxyDecision`), carried in so the browser agrees with the
+    # tool's own requests. Without one, Chromium decides for itself from the
+    # system PAC -- the same script, so ordinarily the same answer -- and
+    # bypasses loopback on its own.
+    extra = {}
+    if proxy is not None:
+        from connections_export.http.proxy import playwright_proxy_kwargs  # noqa: PLC0415
+
+        extra = playwright_proxy_kwargs(proxy)
+    launch_args = _launch_args() + extra.pop("args", [])
     last_error: Exception | None = None
     for kwargs in _launch_candidates(env):
         try:
-            return playwright.chromium.launch(args=_launch_args(), **kwargs)
+            return playwright.chromium.launch(args=launch_args, **kwargs, **extra)
         except Exception as exc:  # this channel's browser isn't installed -- try the next
             last_error = exc
     raise last_error if last_error is not None else RuntimeError("no browser candidates")

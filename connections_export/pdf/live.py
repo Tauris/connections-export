@@ -236,6 +236,7 @@ def render_live_pdf(
     urls: Iterable[str],
     *,
     cookies: list[dict] | None = None,
+    proxy=None,
     paper_format: str = "A4",
 ) -> LivePdfResult:
     """Render each URL via Playwright and merge the per-page PDFs.
@@ -267,7 +268,7 @@ def render_live_pdf(
     import os  # noqa: PLC0415
 
     with sync_playwright() as pw:
-        browser = _launch(pw, os.environ)
+        browser = _launch(pw, os.environ, proxy=proxy)
         context_kwargs: dict = {"accept_downloads": False}
         if cookies:
             # Convert requests-style cookies to Playwright format.

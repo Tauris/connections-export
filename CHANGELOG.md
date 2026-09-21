@@ -5,7 +5,25 @@ Notable changes to `connections-export`, newest first. Versions follow
 the archive format may still change between minor versions — the format's own
 version is recorded inside every archive.
 
-## 0.1.5 — unreleased
+## 0.1.5 — 2026-09-21
+
+### Proxies, the way the browser does them
+
+Reports of "proxy issues" came from machines whose proxy is configured in
+Windows Internet Options — what Edge and Chrome use — and never as an
+environment variable, which was the only place the tool looked.
+
+- The tool now decides the way a browser decides: `--proxy` or the `proxy`
+  configuration key; then `HTTPS_PROXY` and `NO_PROXY`; then, on Windows, the
+  system's PAC script or automatic detection, evaluated for the deployment's
+  address by the same engine the browser uses; then the system proxy setting
+  and its bypass list; then direct.
+- **The console itself is never reached through a proxy.** A PAC script that
+  sends `127.0.0.1` to a proxy exists, and a proxy that refuses it is right to.
+- New `connections-export probe proxy` prints what a request to the deployment
+  and to the console would go through, and which step decided.
+- A proxy demanding its own sign-in is a limit the tool names, with the fix,
+  rather than a retry that looks like a deployment refusing.
 
 ### Exporting to Obsidian
 
@@ -26,6 +44,13 @@ file was missing." They were right, and it was not their mistake.
   items resolve as `[[wikilinks]]` whatever kind is on either end. The vault
   had held wikis only, so a blog captured for exactly this purpose produced
   an empty vault.
+- **New `--format jekyll`.** Writes a conventional Jekyll site fragment:
+  every page, post and topic becomes a dated Markdown file under `_posts/`,
+  with body images under `assets/images/imported/` and in-export links
+  rewritten to the target post. It is a fragment on purpose — the site's own
+  `_config.yml`, layouts, `url` and `baseurl` stay with the site owner — so it
+  drops into an existing GitHub Pages site. Needs the `jekyll` extra when
+  installed with `pip`; the executable has it built in.
 - New `connections-export package --archive DIR --output DIR` writes the
   portable interchange package the manual has always described —
   `interchange.json`, its blobs, the capability manifest and the format's own

@@ -109,6 +109,13 @@ def _build_parser(prog: str) -> argparse.ArgumentParser:
         "complete; only the derived/served/exported model is filtered.",
     )
     parser.add_argument(
+        "--proxy",
+        default=None,
+        help="How to reach the deployment: a proxy URL, or `direct` to use none. Unset, "
+        "decided the way a browser decides -- environment, then the system's PAC or "
+        "auto-detection, then its proxy setting. `probe proxy` shows the result.",
+    )
+    parser.add_argument(
         "--search-userid",
         default=None,
         help="A user id the deployment's Search API knows. With --author and a "
@@ -145,6 +152,7 @@ def _parse_with(
         "output_dir": args.output_dir,
         "filter_author": args.filter_author,
         "min_interval": args.min_interval,
+        "proxy": getattr(args, "proxy", None),
         # Present only on the crawl parser; `getattr` keeps the other
         # subcommands, which reuse this helper, from having to declare them.
         "into": Path(args.into) if getattr(args, "into", None) else None,
@@ -227,8 +235,17 @@ def _build_default_client(
     reasonably wait longer for each one. `Config` refuses a pacing below its
     floor, which is right for a crawl; this is the seam for the other case.
     """
+    from connections_export.http.proxy import resolve_proxy  # noqa: PLC0415
+
+    # Decided once, for the deployment, the way a browser would -- and
+    # printed to the log when it is anything but direct-by-default, so a
+    # request that goes somewhere unexpected is visible from the first line.
+    decision = resolve_proxy(config.base_url or "https://localhost", explicit=config.proxy, env=env)
+    if decision.source not in ("default", "loopback"):
+        print(f"connections-export: proxy — {decision.detail} [{decision.source}]", flush=True)
     client = HttpClient(
         min_interval=config.min_interval if min_interval is None else min_interval,
+        proxy=decision,
         **({"timeout": timeout} if timeout is not None else {}),
     )
     auth = _resolve_auth_strategy(config, env)
@@ -647,8 +664,9 @@ def _content_source(path: str, *, author: str | None):
 def ingest_main(argv: Sequence[str] | None = None, *, env: Mapping[str, str] | None = None) -> int:
     """`connections-export ingest --format obsidian --archive DIR --output VAULT`:
     a reference ingester that reconstructs captured content into a target
-    (docs/reference/interchange-format.md §7). Only `obsidian` is built
-    (needs the `obsidian` extra: `pip install 'connections-export[obsidian]'`).
+    (docs/reference/interchange-format.md §7). The built-in formats are
+    `obsidian` and `jekyll`; both use the `markdownify` dependency through
+    their respective extras.
 
     Takes what a capture actually produces -- an archive directory, or a zip
     of one -- as readily as a written package. `--package` and `--archive`
@@ -656,7 +674,7 @@ def ingest_main(argv: Sequence[str] | None = None, *, env: Mapping[str, str] | N
     of directory works, and says which it found.
     """
     parser = argparse.ArgumentParser(prog="connections-export ingest")
-    parser.add_argument("--format", choices=["obsidian"], default="obsidian")
+    parser.add_argument("--format", choices=["obsidian", "jekyll"], default="obsidian")
     source = parser.add_mutually_exclusive_group(required=True)
     source.add_argument(
         "--archive",
@@ -674,20 +692,26 @@ def ingest_main(argv: Sequence[str] | None = None, *, env: Mapping[str, str] | N
 
     from connections_export.archive.source import ArchiveSourceError  # noqa: PLC0415
     from connections_export.derive import DeriveError  # noqa: PLC0415
-    from connections_export.ingest import from_source  # noqa: PLC0415
+    from connections_export.ingest import from_source_for_format  # noqa: PLC0415
 
     try:
         source_obj, kind = _content_source(args.archive or args.package, author=args.filter_author)
-        stats = from_source(source_obj, args.output)
+        stats = from_source_for_format(source_obj, args.output, args.format)
     except (ValueError, DeriveError, ArchiveSourceError) as error:
         print(f"connections-export ingest: {error}", file=sys.stderr)
         return 1
-    print(
-        f"connections-export ingest: from the {kind}, {stats.pages} page(s) in "
-        f"{stats.wikis} wiki(s), {stats.posts} post(s) in {stats.blogs} blog(s), "
-        f"{stats.topics} topic(s) in {stats.forums} forum(s), "
-        f"{stats.assets_written} attachment(s) → {args.output}"
-    )
+    if args.format == "jekyll":
+        print(
+            f"connections-export ingest: from the {kind}, {stats.posts} post(s), "
+            f"{stats.assets_written} asset(s) → {args.output}"
+        )
+    else:
+        print(
+            f"connections-export ingest: from the {kind}, {stats.pages} page(s) in "
+            f"{stats.wikis} wiki(s), {stats.posts} post(s) in {stats.blogs} blog(s), "
+            f"{stats.topics} topic(s) in {stats.forums} forum(s), "
+            f"{stats.assets_written} attachment(s) → {args.output}"
+        )
     if stats.assets_missing:
         print(f"  {stats.assets_missing} referenced asset(s) not captured (shown as visible gaps).")
     return 0
@@ -1706,7 +1730,9 @@ def probe_main(argv: Sequence[str] | None = None) -> int:
         description="Ask a live deployment a question that cannot be answered offline.",
     )
     parser.add_argument(
-        "question", choices=["files-since", "search-reach"], help="which question to ask"
+        "question",
+        choices=["files-since", "search-reach", "proxy"],
+        help="which question to ask",
     )
     parser.add_argument(
         "--community",
@@ -1765,6 +1791,30 @@ def probe_main(argv: Sequence[str] | None = None) -> int:
         return 2
 
     import os  # noqa: PLC0415
+
+    if args.question == "proxy":
+        # No client, no request, no credentials: the question is what a
+        # request WOULD go through, and the answer is the chain of reasons.
+        # Two URLs, because the two cases that get reported are "the
+        # deployment is unreachable" and "my own console is being proxied".
+        from connections_export.http.proxy import (  # noqa: PLC0415
+            explain,
+            pac_configured,
+            resolve_proxy,
+        )
+
+        deployment = config.base_url or "https://<no base URL configured>"
+        pac = pac_configured()
+        print("connections-export probe proxy")
+        print(f"  PAC / auto-detect: {pac or 'none configured, or not Windows'}")
+        for url in (deployment, "http://127.0.0.1:8000/"):
+            decision = resolve_proxy(url, explicit=config.proxy, env=os.environ)
+            print(f"  {explain(decision)}")
+        print(
+            "  precedence: --proxy / config `proxy`, then HTTPS_PROXY & NO_PROXY, then the "
+            "PAC script, then the system proxy setting; loopback is always direct."
+        )
+        return 0
 
     try:
         client = _build_default_client(config, env=os.environ)

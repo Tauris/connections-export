@@ -16,6 +16,7 @@ from email.utils import parsedate_to_datetime
 
 import httpx
 
+from connections_export.http.proxy import ProxyDecision, httpx_client_kwargs
 from connections_export.http.results import FailureKind, Fetched, FetchFailure, FetchResult
 
 
@@ -68,6 +69,7 @@ class HttpClient:
         timeout: float | None = 30.0,
         stop_event: threading.Event | None = None,
         retry_callback: Callable[[float], None] | None = None,
+        proxy: ProxyDecision | None = None,
     ) -> None:
         self._retry_policy = retry_policy or RetryPolicy()
         self._min_interval = min_interval
@@ -76,7 +78,15 @@ class HttpClient:
         self._last_request_start: float | None = None
         self._stop_event = stop_event
         self._retry_callback = retry_callback
-        self._client = httpx.Client(transport=transport, timeout=timeout)
+        # `proxy` is a decision already made (`http.proxy.resolve_proxy`),
+        # not a URL: it carries where it came from, and "direct" in it means
+        # direct even with HTTPS_PROXY in the environment. None keeps httpx's
+        # own behaviour, which reads the environment and nothing else.
+        self._client = httpx.Client(
+            transport=transport,
+            timeout=timeout,
+            **(httpx_client_kwargs(proxy) if proxy is not None and transport is None else {}),
+        )
 
     def set_stop_event(self, stop_event: threading.Event | None) -> None:
         """Attach a cooperative stop signal for long-running crawls."""
@@ -155,6 +165,21 @@ class HttpClient:
                 kind = FailureKind.transport
                 error = str(exc) or exc.__class__.__name__
 
+            if response is not None and response.status_code == 407:
+                # The proxy, not the deployment, refused -- and it wants
+                # credentials this tool cannot supply (NTLM or Negotiate to a
+                # proxy is not something httpx does). Named as such, with the
+                # fix that is also the right one organisationally.
+                return FetchFailure(
+                    url=url,
+                    method=method,
+                    kind=FailureKind.http_error,
+                    error=(
+                        "407 from the proxy: it requires authentication this tool cannot "
+                        "supply. Ask for the deployment's host to be added to the proxy "
+                        "bypass list, or run with --proxy direct if it is reachable without one."
+                    ),
+                )
             if response is not None:
                 exhausted = attempt >= policy.max_attempts
                 if response.status_code not in policy.retry_statuses or exhausted:

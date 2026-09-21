@@ -133,6 +133,12 @@ class Config(BaseModel):
     #: contributor), each kept entity with its full chain. The raw archive stays
     #: complete -- only the model is filtered. None = no filter.
     filter_author: str | None = None
+    #: How to reach the deployment: a proxy URL, or `direct` to connect
+    #: without one whatever the machine is configured with. Unset, the
+    #: decision is made the way a browser makes it -- environment, then the
+    #: system's PAC script or auto-detection, then its static proxy setting
+    #: (`http.proxy`). `connections-export probe proxy` shows the result.
+    proxy: str | None = None
 
     @field_validator("min_interval")
     @classmethod
@@ -250,6 +256,7 @@ _ENV_FIELDS: dict[str, str] = {
     "output_dir": "CONNECTIONS_EXPORT_OUTPUT_DIR",
     "fetch": "CONNECTIONS_EXPORT_FETCH",
     "into": "CONNECTIONS_EXPORT_INTO",
+    "proxy": "CONNECTIONS_EXPORT_PROXY",
     "since_override": "CONNECTIONS_EXPORT_SINCE",
     "versions": "CONNECTIONS_EXPORT_VERSIONS",
 }

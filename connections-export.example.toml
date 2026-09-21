@@ -32,6 +32,14 @@ hcl_hosts = ["connections.example.corp", "files.example.corp"]
 # way, and a slower export is one nobody has to notice.
 min_interval = 1
 
+# How to reach the deployment. Leave unset and the tool decides the way a
+# browser does: HTTPS_PROXY/NO_PROXY from the environment, then the system's
+# PAC script or auto-detection (Windows), then its proxy setting. Set a proxy
+# URL to use one regardless, or "direct" to use none. `connections-export
+# probe proxy` prints what would be used and where the answer came from.
+# Loopback (the console itself) never goes through a proxy.
+# proxy = "direct"
+
 # Feed page size sent as `ps` on every paginated feed request (wikis,
 # comments, versions, attachments). 500 is the documented Wikis max.
 page_size = 500

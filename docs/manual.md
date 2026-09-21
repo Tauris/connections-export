@@ -10,6 +10,7 @@
   <a href="#man-communities">Several communities in one archive</a>
   <a href="#man-update">Adding to an archive later</a>
   <a href="#man-pacing">Pacing, and running overnight</a>
+  <a href="#man-proxy">Proxies</a>
   <a href="#man-cli">The command line</a>
   <a href="#man-style">Changing how the PDF looks</a>
   <a href="#man-marks">The running header and footer</a>
@@ -170,7 +171,7 @@ pip install 'connections-export[obsidian]'
 connections-export ingest --format obsidian --archive PATH/TO/ARCHIVE --output PATH/TO/VAULT
 ```
 
-`--archive` is an archive directory (the one holding `manifest.jsonl` and `blobs/`) or a `.zip` of one; `--package` takes a package written by `connections-export package` instead. Either flag accepts either kind — the directory says what it is — and `--author` narrows the vault to one person's content. Nothing is read from or sent to the source deployment during ingest — it only ever touches what is on disk.
+`--format jekyll` writes a Jekyll site fragment instead — dated files under `_posts/`, images under `assets/images/imported/` — ready to drop into a GitHub Pages site whose `_config.yml` and layouts you own. `--archive` is an archive directory (the one holding `manifest.jsonl` and `blobs/`) or a `.zip` of one; `--package` takes a package written by `connections-export package` instead. Either flag accepts either kind — the directory says what it is — and `--author` narrows the vault to one person's content. Nothing is read from or sent to the source deployment during ingest — it only ever touches what is on disk.
 
 ### <a id="man-export-new"></a>Building a new exporter
 
@@ -329,6 +330,16 @@ For anything large, **3 seconds overnight** is the kinder choice. It is the same
 
 The pacing is for the export. Working out what a community holds — the dozen or so reads behind the component list on Select & Tailor — is not paced, and is made through one signed-in session rather than one per read. While it runs the console says which phase it is in and how many requests it has made, and it gives up only after **two minutes of silence**, not two minutes of work: a slow deployment that is still answering is still answering.
 
+## <a id="man-proxy"></a>Proxies
+
+The tool reaches the deployment the way your browser does. Left alone, it decides per address, most explicit first: a proxy named on the command (`--proxy URL`, or `--proxy direct` for none) or in the configuration; then `HTTPS_PROXY` and `NO_PROXY` from the environment, for machines that already set them; then — on Windows — the system’s PAC script or automatic detection, evaluated for that address by the same engine the browser uses; then the system’s proxy setting and its bypass list; then a direct connection.
+
+One rule sits above all of those: **the console itself is never reached through a proxy.** Requests to `localhost` or `127.0.0.1` go direct whatever any script says, because a PAC script that sends them to a proxy exists, and a proxy that refuses them is right to.
+
+When a proxy demands its own sign-in, the tool cannot supply it — that is a limit, and it says so rather than retrying. The fix is the one a network team would give anyway: have the deployment’s host added to the proxy bypass list. A deployment on the local network usually is already.
+
+`connections-export probe proxy` prints the decision for the deployment and for the console, each with the step it came from. A report that begins “proxy issues” becomes a fact with that one paste.
+
 ## <a id="man-cli"></a>The command line
 
 Everything this console does, it does by calling the same code a command can call directly. That matters when nobody is sitting in front of it: a capture that runs overnight from a scheduled task, a PDF rebuilt after a stylesheet change, an archive opened on a machine with no browser to hand.
@@ -341,11 +352,11 @@ Run `connections-export` with no arguments and you get this console, in a browse
 | `serve` | Start this console. `--open` opens a browser at it. |
 | `open` | Open an existing archive or package to read and export — no capture, so no deployment needed. |
 | `pdf` | Render an archive or package to PDF. |
-| `ingest` | Reconstruct a capture into another tool. Today that means an Obsidian vault. |
+| `ingest` | Reconstruct a capture into another tool: an Obsidian vault, or a Jekyll site fragment. |
 | `package` | Write a capture’s portable interchange package, for an ingester of your own. |
 | `style` | Show or dump the PDF stylesheet, and list every setting in it. |
 | `licenses` | What is inside this build and under what terms, with the licence texts. |
-| `probe` | Ask a live deployment a question that cannot be answered without one. |
+| `probe` | Ask a live deployment a question that cannot be answered without one — or, with `proxy`, what a request would go through and why. |
 | `compare-author` | Compare what an author filter keeps against what the deployment’s own search returns. |
 
 ### <a id="man-cli-connection"></a>Saying which deployment, and how to sign in
@@ -369,6 +380,7 @@ The commands that talk to a deployment share these. All four have a configured d
 | `--component` KIND | Capture only these parts of a community. Repeatable; without it you get all of them. |
 | `--author` | Keep only what this person wrote or took part in. |
 | `--search-userid` | A user id the deployment’s Search knows. With `--author` and a community URL, the community’s forums are chosen by asking Search which threads this person is in, rather than reading every topic and reply to find out. See [Capturing one person’s share of a community](#man-one-person). |
+| `--proxy` | A proxy URL, or `direct`. Unset, decided the way a browser decides — see [Proxies](#man-proxy). |
 | `--delay` | Seconds between requests. See [Pacing](#man-pacing) — 3 overnight is the kinder choice. |
 | `--max-entries` | Stop after this many items. For a look before committing to the whole thing. |
 | `--into` ARCHIVE | Add to an existing archive instead of starting one. This is what makes the run an [update](#man-update), and the cutoff comes from that archive’s own record of when it last ran. |

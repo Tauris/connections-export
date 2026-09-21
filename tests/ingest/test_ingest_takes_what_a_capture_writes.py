@@ -126,7 +126,11 @@ def test_forum_topics_become_notes_with_their_reply_tree(capture, tmp_path):
     assert stats.forums == len(model.forums)
     assert stats.topics == sum(len(f.topics) for f in model.forums)
     threaded = next(t for f in model.forums for t in f.topics.values() if t.replies and t.reply_ids)
-    notes = [n for n in (tmp_path / "vault").rglob("*.md") if "kind: topic" in n.read_text()]
+    notes = [
+        n
+        for n in (tmp_path / "vault").rglob("*.md")
+        if "kind: topic" in n.read_text(encoding="utf-8")
+    ]
     note = next(n for n in notes if f"# {threaded.title}" in n.read_text(encoding="utf-8"))
     body = note.read_text(encoding="utf-8")
     assert "## Replies" in body

@@ -247,6 +247,9 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
+jekyll = [
+    { name = "markdownify" },
+]
 obsidian = [
     { name = "markdownify" },
 ]
@@ -269,6 +272,7 @@ requires-dist = [
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "lxml", specifier = ">=6.1.1" },
     { name = "markdown", specifier = ">=3.7" },
+    { name = "markdownify", marker = "extra == 'jekyll'", specifier = ">=0.13" },
     { name = "markdownify", marker = "extra == 'obsidian'", specifier = ">=0.13" },
     { name = "playwright", specifier = ">=1.61.0" },
     { name = "pydantic", specifier = ">=2.13" },
@@ -277,7 +281,7 @@ requires-dist = [
     { name = "requests-negotiate-sspi", marker = "sys_platform == 'win32' and extra == 'sspi'", specifier = ">=0.5.2" },
     { name = "uvicorn", specifier = ">=0.51.0" },
 ]
-provides-extras = ["sspi", "obsidian"]
+provides-extras = ["sspi", "obsidian", "jekyll"]
 
 [package.metadata.requires-dev]
 dev = [

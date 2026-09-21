@@ -68,6 +68,10 @@ sspi = [
 obsidian = [
     "markdownify>=0.13",
 ]
+# A conventional Jekyll site fragment (`connections-export ingest --format jekyll`).
+jekyll = [
+    "markdownify>=0.13",
+]
 
 [dependency-groups]
 dev = [
