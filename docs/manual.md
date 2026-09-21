@@ -332,13 +332,26 @@ The pacing is for the export. Working out what a community holds — the dozen o
 
 ## <a id="man-proxy"></a>Proxies
 
-The tool reaches the deployment the way your browser does. Left alone, it decides per address, most explicit first: a proxy named on the command (`--proxy URL`, or `--proxy direct` for none) or in the configuration; then `HTTPS_PROXY` and `NO_PROXY` from the environment, for machines that already set them; then — on Windows — the system’s PAC script or automatic detection, evaluated for that address by the same engine the browser uses; then the system’s proxy setting and its bypass list; then a direct connection.
+The tool reaches the deployment the way your browser does, and it never guesses. It decides **per address**, in a fixed order of authority, and it can always be told explicitly. It does **not** assume a proxy is unnecessary, and it does **not** assume one is required — it reads your organization’s own configuration and does what that says.
 
-One rule sits above all of those: **the console itself is never reached through a proxy.** Requests to `localhost` or `127.0.0.1` go direct whatever any script says, because a PAC script that sends them to a proxy exists, and a proxy that refuses them is right to.
+**The order of authority.** Whichever of these first has an answer for the address wins:
 
-When a proxy demands its own sign-in, the tool cannot supply it — that is a limit, and it says so rather than retrying. The fix is the one a network team would give anyway: have the deployment’s host added to the proxy bypass list. A deployment on the local network usually is already.
+1. **What you told it** — `--proxy <url>` (or `--proxy direct` for no proxy) on the command, or `proxy = "…"` in `connections-export.toml`. This always wins; it is how you settle any case the automatic steps get wrong.
+2. **On Windows, your system’s proxy policy** — the **PAC script** or automatic detection (WPAD), evaluated *for that specific address* by the same Windows engine (WinHTTP) your browser uses, and then the static proxy setting from Internet Options with its bypass list.
+3. **The environment** — `HTTPS_PROXY` / `HTTP_PROXY`, honouring `NO_PROXY`.
+4. A **direct** connection, when nothing above has anything to say.
 
-`connections-export probe proxy` prints the decision for the deployment and for the console, each with the step it came from. A report that begins “proxy issues” becomes a fact with that one paste.
+**Why the PAC comes before the environment on Windows.** A PAC script is your organization deciding, address by address, what needs a proxy and what does not — an internal server DIRECT, a cloud service through the proxy, whatever your network actually is. A browser obeys it and ignores proxy environment variables entirely. This tool does the same, because a single `HTTPS_PROXY` variable is a blunt instrument: it applies to *everything* unless a matching `NO_PROXY` carves out the exceptions, and a machine that has one set globally (for general web access) will otherwise send even an internal deployment to a proxy that cannot reach it. Letting the PAC lead means the right thing happens without you having to curate `NO_PROXY`. On systems with no PAC (Linux, or Windows without one) the environment leads, as those conventions expect.
+
+**When it cannot tell.** If a PAC script fails or times out, the tool does **not** quietly assume “no proxy needed” — a host may genuinely need one. It connects directly *and says so*, and if that direct connection then fails, the error names the possibility that a proxy is required and points you at `--proxy`. Uncertainty is surfaced, never hidden behind a silent guess.
+
+**The one unconditional rule** is about the tool talking to *itself*, not to your deployment: requests to `localhost` / `127.0.0.1` — the local console — always go direct, whatever any script says. A PAC that routes loopback to a proxy exists, and a proxy that refuses it is behaving correctly, so the console’s own traffic is never offered to one.
+
+**One decision, every connection.** The proxy the tool settles on governs *all* of its outbound traffic to the deployment — the crawl, the metadata lookups, and the Windows sign-in handshake alike. (Earlier the sign-in step read proxy environment variables on its own and could disagree with the rest; it no longer does.) Your corporate TLS certificate bundle (`REQUESTS_CA_BUNDLE` / `SSL_CERT_FILE`) is still honoured throughout.
+
+**Proxy sign-in.** If a proxy demands its *own* credentials (a 407), the tool cannot supply them and says so plainly rather than retrying. The fix is the one a network team would give anyway — have the deployment’s host added to the proxy bypass list; a deployment on the local network usually is already.
+
+**Seeing the decision.** `connections-export probe proxy` prints, for the deployment and for the console, exactly what a request would go through and which step decided it — including “undetermined” when a PAC could not be evaluated. A report that begins “proxy issues” becomes a fact with that one paste. Every run also logs its proxy decision when it is anything but a plain direct connection.
 
 ## <a id="man-cli"></a>The command line
 

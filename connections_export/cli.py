@@ -566,13 +566,21 @@ def _discover_community(config: Config, client, community_uuid: str) -> dict:
             response = client.get(url)
         except Exception:  # noqa: BLE001 - a failed probe is "not found", not fatal
             return None
+        # `client` is the tool's HttpClient, whose reply is a `Fetched` with
+        # `.status` -- NOT a raw httpx response with `.status_code`. Reading
+        # the wrong name made `getattr(..., None)` return None for every feed,
+        # so every feed looked unreadable and discovery reported "no wiki,
+        # blog or forum" for every community over a perfectly good connection.
+        # The console never hit this because its lookup reads `.status`.
+        status = getattr(response, "status", None)
         content = getattr(response, "content", None)
-        status = getattr(response, "status_code", None)
         return content if status is not None and status < 400 else None
 
     def redirect_location(url: str) -> str | None:
         try:
-            return client.get(url).headers.get("location", "")
+            response = client.get(url)
+            headers = getattr(response, "headers", None) or {}
+            return headers.get("location", "")
         except Exception:  # noqa: BLE001
             return None
 
@@ -1751,19 +1759,66 @@ def probe_main(argv: Sequence[str] | None = None) -> int:
     )
     parser.add_argument("--base-url", default=None, help="deployment root (default: configured)")
     parser.add_argument("--auth", default=None, help="auth mode (default: configured)")
+    parser.add_argument(
+        "--proxy", default=None, help="proxy: a proxy URL, or `direct` (default: decided)"
+    )
     args = parser.parse_args(list(argv or []))
 
     try:
         config = load_config(
             {
                 key: value
-                for key, value in (("base_url", args.base_url), ("auth_mode", args.auth))
+                for key, value in (
+                    ("base_url", args.base_url),
+                    ("auth_mode", args.auth),
+                    ("proxy", args.proxy),
+                )
                 if value
             }
         )
     except ConfigError as exc:
         print(f"connections-export probe: {exc}", file=sys.stderr)
         return 2
+    if args.question == "proxy":
+        # Answered first, and without a deployment being configured: the
+        # question is what THIS MACHINE does, and the address is only an
+        # example to ask about. Every line is flushed as it is made, so a
+        # PAC evaluation that takes its time is visibly taking its time
+        # rather than a command that printed nothing.
+        import os  # noqa: PLC0415
+
+        from connections_export.http.proxy import (  # noqa: PLC0415
+            PAC_TIMEOUT_SECONDS,
+            explain,
+            pac_configured,
+            resolve_proxy,
+        )
+
+        deployment = config.base_url or "https://connections.example.com/"
+        print("connections-export probe proxy", flush=True)
+        print(f"  platform: {sys.platform}", flush=True)
+        print(
+            f"  PAC / auto-detect: {pac_configured() or 'none configured, or not Windows'}",
+            flush=True,
+        )
+        if not config.base_url:
+            print(
+                f"  (no deployment configured; asking about {deployment} as an example -- "
+                "pass --base-url for the real one)",
+                flush=True,
+            )
+        for url in (deployment, "http://127.0.0.1:8000/"):
+            print(f"  asking about {url} ...", flush=True)
+            decision = resolve_proxy(url, explicit=config.proxy, env=os.environ)
+            print(f"  {explain(decision)}", flush=True)
+        print(
+            "  order of authority: --proxy / config `proxy`; then (Windows) the PAC "
+            f"script up to {PAC_TIMEOUT_SECONDS:.0f} s and the system proxy setting; then "
+            "HTTPS_PROXY & NO_PROXY; then direct. Loopback is always direct; an "
+            "undetermined PAC is surfaced, not assumed direct.",
+            flush=True,
+        )
+        return 0
     if not config.base_url:
         print(
             "connections-export probe: no deployment configured. Pass --base-url, or set one in "
@@ -1791,30 +1846,6 @@ def probe_main(argv: Sequence[str] | None = None) -> int:
         return 2
 
     import os  # noqa: PLC0415
-
-    if args.question == "proxy":
-        # No client, no request, no credentials: the question is what a
-        # request WOULD go through, and the answer is the chain of reasons.
-        # Two URLs, because the two cases that get reported are "the
-        # deployment is unreachable" and "my own console is being proxied".
-        from connections_export.http.proxy import (  # noqa: PLC0415
-            explain,
-            pac_configured,
-            resolve_proxy,
-        )
-
-        deployment = config.base_url or "https://<no base URL configured>"
-        pac = pac_configured()
-        print("connections-export probe proxy")
-        print(f"  PAC / auto-detect: {pac or 'none configured, or not Windows'}")
-        for url in (deployment, "http://127.0.0.1:8000/"):
-            decision = resolve_proxy(url, explicit=config.proxy, env=os.environ)
-            print(f"  {explain(decision)}")
-        print(
-            "  precedence: --proxy / config `proxy`, then HTTPS_PROXY & NO_PROXY, then the "
-            "PAC script, then the system proxy setting; loopback is always direct."
-        )
-        return 0
 
     try:
         client = _build_default_client(config, env=os.environ)

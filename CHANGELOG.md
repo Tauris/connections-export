@@ -5,19 +5,67 @@ Notable changes to `connections-export`, newest first. Versions follow
 the archive format may still change between minor versions — the format's own
 version is recorded inside every archive.
 
+## 0.1.6 — 2026-09-21
+
+### Capturing and exporting a community
+
+- **Community capture from the command line finds its components.**
+  `connections-export crawl <community-url>` reported "no wiki, blog or forum"
+  for every community, over a perfectly authenticated connection: the
+  discovery read the wrong field of the tool's own response and saw every feed
+  as unreadable. The console was unaffected; only the CLI path had never been
+  exercised.
+- **Images and attachments export from an archive, not only a package.**
+  `ingest --archive` wrote no image or attachment files — every one counted as
+  "not captured" — because the archive path required a bare blob digest where
+  the model carries the `sha256:`-prefixed form. The Reader and
+  `ingest --package` were fine; only `--archive` went through the strict
+  lookup, which nothing had tested with a present file.
+- **A community's Files library travels to the vault or site.** Each file's
+  bytes are copied out, a body link to a file resolves to that copy rather than
+  the dead deployment URL — the referenced case especially — and a `Files.md` /
+  `files.md` lists every document, an uncaptured one shown as a visible gap.
+  Both the Obsidian and Jekyll exporters.
+
+### Proxies
+
+The proxy handling is now principled and non-assuming: it obeys your
+organization's configuration and your explicit choice, and never silently
+guesses in either direction.
+
+- **On Windows the PAC leads.** A request to the deployment is resolved the
+  way a browser resolves it: your PAC script or auto-detection (via WinHTTP)
+  decides per address, then the system proxy setting, and only then
+  `HTTPS_PROXY`/`NO_PROXY`. A blunt global `HTTP_PROXY` no longer overrides a
+  PAC that correctly returns DIRECT for an internal host — the case that made
+  an internal deployment look unreachable. `--proxy` / the `proxy` config key
+  still override everything, and a private address is never *assumed* direct: a
+  deployment may legitimately sit behind a proxy, and the PAC decides.
+- **The Windows PAC path actually runs now.** A pointer bug made every PAC
+  evaluation fail silently and fall back to direct; it is fixed, and the
+  evaluation is bounded so WPAD cannot hang a run.
+- **Uncertainty is surfaced, not assumed away.** A PAC that fails or times out
+  is reported and the connection is flagged, so a host that genuinely needs a
+  proxy is never mistaken for a dead server.
+- **One decision governs every connection**, including the Windows sign-in
+  handshake, which previously read proxy environment variables on its own and
+  could disagree with the crawl. Your corporate CA bundle is preserved.
+- `connections-export probe proxy` prints the whole chain — including
+  "undetermined" — and every run logs its proxy decision. See the manual's
+  Proxies section.
+
 ## 0.1.5 — 2026-09-21
 
 ### Proxies, the way the browser does them
 
 Reports of "proxy issues" came from machines whose proxy is configured in
 Windows Internet Options — what Edge and Chrome use — and never as an
-environment variable, which was the only place the tool looked.
+environment variable, which was the only place the tool looked. (0.1.6 revises
+this further; see above.)
 
-- The tool now decides the way a browser decides: `--proxy` or the `proxy`
-  configuration key; then `HTTPS_PROXY` and `NO_PROXY`; then, on Windows, the
-  system's PAC script or automatic detection, evaluated for the deployment's
-  address by the same engine the browser uses; then the system proxy setting
-  and its bypass list; then direct.
+- The tool decides the way a browser decides: `--proxy` or the `proxy`
+  configuration key; then the environment; then, on Windows, the system's PAC
+  or automatic detection and the system proxy setting; then direct.
 - **The console itself is never reached through a proxy.** A PAC script that
   sends `127.0.0.1` to a proxy exists, and a proxy that refuses it is right to.
 - New `connections-export probe proxy` prints what a request to the deployment
@@ -26,9 +74,6 @@ environment variable, which was the only place the tool looked.
   rather than a retry that looks like a deployment refusing.
 
 ### Exporting to Obsidian
-
-The first report from a user: "the Obsidian export did not work, some json
-file was missing." They were right, and it was not their mistake.
 
 - `ingest` takes the **archive** a capture writes — the directory the console
   lists under Archives, or a `.zip` of one — as readily as a package. It

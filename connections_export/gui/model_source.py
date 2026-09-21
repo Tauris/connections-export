@@ -221,14 +221,22 @@ class ModelSource:
         and genuinely absent blobs are indistinguishable to a caller,
         both "not found" (an absent or malformed hash is
         rejected without serving arbitrary files)."""
-        if not _HEX64.fullmatch(blob_hash):
+        # Accept the model's own `"sha256:<hex>"` form as well as a bare hex
+        # digest. Every asset in the model carries the prefixed form, and the
+        # ingesters hand it here verbatim -- so requiring bare hex meant
+        # `ingest --archive` read every image as absent and wrote none, while
+        # the Reader (its JS strips the prefix) and `ingest --package` (via
+        # `open_blob`, which strips it) both worked. Blobs are keyed on disk
+        # and in `_content_types` by the bare digest, so normalise once here.
+        digest = _digest_of(blob_hash)
+        if not _HEX64.fullmatch(digest):
             return None
         with self._lock:
             source = self._blob_source
-            content_type = self._content_types.get(blob_hash, _DEFAULT_CONTENT_TYPE)
+            content_type = self._content_types.get(digest, _DEFAULT_CONTENT_TYPE)
         if source is None:
             return None
-        data = source.read_blob(blob_hash)
+        data = source.read_blob(digest)
         if data is None:
             return None
         if content_type == _DEFAULT_CONTENT_TYPE:

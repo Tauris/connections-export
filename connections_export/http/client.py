@@ -82,6 +82,9 @@ class HttpClient:
         # not a URL: it carries where it came from, and "direct" in it means
         # direct even with HTTPS_PROXY in the environment. None keeps httpx's
         # own behaviour, which reads the environment and nothing else.
+        #: The proxy decision this client was built with, so the
+        #: `requests`-based auth handshake can obey the same one.
+        self.proxy_decision = proxy
         self._client = httpx.Client(
             transport=transport,
             timeout=timeout,

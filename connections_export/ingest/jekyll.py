@@ -27,12 +27,15 @@ from connections_export.ingest.obsidian import (
 _ASSET = "jekyll-asset:"
 _LINK = "jekyll-link:"
 _MISSING = "jekyll-missing:"
+_FILELINK = "jekyll-file:"  # a href pointing at a library file, by file id
 _SLUG = re.compile(r"[^a-z0-9]+")
 
 
 @dataclass
 class JekyllStats:
     posts: int = 0
+    libraries: int = 0
+    files: int = 0
     assets_written: int = 0
     assets_missing: int = 0
     notes: list[str] | None = None
@@ -107,6 +110,7 @@ def _rewrite_body(
     item: DerivedItem,
     store: _AssetStore,
     id_to_permalink: dict[str, str],
+    file_targets: dict[str, str] | None = None,
 ) -> str:
     from bs4 import BeautifulSoup  # noqa: PLC0415 - optional ingester dependency
 
@@ -132,11 +136,17 @@ def _rewrite_body(
             image["src"] = f"{_MISSING}{asset.original_href}"
             store._stats.assets_missing += 1
 
+    files = file_targets or {}
     links = {link.original_href: link for link in item.links}
     for anchor in soup.find_all("a"):
         link = links.get(anchor.get("href", ""))
-        if link and link.scope == "in_export" and link.target_page_id in id_to_permalink:
+        if not link or link.scope != "in_export":
+            continue
+        if link.target_page_id in id_to_permalink:
             anchor["href"] = f"{_LINK}{link.target_page_id}"
+        elif link.target_file_id and link.target_file_id in files:
+            # A body link to a community file, resolved to the copied file.
+            anchor["href"] = f"{_FILELINK}{link.target_file_id}"
 
     markdown = _md()(str(soup), heading_style="ATX", bullets="-")
     asset_pattern = re.escape(_ASSET) + r"([^)]+)"
@@ -158,7 +168,14 @@ def _rewrite_body(
         permalink = id_to_permalink.get(target, target)
         return f"[{text}]({{{{ '{permalink}' | relative_url }}}})"
 
-    return re.sub(r"\[([^\]]*)\]\(" + re.escape(_LINK) + r"([^)]+)\)", replace_link, markdown)
+    markdown = re.sub(r"\[([^\]]*)\]\(" + re.escape(_LINK) + r"([^)]+)\)", replace_link, markdown)
+
+    def replace_file(match: re.Match[str]) -> str:
+        text, fid = match.group(1), match.group(2)
+        name = files.get(fid, fid)
+        return f"[{text or name}]({{{{ '/assets/files/{name}' | relative_url }}}})"
+
+    return re.sub(r"\[([^\]]*)\]\(" + re.escape(_FILELINK) + r"([^)]+)\)", replace_file, markdown)
 
 
 def _frontmatter(item: DerivedItem, *, kind: str, date_value: str, tags: list[str]) -> str:
@@ -225,13 +242,64 @@ def _records(interchange: Interchange) -> list[tuple[str, DerivedItem]]:
     return records
 
 
+def _store_library_files(interchange: Interchange, store: _AssetStore) -> dict[str, str]:
+    """Copy every present library file into ``assets/files/`` and return
+    ``file_id -> stored name``; an uncaptured file is absent from the map and
+    shows as a gap in the files listing."""
+    targets: dict[str, str] = {}
+    for library in interchange.file_libraries:
+        for file_id, derived in library.files.items():
+            asset = derived.asset
+            if asset and asset.present and asset.blob_hash:
+                name = store.store(
+                    blob_hash=asset.blob_hash,
+                    preferred_name=derived.name or derived.title or file_id,
+                    content_type=derived.content_type,
+                )
+                if name:
+                    targets[file_id] = name
+    return targets
+
+
+def _write_files_index(
+    root: Path, interchange: Interchange, file_targets: dict[str, str], stats: JekyllStats
+) -> None:
+    """A ``files.md`` page listing every library and its documents -- each a
+    link to the copied file under ``assets/files/``, or a visible gap when its
+    bytes were not captured."""
+    if not interchange.file_libraries:
+        return
+    lines = ["---", "title: Files", "---", ""]
+    for library in interchange.file_libraries:
+        stats.libraries += 1
+        lines.append(f"## {library.title or library.id}")
+        lines.append("")
+        ordered = [library.files[i] for i in library.file_ids if i in library.files]
+        ordered += [f for i, f in library.files.items() if i not in library.file_ids]
+        for derived in ordered:
+            stats.files += 1
+            label = derived.name or derived.title or derived.id
+            stored = file_targets.get(derived.id)
+            if stored:
+                lines.append(f"- [{label}]({{{{ '/assets/files/{stored}' | relative_url }}}})")
+            else:
+                lines.append(f"- `[not captured: {label}]`")
+        lines.append("")
+    (root / "files.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
 def write_jekyll_site(
     interchange: Interchange, blob_reader: BlobReader, out_dir: Path | str
 ) -> JekyllStats:
     """Write a generic Jekyll site fragment under ``out_dir``."""
     root = Path(out_dir)
     posts_dir = root / "_posts"
-    store = _AssetStore(root / "assets" / "images" / "imported", blob_reader, JekyllStats())
+    stats = JekyllStats()
+    store = _AssetStore(root / "assets" / "images" / "imported", blob_reader, stats)
+    # Files get their own dir and share the stats. Built before the posts so a
+    # body link to a file resolves to the copied file, not the dead URL.
+    file_store = _AssetStore(root / "assets" / "files", blob_reader, stats)
+    file_targets = _store_library_files(interchange, file_store)
     records = _records(interchange)
     used_paths: set[str] = set()
     id_to_permalink: dict[str, str] = {}
@@ -257,14 +325,15 @@ def write_jekyll_site(
 
     posts_dir.mkdir(parents=True, exist_ok=True)
     for kind, item, path, date_value, tags in paths:
-        body = _rewrite_body(item, store, id_to_permalink).strip()
+        body = _rewrite_body(item, store, id_to_permalink, file_targets).strip()
         content = _frontmatter(item, kind=kind, date_value=date_value, tags=tags)
         content += body + "\n" if body else ""
         content += _attachments(item, store) + _comments(item)
         path.write_text(content.rstrip() + "\n", encoding="utf-8")
 
-    store._stats.posts = len(paths)
-    return store._stats
+    stats.posts = len(paths)
+    _write_files_index(root, interchange, file_targets, stats)
+    return stats
 
 
 def from_source(source, out_dir: Path | str) -> JekyllStats:

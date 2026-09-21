@@ -43,6 +43,31 @@ class AuthStrategy(Protocol):
     def prepare(self, client: "HttpClient") -> None: ...
 
 
+def _apply_proxy(session, client, env=None) -> None:
+    """Make a `requests` handshake session obey the SAME proxy decision the
+    crawl's client uses, instead of reading proxy env vars on its own.
+
+    `trust_env=False` stops requests picking up `HTTP_PROXY`/`HTTPS_PROXY`
+    (the shadowing that sent an internal-host handshake to a proxy). The
+    deployment's own CA bundle is preserved explicitly, since turning off
+    `trust_env` also drops `REQUESTS_CA_BUNDLE`/`SSL_CERT_FILE` -- a corporate
+    TLS-inspecting proxy relies on it.
+    """
+    import os as _os  # noqa: PLC0415
+
+    env = _os.environ if env is None else env
+    decision = getattr(client, "proxy_decision", None)
+    if decision is None:
+        return
+    from connections_export.http.proxy import requests_session_proxies  # noqa: PLC0415
+
+    session.trust_env = False
+    session.proxies = requests_session_proxies(decision)
+    ca = env.get("REQUESTS_CA_BUNDLE") or env.get("SSL_CERT_FILE")
+    if ca:
+        session.verify = ca
+
+
 @dataclass
 class BasicAuth:
     """Sets an `Authorization: Basic` header on the client's default
@@ -103,7 +128,8 @@ class SspiAuth:
         url = self.base_url.rstrip("/") + "/homepage/"
         session = requests.Session()
         session.auth = HttpNegotiateAuth()
-        response = session.get(url, allow_redirects=True, verify=True)
+        _apply_proxy(session, client)
+        response = session.get(url, allow_redirects=True)
         if not session.cookies:
             raise AuthError(
                 f"SspiAuth: SPNEGO handshake completed (HTTP {response.status_code}) "
@@ -153,7 +179,8 @@ class KerberosAuth:
             mutual_authentication=OPTIONAL,
             principal=self.principal,
         )
-        response = session.get(url, allow_redirects=True, verify=True)
+        _apply_proxy(session, client)
+        response = session.get(url, allow_redirects=True)
         if not session.cookies:
             raise AuthError(
                 f"KerberosAuth: SPNEGO handshake completed (HTTP {response.status_code}) "

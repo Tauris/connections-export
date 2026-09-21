@@ -42,6 +42,13 @@ from urllib.parse import urlsplit
 #: Hostnames that are this machine, whatever the proxy configuration says.
 _LOOPBACK_NAMES = frozenset({"localhost", "localhost.localdomain", "ip6-localhost"})
 
+#: A resolver returns this as its `server` to say "I could not determine
+#: the route" -- distinct from `None` server, which is a positive DIRECT
+#: answer. Uncertainty must not be read as "no proxy needed": a host may
+#: genuinely require one, so an undetermined result is surfaced, not
+#: silently treated as direct.
+UNDETERMINED = object()
+
 #: A resolver answers `(server, detail)` -- `server` None meaning direct --
 #: or `None` meaning "this source has no opinion", which lets the next one
 #: speak. Injected so the decision logic is testable without a registry, a
@@ -67,6 +74,12 @@ class ProxyDecision:
     @property
     def direct(self) -> bool:
         return self.server is None
+
+    @property
+    def undetermined(self) -> bool:
+        """The route could not be determined -- the connection will be tried
+        directly, but a failure may mean a proxy is required."""
+        return self.source == "undetermined"
 
 
 def is_loopback(url: str) -> bool:
@@ -267,12 +280,30 @@ def pac_configured() -> str | None:
 # --- Windows: WinHTTP through ctypes ----------------------------------------
 # Unexercised anywhere but Windows, by construction. Everything above it is
 # tested with stubs; this is the seam a real machine proves.
+#
+# The string fields are declared as raw pointers and read with `wstring_at`,
+# not as `LPWSTR`: an `LPWSTR` field hands back a Python `str` when read,
+# and the pointer that must be handed to `GlobalFree` is gone. Declared that
+# way, the free raised, the exception hid the values that had just been read,
+# and every evaluation ended in "pac failed; treating as direct" -- safe,
+# silent, and wrong.
 
 _WINHTTP_ACCESS_TYPE_NO_PROXY = 1
 _WINHTTP_AUTOPROXY_AUTO_DETECT = 0x00000001
 _WINHTTP_AUTOPROXY_CONFIG_URL = 0x00000002
 _WINHTTP_AUTO_DETECT_TYPE_DHCP = 0x00000001
 _WINHTTP_AUTO_DETECT_TYPE_DNS_A = 0x00000002
+
+#: How long a PAC evaluation may take before it is treated as no opinion.
+#: WPAD detection probes DHCP and DNS and can sit for a long time on a
+#: network that answers neither; the run must not sit with it.
+PAC_TIMEOUT_SECONDS = 10.0
+
+
+def _wstr(pointer) -> str | None:  # pragma: no cover - Windows only
+    import ctypes  # noqa: PLC0415
+
+    return ctypes.wstring_at(pointer) if pointer else None
 
 
 def _winhttp_ie_config():  # pragma: no cover - Windows only
@@ -284,30 +315,35 @@ def _winhttp_ie_config():  # pragma: no cover - Windows only
     class IEProxyConfig(ctypes.Structure):
         _fields_ = [
             ("fAutoDetect", wintypes.BOOL),
-            ("lpszAutoConfigUrl", wintypes.LPWSTR),
-            ("lpszProxy", wintypes.LPWSTR),
-            ("lpszProxyBypass", wintypes.LPWSTR),
+            ("lpszAutoConfigUrl", ctypes.c_void_p),
+            ("lpszProxy", ctypes.c_void_p),
+            ("lpszProxyBypass", ctypes.c_void_p),
         ]
 
-    winhttp = ctypes.windll.winhttp
+    winhttp = ctypes.WinDLL("winhttp", use_last_error=True)
+    winhttp.WinHttpGetIEProxyConfigForCurrentUser.restype = wintypes.BOOL
+    winhttp.WinHttpGetIEProxyConfigForCurrentUser.argtypes = [ctypes.POINTER(IEProxyConfig)]
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.GlobalFree.argtypes = [ctypes.c_void_p]
+    kernel32.GlobalFree.restype = ctypes.c_void_p
+
     config = IEProxyConfig()
     if not winhttp.WinHttpGetIEProxyConfigForCurrentUser(ctypes.byref(config)):
         return None
-    result = (
-        bool(config.fAutoDetect),
-        config.lpszAutoConfigUrl,
-        config.lpszProxy,
-        config.lpszProxyBypass,
-    )
-    kernel32 = ctypes.windll.kernel32
-    for field in ("lpszAutoConfigUrl", "lpszProxy", "lpszProxyBypass"):
-        pointer = getattr(config, field)
-        if pointer:
-            kernel32.GlobalFree(ctypes.cast(pointer, ctypes.c_void_p))
-    return result
+    try:
+        return (
+            bool(config.fAutoDetect),
+            _wstr(config.lpszAutoConfigUrl),
+            _wstr(config.lpszProxy),
+            _wstr(config.lpszProxyBypass),
+        )
+    finally:
+        for pointer in (config.lpszAutoConfigUrl, config.lpszProxy, config.lpszProxyBypass):
+            if pointer:
+                kernel32.GlobalFree(pointer)
 
 
-def _winhttp_proxy_for(url: str):  # pragma: no cover - Windows only
+def _winhttp_proxy_for_unbounded(url: str):  # pragma: no cover - Windows only
     """Ask WinHTTP what the current user's PAC/WPAD says for `url`."""
     import ctypes  # noqa: PLC0415
     from ctypes import wintypes  # noqa: PLC0415
@@ -332,11 +368,11 @@ def _winhttp_proxy_for(url: str):  # pragma: no cover - Windows only
     class ProxyInfo(ctypes.Structure):
         _fields_ = [
             ("dwAccessType", wintypes.DWORD),
-            ("lpszProxy", wintypes.LPWSTR),
-            ("lpszProxyBypass", wintypes.LPWSTR),
+            ("lpszProxy", ctypes.c_void_p),
+            ("lpszProxyBypass", ctypes.c_void_p),
         ]
 
-    winhttp = ctypes.windll.winhttp
+    winhttp = ctypes.WinDLL("winhttp", use_last_error=True)
     winhttp.WinHttpOpen.restype = ctypes.c_void_p
     winhttp.WinHttpOpen.argtypes = [
         wintypes.LPCWSTR,
@@ -353,12 +389,16 @@ def _winhttp_proxy_for(url: str):  # pragma: no cover - Windows only
         ctypes.POINTER(ProxyInfo),
     ]
     winhttp.WinHttpCloseHandle.argtypes = [ctypes.c_void_p]
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.GlobalFree.argtypes = [ctypes.c_void_p]
+    kernel32.GlobalFree.restype = ctypes.c_void_p
 
     session = winhttp.WinHttpOpen(
         "connections-export", _WINHTTP_ACCESS_TYPE_NO_PROXY, None, None, 0
     )
     if not session:
-        return None, "WinHTTP could not open a session; treating as direct"
+        return UNDETERMINED, "WinHTTP could not open a session"
+    where = f"the PAC script at {pac_url}" if pac_url else "automatic detection"
     options = AutoProxyOptions()
     if pac_url:
         options.dwFlags |= _WINHTTP_AUTOPROXY_CONFIG_URL
@@ -371,27 +411,79 @@ def _winhttp_proxy_for(url: str):  # pragma: no cover - Windows only
     try:
         ok = winhttp.WinHttpGetProxyForUrl(session, url, ctypes.byref(options), ctypes.byref(info))
         if not ok:
-            code = ctypes.GetLastError()
-            where = f"the PAC script at {pac_url}" if pac_url else "automatic detection"
-            return (
-                None,
-                f"{where} could not be evaluated (WinHTTP error {code}); treating as direct",
-            )
-        if info.dwAccessType == _WINHTTP_ACCESS_TYPE_NO_PROXY or not info.lpszProxy:
-            return None, ("the PAC script" if pac_url else "automatic detection") + " says DIRECT"
-        server = _first_server(info.lpszProxy)
-        source = "the PAC script" if pac_url else "automatic detection"
-        return server, f"{source} names {server}"
+            code = ctypes.get_last_error()
+            return UNDETERMINED, f"{where} could not be evaluated (WinHTTP error {code})"
+        proxy_list = _wstr(info.lpszProxy)
+        if info.dwAccessType == _WINHTTP_ACCESS_TYPE_NO_PROXY or not proxy_list:
+            return None, f"{where} says DIRECT"
+        server = _first_server(proxy_list)
+        return server, f"{where} names {server}"
     finally:
-        kernel32 = ctypes.windll.kernel32
-        for field in ("lpszProxy", "lpszProxyBypass"):
-            pointer = getattr(info, field)
+        for pointer in (info.lpszProxy, info.lpszProxyBypass):
             if pointer:
-                kernel32.GlobalFree(ctypes.cast(pointer, ctypes.c_void_p))
+                kernel32.GlobalFree(pointer)
         winhttp.WinHttpCloseHandle(session)
 
 
+def _winhttp_proxy_for(url: str, timeout: float = PAC_TIMEOUT_SECONDS):
+    """`_winhttp_proxy_for_unbounded`, with a deadline.
+
+    The call blocks and cannot be cancelled, so it runs on a thread the
+    caller stops waiting for. A run must not sit behind WPAD probing a
+    network that will never answer, and a probe must print something.
+    """
+    import threading  # noqa: PLC0415
+
+    box: dict = {}
+
+    def work() -> None:
+        try:
+            box["answer"] = _winhttp_proxy_for_unbounded(url)
+        except Exception as exc:  # noqa: BLE001 - reported below, never raised into a run
+            box["error"] = exc
+
+    worker = threading.Thread(target=work, daemon=True, name="pac-evaluation")
+    worker.start()
+    worker.join(timeout)
+    if worker.is_alive():
+        return None, (
+            f"the PAC evaluation had not answered after {timeout:.0f} s; treating as direct "
+            '(set proxy = "direct" or a proxy URL to skip it)'
+        )
+    if "error" in box:
+        exc = box["error"]
+        return None, f"the PAC evaluation failed ({type(exc).__name__}: {exc}); treating as direct"
+    return box.get("answer")
+
+
 # --- the decision ---------------------------------------------------------
+
+
+def default_chain(
+    explicit: str | None, env: Mapping[str, str] | None
+) -> list[tuple[str, Resolver]]:
+    """The resolver chain for this platform, most authoritative first.
+
+    An explicit `--proxy`/config setting always leads. After it, on Windows
+    the ORDER IS PAC, then the static system proxy, then the environment --
+    the browser's order, so the organisation's per-URL policy (which may say
+    DIRECT for an intranet host or a proxy for a cloud one) wins over a blunt
+    global `HTTP_PROXY` that cannot express "except this host". macOS puts its
+    system proxy ahead of the environment for the same reason. Elsewhere there
+    is no OS proxy policy to read, so the environment leads.
+    """
+    chain: list[tuple[str, Resolver]] = [("explicit", explicit_resolver(explicit))]
+    if sys.platform == "win32":
+        chain += [
+            ("pac", pac_resolver()),
+            ("system", system_resolver()),
+            ("environment", environment_resolver(env)),
+        ]
+    elif sys.platform == "darwin":
+        chain += [("system", system_resolver()), ("environment", environment_resolver(env))]
+    else:
+        chain += [("environment", environment_resolver(env))]
+    return chain
 
 
 def resolve_proxy(
@@ -403,32 +495,44 @@ def resolve_proxy(
 ) -> ProxyDecision:
     """Decide what a request to `url` goes through.
 
-    `resolvers` overrides the chain (for tests); the default is explicit,
-    environment, PAC, system. Loopback is decided before any of them.
+    `resolvers` overrides the chain (for tests); the default is
+    `default_chain`. Loopback is decided before any of them, and it is the
+    only unconditional direct: it is the tool talking to itself, never the
+    deployment.
+
+    A source that cannot determine the route (a PAC that failed or timed out)
+    does NOT stop the chain at direct -- another source may know, and if none
+    does the decision is `undetermined`, tried directly but flagged, because
+    "could not tell" must never be silently read as "no proxy needed".
     """
     if is_loopback(url):
         return ProxyDecision(url, None, "loopback", "this machine is never reached through a proxy")
-    chain = (
-        resolvers
-        if resolvers is not None
-        else [
-            ("explicit", explicit_resolver(explicit)),
-            ("environment", environment_resolver(env)),
-            ("pac", pac_resolver()),
-            ("system", system_resolver()),
-        ]
-    )
+    chain = resolvers if resolvers is not None else default_chain(explicit, env)
+    unsure: tuple[str, str] | None = None
     for source, resolver in chain:
         try:
             answer = resolver(url)
         except Exception as exc:  # noqa: BLE001 - a source that fails is reported, not fatal
-            return ProxyDecision(
-                url, None, source, f"{source} failed ({type(exc).__name__}); treating as direct"
-            )
+            if unsure is None:
+                unsure = (source, f"{source} failed ({type(exc).__name__})")
+            continue
         if answer is None:
             continue
         server, detail = answer
+        if server is UNDETERMINED:
+            if unsure is None:
+                unsure = (source, detail)
+            continue
         return ProxyDecision(url, server, source, detail)
+    if unsure is not None:
+        src, detail = unsure
+        return ProxyDecision(
+            url,
+            None,
+            "undetermined",
+            f"{detail} — connecting directly; if the deployment is unreachable a proxy may be "
+            "required (set --proxy <url>, or a `proxy` in the config)",
+        )
     return ProxyDecision(url, None, "default", "nothing configured; connecting directly")
 
 
@@ -469,6 +573,26 @@ def playwright_proxy_kwargs(decision: ProxyDecision) -> dict:
     if decision.direct:
         return {"args": ["--no-proxy-server"]}
     return {"proxy": {"server": decision.server, "bypass": "localhost,127.0.0.1,[::1],<-loopback>"}}
+
+
+def requests_session_proxies(decision: ProxyDecision) -> dict | None:
+    """`session.proxies` for the `requests`-based auth handshake, from the
+    same decision the crawl uses.
+
+    `requests` reads proxy env vars on its own, independently of anything the
+    tool decided -- which is why a global `HTTP_PROXY` sent the SPNEGO
+    handshake to a proxy that could not reach an internal host even when the
+    crawl was told to go direct. The caller sets `session.trust_env = False`
+    to stop that, then applies this:
+
+    - a proxy decision -> that proxy for http and https;
+    - direct/undetermined -> an empty mapping, i.e. no proxy;
+
+    so one decision governs the handshake and the crawl alike.
+    """
+    if decision.server:
+        return {"http": decision.server, "https": decision.server}
+    return {}
 
 
 def explain(decision: ProxyDecision) -> str:

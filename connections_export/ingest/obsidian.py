@@ -56,6 +56,7 @@ BlobReader = Callable[[str], bytes | None]
 _EMBED = "obsidian-embed:"  # sentinel img src, rewritten to ![[name]] after markdownify
 _LINK = "obsidian-link:"  # sentinel a href, rewritten to [[Title|text]]
 _MISSING = "obsidian-missing:"  # sentinel for a referenced-but-absent asset
+_FILELINK = "obsidian-file:"  # sentinel a href pointing at a library file, by file id
 
 _FORBIDDEN = re.compile(r'[/\\:*?"<>|#\^\[\]]')  # unsafe in a filename / an Obsidian link
 _CONTENT_EXT = {
@@ -75,6 +76,8 @@ class VaultStats:
     posts: int = 0
     forums: int = 0
     topics: int = 0
+    libraries: int = 0
+    files: int = 0
     assets_written: int = 0
     assets_missing: int = 0
     notes: list[str] = field(default_factory=list)
@@ -229,7 +232,12 @@ def _frontmatter(page: DerivedItem, *, kind: str | None = None) -> str:
     return "\n".join(lines)
 
 
-def _rewrite_body(page: DerivedItem, store: _AssetStore, id_to_title: dict[str, str]) -> str:
+def _rewrite_body(
+    page: DerivedItem,
+    store: _AssetStore,
+    id_to_title: dict[str, str],
+    file_targets: dict[str, str] | None = None,
+) -> str:
     """Rewrite the page body's `<img>`/`<a>` to sentinels (resolved after
     markdownify), copying present image blobs and mapping in-export links.
     Uses `markdownify`'s own BeautifulSoup so parsing matches the converter."""
@@ -258,18 +266,27 @@ def _rewrite_body(page: DerivedItem, store: _AssetStore, id_to_title: dict[str, 
             img["src"] = f"{_MISSING}{asset.original_href}"
             store.note_missing()
 
+    files = file_targets or {}
     link_by_href = {link.original_href: link for link in page.links}
     for a in soup.find_all("a"):
         link = link_by_href.get(a.get("href", ""))
-        if link and link.scope == "in_export" and link.target_page_id in id_to_title:
+        if not link or link.scope != "in_export":
+            continue  # hcl_deployment / external links keep their href (§7 step 5)
+        if link.target_page_id in id_to_title:
             a["href"] = f"{_LINK}{link.target_page_id}"
-        # hcl_deployment / external links keep their original href (§7 step 5)
+        elif link.target_file_id and link.target_file_id in files:
+            # A body link to a community file -- "especially referenced":
+            # it now points at the file this exporter wrote, not the dead
+            # deployment URL.
+            a["href"] = f"{_FILELINK}{link.target_file_id}"
 
     markdown = _md()(str(soup), heading_style="ATX", bullets="-")
-    return _apply_sentinels(markdown, id_to_title)
+    return _apply_sentinels(markdown, id_to_title, files)
 
 
-def _apply_sentinels(markdown: str, id_to_title: dict[str, str]) -> str:
+def _apply_sentinels(
+    markdown: str, id_to_title: dict[str, str], file_targets: dict[str, str] | None = None
+) -> str:
     # ![alt](obsidian-embed:NAME) -> ![[NAME]]
     markdown = re.sub(r"!\[[^\]]*\]\(" + re.escape(_EMBED) + r"([^)]+)\)", r"![[\1]]", markdown)
     # ![alt](obsidian-missing:HREF) -> a visible, non-silent gap
@@ -286,6 +303,16 @@ def _apply_sentinels(markdown: str, id_to_title: dict[str, str]) -> str:
 
     # [text](obsidian-link:ID) -> [[Title|text]]
     markdown = re.sub(r"\[([^\]]*)\]\(" + re.escape(_LINK) + r"([^)]+)\)", _link, markdown)
+
+    files = file_targets or {}
+
+    def _file(match: re.Match) -> str:
+        text, fid = match.group(1), match.group(2)
+        name = files.get(fid, fid)
+        return f"[[{name}|{text}]]" if text and text != name else f"[[{name}]]"
+
+    # [text](obsidian-file:ID) -> [[stored-file|text]] (Obsidian links a file by name)
+    markdown = re.sub(r"\[([^\]]*)\]\(" + re.escape(_FILELINK) + r"([^)]+)\)", _file, markdown)
     return markdown
 
 
@@ -346,7 +373,12 @@ def _versions_note(page: DerivedItem) -> str:
     return f"\n## History\n\n> {detail}\n"
 
 
-def _replies_md(topic: DerivedForumTopic, store: _AssetStore, id_to_title: dict[str, str]) -> str:
+def _replies_md(
+    topic: DerivedForumTopic,
+    store: _AssetStore,
+    id_to_title: dict[str, str],
+    file_targets: dict[str, str] | None = None,
+) -> str:
     """The reply tree beneath a topic, nested by `child_ids`.
 
     A reply is not a comment: it carries a body with assets and links of
@@ -368,7 +400,7 @@ def _replies_md(topic: DerivedForumTopic, store: _AssetStore, id_to_title: dict[
         answer = " · *answer*" if "answer" in (reply.flags or []) else ""
         lines.append(f"{'#' * min(3 + depth, 6)} {who}{when}{answer}")
         lines.append("")
-        body = _rewrite_body(reply, store, id_to_title).strip()
+        body = _rewrite_body(reply, store, id_to_title, file_targets).strip()
         lines.append(body if body else "*(no text)*")
         attachments = _attachments_md(reply, store)
         if attachments:
@@ -418,6 +450,53 @@ def _note_path(
     return directory / (_safe(page.title or page.label or page.id, page.id) + ".md")
 
 
+def _store_library_files(interchange: Interchange, store: _AssetStore) -> dict[str, str]:
+    """Write every present library file's bytes into the vault and return
+    `file_id -> stored name`, so body links to those files can resolve. A
+    file whose bytes were not captured is absent from the map and shows as a
+    gap in the Files index instead."""
+    targets: dict[str, str] = {}
+    for library in interchange.file_libraries:
+        for file_id, derived in library.files.items():
+            asset = derived.asset
+            if asset and asset.present and asset.blob_hash:
+                name = store.store(
+                    blob_hash=asset.blob_hash,
+                    preferred_name=derived.name or derived.title or file_id,
+                    content_type=derived.content_type,
+                )
+                if name:
+                    targets[file_id] = name
+    return targets
+
+
+def _write_files_index(
+    vault: Path, interchange: Interchange, file_targets: dict[str, str], stats: VaultStats
+) -> None:
+    """One `Files.md` listing every community library and its files -- each a
+    link to the copied file, or a visible gap when its bytes were not
+    captured. A referenced file is already linked from the body; this makes
+    every file browsable, referenced or not."""
+    if not interchange.file_libraries:
+        return
+    lines = ["# Files", ""]
+    for library in interchange.file_libraries:
+        stats.libraries += 1
+        lines.append(f"## {library.title or library.id}")
+        ordered = [library.files[i] for i in library.file_ids if i in library.files]
+        ordered += [f for i, f in library.files.items() if i not in library.file_ids]
+        for derived in ordered:
+            stats.files += 1
+            label = derived.name or derived.title or derived.id
+            stored = file_targets.get(derived.id)
+            if stored:
+                lines.append(f"- [[{stored}]]" + (f" — {label}" if label != stored else ""))
+            else:
+                lines.append(f"- `[not captured: {label}]`")
+        lines.append("")
+    (vault / "Files.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
 def write_obsidian_vault(
     interchange: Interchange, blob_reader: BlobReader, out_dir: Path | str
 ) -> VaultStats:
@@ -449,13 +528,17 @@ def write_obsidian_vault(
         }
     )
 
+    # Files first, so a body link to one resolves to the copied file rather
+    # than the dead deployment URL when the pages are written below.
+    file_targets = _store_library_files(interchange, store)
+
     for wiki in interchange.wikis:
         stats.wikis += 1
         wiki_dir = _safe(wiki.title or wiki.label, wiki.id)
         for page in wiki.pages.values():
             note = _note_path(vault, wiki_dir, page, wiki.pages)
             note.parent.mkdir(parents=True, exist_ok=True)
-            body = _rewrite_body(page, store, id_to_title)
+            body = _rewrite_body(page, store, id_to_title, file_targets)
             heading = f"# {page.title or page.label or page.id}\n\n"
             note.write_text(
                 _frontmatter(page)
@@ -478,7 +561,7 @@ def write_obsidian_vault(
         ordered += [post for pid, post in blog.posts.items() if pid not in blog.post_ids]
         for post in ordered:
             note = blog_dir / (_safe(post.title or post.id, post.id) + ".md")
-            body = _rewrite_body(post, store, id_to_title)
+            body = _rewrite_body(post, store, id_to_title, file_targets)
             heading = f"# {post.title or post.id}\n\n"
             note.write_text(
                 _frontmatter(post, kind="post") + heading + body + _comments_md(post),
@@ -494,18 +577,19 @@ def write_obsidian_vault(
         ordered_topics += [t for tid, t in forum.topics.items() if tid not in forum.topic_ids]
         for topic in ordered_topics:
             note = forum_dir / (_safe(topic.title or topic.id, topic.id) + ".md")
-            body = _rewrite_body(topic, store, id_to_title)
+            body = _rewrite_body(topic, store, id_to_title, file_targets)
             heading = f"# {topic.title or topic.id}\n\n"
             note.write_text(
                 _frontmatter(topic, kind="topic")
                 + heading
                 + body
                 + _attachments_md(topic, store)
-                + _replies_md(topic, store, id_to_title),
+                + _replies_md(topic, store, id_to_title, file_targets),
                 encoding="utf-8",
             )
             stats.topics += 1
 
+    _write_files_index(vault, interchange, file_targets, stats)
     _write_readme(vault, interchange, stats)
     return stats
 
@@ -519,7 +603,8 @@ def _write_readme(vault: Path, interchange: Interchange, stats: VaultStats) -> N
         + f": {stats.wikis} wiki(s), {stats.pages} page(s); "
         + f"{stats.blogs} blog(s), {stats.posts} post(s); "
         + f"{stats.forums} forum(s), {stats.topics} topic(s); "
-        + f"{stats.assets_written} attachment(s) copied.",
+        + f"{stats.libraries} file librar(ies), {stats.files} file(s); "
+        + f"{stats.assets_written} attachment(s)/file(s) copied.",
         "",
     ]
     if interchange.wikis:
@@ -549,6 +634,8 @@ def _write_readme(vault: Path, interchange: Interchange, stats: VaultStats) -> N
                 if topic:
                     lines.append(f"- [[{topic.title or tid}]]")
             lines.append("")
+    if interchange.file_libraries:
+        lines += ["## Files", "", "- [[Files]] — every library and its documents", ""]
     if stats.assets_missing:
         lines.append(
             f"> {stats.assets_missing} referenced asset(s) were not captured in the "

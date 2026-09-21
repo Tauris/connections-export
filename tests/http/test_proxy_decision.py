@@ -243,3 +243,146 @@ def test_explain_reads_as_one_line():
     )
     line = px.explain(decision)
     assert DEPLOYMENT in line and "via http://proxy.example.com:8080" in line and "[pac]" in line
+
+
+# --- the probe --------------------------------------------------------------------
+
+
+def test_probe_proxy_answers_without_a_configured_deployment(capsys, monkeypatch):
+    """ "probe proxy did not return anything": with no deployment configured
+    it exited 2 with one line on stderr. The question is what this machine
+    does; an address to ask about is an example, not a precondition."""
+    from connections_export import cli
+
+    monkeypatch.delenv("CONNECTIONS_EXPORT_BASE_URL", raising=False)
+    code = cli.probe_main(["proxy"])
+
+    out = capsys.readouterr().out
+    assert code == 0
+    assert "probe proxy" in out and "127.0.0.1" in out and "order of authority" in out
+
+
+def test_probe_proxy_honours_an_explicit_proxy(capsys):
+    from connections_export import cli
+
+    code = cli.probe_main(["proxy", "--base-url", DEPLOYMENT, "--proxy", "direct"])
+
+    assert code == 0
+    assert "told to connect directly [explicit]" in capsys.readouterr().out
+
+
+def test_a_slow_pac_evaluation_does_not_hold_the_caller(monkeypatch):
+    """WPAD can probe DHCP and DNS for a long time on a network that answers
+    neither. The run -- and the probe -- must not sit behind it."""
+    import time
+
+    def never_answers(url):
+        time.sleep(5)
+        return "http://late.example.com:1", "too late"
+
+    monkeypatch.setattr(px, "_winhttp_proxy_for_unbounded", never_answers)
+    started = time.monotonic()
+    answer = px._winhttp_proxy_for(DEPLOYMENT, timeout=0.2)
+
+    assert time.monotonic() - started < 2
+    assert answer[0] is None and "had not answered" in answer[1]
+
+
+def test_a_pac_evaluation_that_raises_is_an_opinion_of_direct(monkeypatch):
+    def explodes(url):
+        raise OSError("winhttp missing")
+
+    monkeypatch.setattr(px, "_winhttp_proxy_for_unbounded", explodes)
+    answer = px._winhttp_proxy_for(DEPLOYMENT, timeout=1)
+
+    assert answer[0] is None and "OSError" in answer[1]
+
+
+# --- precedence per platform, and surfaced uncertainty ----------------------
+
+
+def test_windows_puts_pac_and_system_before_the_environment(monkeypatch):
+    """PAC-first on Windows: the org's per-URL policy wins over a blunt global
+    HTTP_PROXY that cannot say "except this internal host"."""
+    monkeypatch.setattr(px.sys, "platform", "win32")
+    order = [name for name, _ in px.default_chain(None, {})]
+    assert order == ["explicit", "pac", "system", "environment"]
+
+
+def test_non_windows_leads_with_the_environment(monkeypatch):
+    monkeypatch.setattr(px.sys, "platform", "linux")
+    assert [n for n, _ in px.default_chain(None, {})] == ["explicit", "environment"]
+
+
+def test_an_undetermined_pac_does_not_silently_become_direct():
+    """ "could not tell" must never read as "no proxy needed". It is surfaced,
+    tried directly, and flagged so a failure can point at a missing proxy."""
+    decision = px.resolve_proxy(
+        DEPLOYMENT,
+        resolvers=[
+            ("pac", lambda url: (px.UNDETERMINED, "the PAC script could not be evaluated")),
+            ("environment", _silent),
+        ],
+    )
+    assert decision.direct  # tried directly...
+    assert decision.undetermined  # ...but NOT presented as a confident direct
+    assert decision.source == "undetermined"
+    assert "a proxy may be required" in decision.detail
+    assert "could not be evaluated" in decision.detail
+
+
+def test_an_undetermined_pac_yields_to_a_later_source_that_knows():
+    """If the PAC can't tell but the environment names a proxy, use it -- the
+    uncertainty is not the final word."""
+    decision = px.resolve_proxy(
+        DEPLOYMENT,
+        resolvers=[
+            ("pac", lambda url: (px.UNDETERMINED, "timed out")),
+            ("environment", _says("http://env.example.com:8080", "from the environment")),
+        ],
+    )
+    assert decision.server == "http://env.example.com:8080"
+    assert decision.source == "environment"
+
+
+def test_a_real_pac_direct_is_confident_not_undetermined():
+    decision = px.resolve_proxy(
+        DEPLOYMENT, resolvers=[("pac", lambda url: (None, "the PAC script says DIRECT"))]
+    )
+    assert decision.direct and not decision.undetermined and decision.source == "pac"
+
+
+# --- the auth handshake obeys the same decision -----------------------------
+
+
+def test_requests_proxies_from_a_decision():
+    via = px.ProxyDecision(DEPLOYMENT, "http://proxy.example.com:8080", "pac", "names it")
+    assert px.requests_session_proxies(via) == {
+        "http": "http://proxy.example.com:8080",
+        "https": "http://proxy.example.com:8080",
+    }
+    direct = px.ProxyDecision(DEPLOYMENT, None, "explicit", "direct")
+    assert px.requests_session_proxies(direct) == {}
+
+
+def test_the_auth_handshake_stops_reading_env_proxies_and_keeps_the_ca_bundle(monkeypatch):
+    """The reported bug: requests read HTTP_PROXY on its own, so an internal
+    handshake went through a proxy even when the crawl was direct. The helper
+    disables that and preserves the corporate CA bundle."""
+    from connections_export.http import auth as auth_mod
+
+    class _Client:
+        proxy_decision = px.ProxyDecision(DEPLOYMENT, None, "pac", "the PAC says DIRECT")
+
+    class _Session:
+        trust_env = True
+        proxies: dict = {}
+        verify = True
+
+    session = _Session()
+    monkeypatch.setenv("REQUESTS_CA_BUNDLE", "/etc/corp/ca.pem")
+    auth_mod._apply_proxy(session, _Client())
+
+    assert session.trust_env is False  # env proxies no longer shadow the decision
+    assert session.proxies == {}  # direct, per the decision
+    assert session.verify == "/etc/corp/ca.pem"  # corporate CA preserved
