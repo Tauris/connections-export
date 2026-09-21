@@ -156,7 +156,7 @@ Then render or convert what you captured:
 
 ```sh
 connections-export pdf --archive ./archive --output export.pdf
-connections-export ingest --format obsidian --package <dir> --output <vault>
+connections-export ingest --format obsidian --archive <dir> --output <vault>
 ```
 
 Settings can also come from `connections-export.toml` or `CONNECTIONS_EXPORT_*`

@@ -5,6 +5,33 @@ Notable changes to `connections-export`, newest first. Versions follow
 the archive format may still change between minor versions — the format's own
 version is recorded inside every archive.
 
+## 0.1.5 — unreleased
+
+### Exporting to Obsidian
+
+The first report from a user: "the Obsidian export did not work, some json
+file was missing." They were right, and it was not their mistake.
+
+- `ingest` takes the **archive** a capture writes — the directory the console
+  lists under Archives, or a `.zip` of one — as readily as a package. It
+  required a package, and nothing produced one: the manual said every capture
+  writes a package, the package writer existed, and no command called it. The
+  documented command failed for everyone on the first try with a traceback
+  naming `interchange.json`. Either flag now accepts either kind of directory,
+  and a directory that is neither is told what it is missing, in words.
+- **Blogs and forums are laid out as notes.** A folder per blog with a note
+  per post in the blog's order, comments beneath; a folder per forum with a
+  note per topic and its replies as nested headings beneath it, each reply
+  converted like the topic rather than flattened to a line. Links between
+  items resolve as `[[wikilinks]]` whatever kind is on either end. The vault
+  had held wikis only, so a blog captured for exactly this purpose produced
+  an empty vault.
+- New `connections-export package --archive DIR --output DIR` writes the
+  portable interchange package the manual has always described —
+  `interchange.json`, its blobs, the capability manifest and the format's own
+  reference document — for an ingester of your own, or to hand to someone who
+  has never seen this tool.
+
 ## 0.1.4 — 2026-09-18
 
 ### Working out what a community holds

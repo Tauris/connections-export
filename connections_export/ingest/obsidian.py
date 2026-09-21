@@ -3,12 +3,19 @@
 A worked, runnable example of the "Reconstructing content in a target
 wiki" algorithm (docs/reference/interchange-format.md §7) and proof the
 contract is buildable with **no HCL knowledge** -- it reads only the
-normalized model + blobs. It converts each wiki page's `content_html` to
-Markdown with `markdownify` and lays the pages out as an Obsidian vault:
+normalized model + blobs. It converts every item's `content_html` to
+Markdown with `markdownify` and lays the content out as an Obsidian vault:
 
-- one `.md` per page, the hierarchy mirrored as nested folders (a page's
-  children live in a folder named for the page), so `parent_id`/
+- one `.md` per wiki page, the hierarchy mirrored as nested folders (a
+  page's children live in a folder named for the page), so `parent_id`/
   `child_ids`/`ordinal` (§7 steps 2-3) drive the tree;
+- one `.md` per blog post, in a folder per blog, in feed order; and one
+  `.md` per forum topic, in a folder per forum, with the reply tree
+  rendered beneath the topic. A post, a topic and a reply carry the same
+  body, assets, links and provenance a page does (`DerivedItem`), so they
+  go through the same conversion -- the first version of this writer laid
+  out wikis only, and a blog captured for exactly this purpose produced an
+  empty vault;
 - **in-export links -> `[[wikilinks]]`** to the target page's note, other
   links kept verbatim (§7 step 5);
 - **images and attachments** copied out of `blobs/` and embedded/linked by
@@ -35,7 +42,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from connections_export.derive.model import DerivedPage, Interchange
+from connections_export.derive.model import (
+    DerivedForumTopic,
+    DerivedItem,
+    DerivedPage,
+    Interchange,
+)
 
 #: `blob_hash -> bytes` (or None when a referenced blob isn't present).
 #: `interchange.open_blob`-backed in production; injectable for tests.
@@ -59,9 +71,18 @@ _CONTENT_EXT = {
 class VaultStats:
     wikis: int = 0
     pages: int = 0
+    blogs: int = 0
+    posts: int = 0
+    forums: int = 0
+    topics: int = 0
     assets_written: int = 0
     assets_missing: int = 0
     notes: list[str] = field(default_factory=list)
+
+    @property
+    def items(self) -> int:
+        """Every note written for a piece of content, whatever its app."""
+        return self.pages + self.posts + self.topics
 
 
 def _md():
@@ -173,18 +194,33 @@ def _yaml_scalar(value: str) -> str:
     return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
-def _frontmatter(page: DerivedPage) -> str:
-    lines = ["---", f"title: {_yaml_scalar(page.title or page.label or page.id)}"]
-    if page.label:
-        lines.append(f"aliases: [{_yaml_scalar(page.label)}]")
+def _label(item: DerivedItem) -> str | None:
+    """A wiki page's label; nothing for a post or a topic, which have none."""
+    return getattr(item, "label", None)
+
+
+def _frontmatter(page: DerivedItem, *, kind: str | None = None) -> str:
+    lines = ["---", f"title: {_yaml_scalar(page.title or _label(page) or page.id)}"]
+    if kind:
+        # So a vault search can tell a post from a page from a topic; a wiki
+        # page carries none, as it did before other kinds arrived.
+        lines.append(f"kind: {kind}")
+    if _label(page):
+        lines.append(f"aliases: [{_yaml_scalar(_label(page))}]")
     if page.author:
         lines.append(f"author: {_yaml_scalar(page.author)}")
     if page.created:
         lines.append(f"created: {_yaml_scalar(page.created)}")
     if page.modified:
         lines.append(f"modified: {_yaml_scalar(page.modified)}")
-    if page.tags:
-        lines.append("tags: [" + ", ".join(_yaml_scalar(t) for t in page.tags) + "]")
+    tags = getattr(page, "tags", None) or []
+    if tags:
+        lines.append("tags: [" + ", ".join(_yaml_scalar(t) for t in tags) + "]")
+    flags = getattr(page, "flags", None) or []
+    if flags:
+        # A topic's pinned / locked / question / answered, kept where a
+        # vault query can find "every answered question".
+        lines.append("flags: [" + ", ".join(_yaml_scalar(f) for f in flags) + "]")
     if page.provenance and page.provenance.hcl_id:
         lines.append(f"hcl_id: {_yaml_scalar(page.provenance.hcl_id)}")
     if page.provenance and page.provenance.source_url:
@@ -193,7 +229,7 @@ def _frontmatter(page: DerivedPage) -> str:
     return "\n".join(lines)
 
 
-def _rewrite_body(page: DerivedPage, store: _AssetStore, id_to_title: dict[str, str]) -> str:
+def _rewrite_body(page: DerivedItem, store: _AssetStore, id_to_title: dict[str, str]) -> str:
     """Rewrite the page body's `<img>`/`<a>` to sentinels (resolved after
     markdownify), copying present image blobs and mapping in-export links.
     Uses `markdownify`'s own BeautifulSoup so parsing matches the converter."""
@@ -253,11 +289,12 @@ def _apply_sentinels(markdown: str, id_to_title: dict[str, str]) -> str:
     return markdown
 
 
-def _comments_md(page: DerivedPage) -> str:
-    if not page.comments:
+def _comments_md(page: DerivedItem) -> str:
+    comments = getattr(page, "comments", None) or []
+    if not comments:
         return ""
     children: dict[str | None, list] = {}
-    for comment in page.comments:
+    for comment in comments:
         children.setdefault(comment.parent_comment_id, []).append(comment)
     strip = re.compile(r"<[^>]+>")
 
@@ -272,18 +309,19 @@ def _comments_md(page: DerivedPage) -> str:
     lines: list[str] = []
     render(None, 0, lines)
     # comments whose parent isn't in this page (orphaned reply) stay top-level
-    seen = {c.id for c in page.comments}
-    for comment in page.comments:
+    seen = {c.id for c in comments}
+    for comment in comments:
         if comment.parent_comment_id and comment.parent_comment_id not in seen:
             children.setdefault(None, []).append(comment)
     return "\n## Comments\n\n" + "\n".join(lines) + "\n" if lines else ""
 
 
-def _attachments_md(page: DerivedPage, store: _AssetStore) -> str:
-    if not page.attachments:
+def _attachments_md(page: DerivedItem, store: _AssetStore) -> str:
+    attachments = getattr(page, "attachments", None) or []
+    if not attachments:
         return ""
     rows: list[str] = []
-    for att in page.attachments:
+    for att in attachments:
         name = _safe(att.filename or att.id, "attachment")
         if att.asset.present and att.asset.blob_hash:
             vault_name = store.store(
@@ -297,14 +335,67 @@ def _attachments_md(page: DerivedPage, store: _AssetStore) -> str:
     return "\n## Attachments\n\n" + "\n".join(rows) + "\n" if rows else ""
 
 
-def _versions_note(page: DerivedPage) -> str:
-    if not page.versions:
+def _versions_note(page: DerivedItem) -> str:
+    versions = getattr(page, "versions", None) or []
+    if not versions:
         return ""
-    full = sum(1 for v in page.versions if v.content_present)
-    detail = f"{len(page.versions)} revision(s)" + (
+    full = sum(1 for v in versions if v.content_present)
+    detail = f"{len(versions)} revision(s)" + (
         f", {full} with captured content" if full else " (metadata only)"
     )
     return f"\n## History\n\n> {detail}\n"
+
+
+def _replies_md(topic: DerivedForumTopic, store: _AssetStore, id_to_title: dict[str, str]) -> str:
+    """The reply tree beneath a topic, nested by `child_ids`.
+
+    A reply is not a comment: it carries a body with assets and links of
+    its own, so it goes through the same conversion as the topic rather
+    than being stripped to a line of text. Each reply is a heading at its
+    depth, which is what keeps a long thread readable in a vault and
+    keeps every reply's images embedded where they were.
+    """
+    if not topic.replies:
+        return ""
+    lines: list[str] = ["", "## Replies", ""]
+
+    def render(reply_id: str, depth: int) -> None:
+        reply = topic.replies.get(reply_id)
+        if reply is None:
+            return
+        who = reply.author or "Unknown"
+        when = f" · {reply.created}" if reply.created else ""
+        answer = " · *answer*" if "answer" in (reply.flags or []) else ""
+        lines.append(f"{'#' * min(3 + depth, 6)} {who}{when}{answer}")
+        lines.append("")
+        body = _rewrite_body(reply, store, id_to_title).strip()
+        lines.append(body if body else "*(no text)*")
+        attachments = _attachments_md(reply, store)
+        if attachments:
+            lines.append(attachments.replace("\n## Attachments\n", "\n**Attachments**\n"))
+        lines.append("")
+        for child in reply.child_ids:
+            render(child, depth + 1)
+
+    for reply_id in topic.reply_ids:
+        render(reply_id, 0)
+    # A reply whose parent never made it into the tree is still a reply:
+    # shown at the top level rather than lost.
+    reachable: set[str] = set()
+
+    def walk(reply_id: str) -> None:
+        if reply_id in reachable or reply_id not in topic.replies:
+            return
+        reachable.add(reply_id)
+        for child in topic.replies[reply_id].child_ids:
+            walk(child)
+
+    for reply_id in topic.reply_ids:
+        walk(reply_id)
+    for reply_id in topic.replies:
+        if reply_id not in reachable:
+            render(reply_id, 0)
+    return "\n".join(lines) + "\n"
 
 
 def _ancestors(page: DerivedPage, pages: dict[str, DerivedPage]) -> list[DerivedPage]:
@@ -330,21 +421,33 @@ def _note_path(
 def write_obsidian_vault(
     interchange: Interchange, blob_reader: BlobReader, out_dir: Path | str
 ) -> VaultStats:
-    """Write `interchange`'s wikis as an Obsidian vault under `out_dir`.
-    `blob_reader` resolves an asset/attachment `blob_hash` to bytes (or
-    `None` if absent). Returns what was written."""
+    """Write `interchange`'s wikis, blogs and forums as an Obsidian vault
+    under `out_dir`. `blob_reader` resolves an asset/attachment `blob_hash`
+    to bytes (or `None` if absent). Returns what was written."""
     vault = Path(out_dir)
     vault.mkdir(parents=True, exist_ok=True)
     stats = VaultStats()
     store = _AssetStore(vault / "attachments", blob_reader, stats)
 
     # Obsidian resolves [[Title]] by note name across the whole vault, so
-    # one id->title map spans every wiki (a caveat when titles collide).
+    # one id->title map spans every container of every app: a post linking
+    # to a wiki page resolves the same way a page linking to a page does (a
+    # caveat when titles collide).
     id_to_title = {
         pid: (p.title or p.label or pid)
         for wiki in interchange.wikis
         for pid, p in wiki.pages.items()
     }
+    id_to_title.update(
+        {pid: (post.title or pid) for blog in interchange.blogs for pid, post in blog.posts.items()}
+    )
+    id_to_title.update(
+        {
+            tid: (topic.title or tid)
+            for forum in interchange.forums
+            for tid, topic in forum.topics.items()
+        }
+    )
 
     for wiki in interchange.wikis:
         stats.wikis += 1
@@ -365,6 +468,44 @@ def write_obsidian_vault(
             )
             stats.pages += 1
 
+    for blog in interchange.blogs:
+        stats.blogs += 1
+        blog_dir = vault / _safe(blog.title or blog.handle or blog.id, blog.id)
+        blog_dir.mkdir(parents=True, exist_ok=True)
+        # Feed order is the blog's order; a post's ordinal in the name keeps
+        # a file listing in that order too, which a title alone would not.
+        ordered = [blog.posts[pid] for pid in blog.post_ids if pid in blog.posts]
+        ordered += [post for pid, post in blog.posts.items() if pid not in blog.post_ids]
+        for post in ordered:
+            note = blog_dir / (_safe(post.title or post.id, post.id) + ".md")
+            body = _rewrite_body(post, store, id_to_title)
+            heading = f"# {post.title or post.id}\n\n"
+            note.write_text(
+                _frontmatter(post, kind="post") + heading + body + _comments_md(post),
+                encoding="utf-8",
+            )
+            stats.posts += 1
+
+    for forum in interchange.forums:
+        stats.forums += 1
+        forum_dir = vault / _safe(forum.title or forum.id, forum.id)
+        forum_dir.mkdir(parents=True, exist_ok=True)
+        ordered_topics = [forum.topics[tid] for tid in forum.topic_ids if tid in forum.topics]
+        ordered_topics += [t for tid, t in forum.topics.items() if tid not in forum.topic_ids]
+        for topic in ordered_topics:
+            note = forum_dir / (_safe(topic.title or topic.id, topic.id) + ".md")
+            body = _rewrite_body(topic, store, id_to_title)
+            heading = f"# {topic.title or topic.id}\n\n"
+            note.write_text(
+                _frontmatter(topic, kind="topic")
+                + heading
+                + body
+                + _attachments_md(topic, store)
+                + _replies_md(topic, store, id_to_title),
+                encoding="utf-8",
+            )
+            stats.topics += 1
+
     _write_readme(vault, interchange, stats)
     return stats
 
@@ -375,25 +516,65 @@ def _write_readme(vault: Path, interchange: Interchange, stats: VaultStats) -> N
         "",
         "Reconstructed from an interchange package"
         + (f" of `{interchange.base_url}`" if interchange.base_url else "")
-        + f": {stats.wikis} wiki(s), {stats.pages} page(s), "
+        + f": {stats.wikis} wiki(s), {stats.pages} page(s); "
+        + f"{stats.blogs} blog(s), {stats.posts} post(s); "
+        + f"{stats.forums} forum(s), {stats.topics} topic(s); "
         + f"{stats.assets_written} attachment(s) copied.",
         "",
-        "## Wikis",
-        "",
     ]
-    for wiki in interchange.wikis:
-        lines.append(f"### {wiki.title or wiki.label}")
-        for root_id in wiki.root_page_ids:
-            page = wiki.pages.get(root_id)
-            if page:
-                lines.append(f"- [[{page.title or page.label or root_id}]]")
-        lines.append("")
+    if interchange.wikis:
+        lines += ["## Wikis", ""]
+        for wiki in interchange.wikis:
+            lines.append(f"### {wiki.title or wiki.label}")
+            for root_id in wiki.root_page_ids:
+                page = wiki.pages.get(root_id)
+                if page:
+                    lines.append(f"- [[{page.title or page.label or root_id}]]")
+            lines.append("")
+    if interchange.blogs:
+        lines += ["## Blogs", ""]
+        for blog in interchange.blogs:
+            lines.append(f"### {blog.title or blog.handle or blog.id}")
+            for pid in blog.post_ids:
+                post = blog.posts.get(pid)
+                if post:
+                    lines.append(f"- [[{post.title or pid}]]")
+            lines.append("")
+    if interchange.forums:
+        lines += ["## Forums", ""]
+        for forum in interchange.forums:
+            lines.append(f"### {forum.title or forum.id}")
+            for tid in forum.topic_ids:
+                topic = forum.topics.get(tid)
+                if topic:
+                    lines.append(f"- [[{topic.title or tid}]]")
+            lines.append("")
     if stats.assets_missing:
         lines.append(
             f"> {stats.assets_missing} referenced asset(s) were not captured in the "
             "package — shown as visible gaps, not dropped."
         )
     (vault / "README.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def from_source(source, out_dir: Path | str) -> VaultStats:
+    """Write a vault from anything that answers `get_model()` and
+    `get_blob(hash)` -- a `ModelSource` over a package, an archive
+    directory, or a zipped archive. The author filter, if any, is the
+    source's own.
+
+    Raises `ValueError` when the source holds nothing derivable, rather
+    than writing an empty vault that reads as a capture with nothing in it.
+    """
+    interchange = source.get_model()
+    if interchange is None:
+        raise ValueError("nothing to ingest: the source holds no derivable content")
+
+    def blob_reader(blob_hash: str) -> bytes | None:
+        result = source.get_blob(blob_hash)
+        return result[0] if result is not None else None
+
+    return write_obsidian_vault(interchange, blob_reader, out_dir)
 
 
 def from_package(

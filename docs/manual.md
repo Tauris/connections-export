@@ -41,7 +41,7 @@ The CLI does the same when given `--search-userid` with `--author` and a communi
 
 ## <a id="man-format"></a>The archive format
 
-Every capture produces a **package**: a directory holding the normalized content of one or more wikis, blogs, forums, file libraries, and community front pages, built to be read by any program — not just this tool, and not only by something written by someone who knows what HCL Connections is. The full specification ships as `docs/reference/interchange-format.md` in the source tree, and a verbatim copy, `INTERCHANGE.md`, travels inside every package it describes. This section summarizes it.
+A capture writes an **archive** — the directory the console shows under Archives, holding every response as it came off the wire. From it, `connections-export package` writes a **package**: a directory holding the normalized content of one or more wikis, blogs, forums, file libraries, and community front pages, built to be read by any program — not just this tool, and not only by something written by someone who knows what HCL Connections is. The full specification ships as `docs/reference/interchange-format.md` in the source tree, and a verbatim copy, `INTERCHANGE.md`, travels inside every package it describes. This section summarizes it.
 
 ### <a id="man-format-layout"></a>Layout
 
@@ -155,24 +155,26 @@ A package on its own is just data. Turning it into something usable in another t
 
 ### <a id="man-export-obsidian"></a>The Obsidian exporter
 
-The Obsidian ingester converts every wiki in a package into an Obsidian vault: one note per page, with the page hierarchy mirrored as nested folders. Links between pages inside the export become `[[wikilinks]]` to the target note; other links are kept as-is. Images and attachments are copied out of `blobs/` into the vault's `attachments/` folder and embedded by name (`![[file]]` / `[[file]]`) — an asset the package never captured becomes a visible marker instead of vanishing. Comments are appended under each note as a threaded list. YAML frontmatter carries the page's title, author, dates, and tags, plus its source provenance, and a `README.md` at the vault root indexes every wiki. Blog and forum content is captured in the package like everything else, but this first exporter doesn't yet lay it out as vault notes — see below.
+The Obsidian ingester converts a capture into an Obsidian vault. Every wiki becomes one note per page, with the page hierarchy mirrored as nested folders. Every blog becomes a folder with one note per post, in the blog's own order, comments beneath each. Every forum becomes a folder with one note per topic, its replies laid out beneath it as nested headings so a thread reads as a thread — each reply converted the same way as the topic, images and all, rather than flattened to a line. Links between items inside the export become `[[wikilinks]]` to the target note, whatever kind of item is on either end; other links are kept as-is. Images and attachments are copied out of the capture into the vault's `attachments/` folder and embedded by name (`![[file]]` / `[[file]]`) — an asset that was never captured becomes a visible marker instead of vanishing. YAML frontmatter carries each item's title, author, dates and tags, a `kind` for posts and topics, and its source provenance; a `README.md` at the vault root indexes every wiki, blog and forum.
 
-**The single-file executable has the exporter built in** — nothing to install, just run it:
+**The single-file executable has the exporter built in** — nothing to install. Point it at the archive a capture wrote, the directory the console lists under Archives:
 
 ```
-connections-export ingest --format obsidian --package PATH/TO/PACKAGE --output PATH/TO/VAULT
+connections-export ingest --format obsidian --archive PATH/TO/ARCHIVE --output PATH/TO/VAULT
 ```
 
-Installing with `pip` instead, the exporter needs the `obsidian` extra, because it uses `markdownify` to turn page bodies into Markdown and a plain install does not carry it:
+Installing with `pip` instead, the exporter needs the `obsidian` extra, because it uses `markdownify` to turn bodies into Markdown and a plain install does not carry it:
 
 ```
 pip install 'connections-export[obsidian]'
-connections-export ingest --format obsidian --package PATH/TO/PACKAGE --output PATH/TO/VAULT
+connections-export ingest --format obsidian --archive PATH/TO/ARCHIVE --output PATH/TO/VAULT
 ```
 
-`--package` is a package directory written by a previous capture (or opened with `connections-export open`); `--output` is the vault directory to write. Nothing is read from or sent to the source deployment during ingest — it only ever touches the package on disk.
+`--archive` is an archive directory (the one holding `manifest.jsonl` and `blobs/`) or a `.zip` of one; `--package` takes a package written by `connections-export package` instead. Either flag accepts either kind — the directory says what it is — and `--author` narrows the vault to one person's content. Nothing is read from or sent to the source deployment during ingest — it only ever touches what is on disk.
 
 ### <a id="man-export-new"></a>Building a new exporter
+
+A self-contained brief for this — the model in one screen, the two-function shape, how to test without a deployment — is `docs/writing-an-ingester.md` in the source tree, written for someone starting from an example of the target format and nothing else.
 
 An ingester needs no knowledge of HCL Connections at all — only of the interchange package. The contract it follows is written out step by step in `docs/reference/interchange-format.md` §7, "Reconstructing content in a target wiki": create every page first and keep an id mapping, set hierarchy and order from the pre-computed lists, attach comments/versions/attachments, then rewrite links and body assets using that id mapping, and finally record whatever the target format has no place for. The Obsidian ingester (`connections_export/ingest/obsidian.py`) is a worked, runnable example of exactly that shape — proof the contract is, in its own words, "buildable with no HCL knowledge."
 
@@ -339,7 +341,8 @@ Run `connections-export` with no arguments and you get this console, in a browse
 | `serve` | Start this console. `--open` opens a browser at it. |
 | `open` | Open an existing archive or package to read and export — no capture, so no deployment needed. |
 | `pdf` | Render an archive or package to PDF. |
-| `ingest` | Reconstruct a package into another tool. Today that means an Obsidian vault. |
+| `ingest` | Reconstruct a capture into another tool. Today that means an Obsidian vault. |
+| `package` | Write a capture’s portable interchange package, for an ingester of your own. |
 | `style` | Show or dump the PDF stylesheet, and list every setting in it. |
 | `licenses` | What is inside this build and under what terms, with the licence texts. |
 | `probe` | Ask a live deployment a question that cannot be answered without one. |
@@ -383,7 +386,8 @@ These need no deployment: they work from an archive or a package.
 | `pdf --archive DIR`<br>`pdf --package DIR` | Render it. `--output` names the file. |
 | `pdf --fidelity` | Render through the original system’s own stylesheets instead of the portable ones. Needs the deployment. |
 | `pdf --css FILE` | Your own stylesheet, appended after the captured pages’ own CSS so it wins. |
-| `ingest --package DIR --output DIR` | Write an Obsidian vault. `--format` selects the target. |
+| `ingest --archive DIR --output DIR` | Write an Obsidian vault from a capture. `--package` takes a package instead; `--format` selects the target. |
+| `package --archive DIR --output DIR` | Write the portable interchange package for a capture — for an ingester of your own, or to hand to someone who has never seen this tool. |
 | `style --dump` | Write the whole stylesheet out to edit. `--marks` lists the header and footer settings. |
 
 Every one of these also takes `--author`, so a filtered reading, PDF or vault can be produced from an unfiltered archive without capturing again.

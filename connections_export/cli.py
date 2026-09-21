@@ -614,14 +614,55 @@ def _run_selected_crawls(
     return 0 if all(result.ok for result in results) else 1
 
 
+def _content_source(path: str, *, author: str | None):
+    """A `ModelSource` for whatever `path` is: a package (`interchange.json`
+    inside), an archive directory (`manifest.jsonl` inside) or a zipped
+    archive. Returns `(source, kind)`, or raises `ValueError` saying what
+    was found and what would have been accepted.
+
+    The distinction is not the user's problem. The console writes archives;
+    a package is a separate, deliberate step; and a person who has one of
+    them should not need to know which flag the other one wanted, or meet
+    a missing-file traceback naming `interchange.json` for guessing wrong.
+    A path is a path; which kind it is, this can tell.
+    """
+    from connections_export.gui.model_source import ModelSource  # noqa: PLC0415
+
+    target = Path(path)
+    if target.is_file() and target.suffix.lower() == ".zip":
+        return ModelSource.from_archive(target, author=author), "zipped archive"
+    if not target.is_dir():
+        raise ValueError(f"{target} is not a directory or a .zip archive")
+    if (target / "interchange.json").is_file():
+        return ModelSource.from_package(target, author=author), "package"
+    if (target / "manifest.jsonl").is_file():
+        return ModelSource.from_archive(target, author=author), "archive"
+    raise ValueError(
+        f"{target} is neither a package (no interchange.json) nor an archive "
+        "(no manifest.jsonl). Point this at the directory a capture wrote -- "
+        "the one holding manifest.jsonl and blobs/ -- or at a .zip of one."
+    )
+
+
 def ingest_main(argv: Sequence[str] | None = None, *, env: Mapping[str, str] | None = None) -> int:
-    """`connections-export ingest --format obsidian --package DIR --output VAULT`:
-    a reference ingester that reconstructs an interchange package into a
-    target (docs/reference/interchange-format.md §7). Only `obsidian` is
-    built (needs the `obsidian` extra: `pip install 'connections-export[obsidian]'`)."""
+    """`connections-export ingest --format obsidian --archive DIR --output VAULT`:
+    a reference ingester that reconstructs captured content into a target
+    (docs/reference/interchange-format.md §7). Only `obsidian` is built
+    (needs the `obsidian` extra: `pip install 'connections-export[obsidian]'`).
+
+    Takes what a capture actually produces -- an archive directory, or a zip
+    of one -- as readily as a written package. `--package` and `--archive`
+    are both accepted and both auto-detected: either flag with either kind
+    of directory works, and says which it found.
+    """
     parser = argparse.ArgumentParser(prog="connections-export ingest")
     parser.add_argument("--format", choices=["obsidian"], default="obsidian")
-    parser.add_argument("--package", required=True, help="A written interchange package dir.")
+    source = parser.add_mutually_exclusive_group(required=True)
+    source.add_argument(
+        "--archive",
+        help="An archive a capture wrote (the directory holding manifest.jsonl), or a .zip of one.",
+    )
+    source.add_argument("--package", help="A written interchange package directory.")
     parser.add_argument("--output", required=True, help="Target vault/output dir to write.")
     parser.add_argument(
         "--author",
@@ -631,15 +672,90 @@ def ingest_main(argv: Sequence[str] | None = None, *, env: Mapping[str, str] | N
     )
     args = parser.parse_args(argv)
 
-    from connections_export.ingest import from_package  # noqa: PLC0415
+    from connections_export.archive.source import ArchiveSourceError  # noqa: PLC0415
+    from connections_export.derive import DeriveError  # noqa: PLC0415
+    from connections_export.ingest import from_source  # noqa: PLC0415
 
-    stats = from_package(args.package, args.output, author=args.filter_author)
+    try:
+        source_obj, kind = _content_source(args.archive or args.package, author=args.filter_author)
+        stats = from_source(source_obj, args.output)
+    except (ValueError, DeriveError, ArchiveSourceError) as error:
+        print(f"connections-export ingest: {error}", file=sys.stderr)
+        return 1
     print(
-        f"connections-export ingest: {stats.pages} page(s) from {stats.wikis} wiki(s), "
+        f"connections-export ingest: from the {kind}, {stats.pages} page(s) in "
+        f"{stats.wikis} wiki(s), {stats.posts} post(s) in {stats.blogs} blog(s), "
+        f"{stats.topics} topic(s) in {stats.forums} forum(s), "
         f"{stats.assets_written} attachment(s) → {args.output}"
     )
     if stats.assets_missing:
         print(f"  {stats.assets_missing} referenced asset(s) not captured (shown as visible gaps).")
+    return 0
+
+
+def package_main(argv: Sequence[str] | None = None, *, env: Mapping[str, str] | None = None) -> int:
+    """`connections-export package --archive DIR --output DIR`: write the
+    portable interchange package for a capture -- `interchange.json`, its
+    `blobs/`, the capability manifest, and the format's own reference
+    document -- so it can be handed to any ingester, including one written
+    by someone who has never seen this tool.
+
+    The manual has always said every capture produces a package. Until this
+    command, nothing did: the package writer existed and no command called
+    it, and the reader, the PDF and the ingester all worked from the archive
+    directly. This makes the sentence true.
+    """
+    parser = argparse.ArgumentParser(prog="connections-export package")
+    parser.add_argument(
+        "--archive",
+        required=True,
+        help="An archive a capture wrote (the directory holding manifest.jsonl), or a .zip of one.",
+    )
+    parser.add_argument("--output", required=True, help="Directory to write the package into.")
+    parser.add_argument(
+        "--author",
+        dest="filter_author",
+        default=None,
+        help="Only include content this user authored/participated in (name or user id).",
+    )
+    args = parser.parse_args(argv)
+
+    import datetime as _dt  # noqa: PLC0415
+
+    from connections_export.archive.source import (  # noqa: PLC0415
+        ArchiveSourceError,
+        ReadableArchive,
+    )
+    from connections_export.derive import DeriveError  # noqa: PLC0415
+    from connections_export.derive.traverse import iter_all_assets  # noqa: PLC0415
+    from connections_export.interchange.package import write_package  # noqa: PLC0415
+
+    try:
+        source, kind = _content_source(args.archive, author=args.filter_author)
+        if kind == "package":
+            raise ValueError(f"{args.archive} is already a package")
+        if kind == "zipped archive":
+            # The package writer copies blobs out of an archive DIRECTORY.
+            # Saying so beats a traceback from inside a zip reader.
+            raise ValueError("unzip the archive first; a package is written from a directory")
+        model = source.get_model()
+        if model is None:
+            raise ValueError("nothing to package: the archive holds no derivable content")
+        # Wall clock, stated once here and passed in: the writer takes it as
+        # an argument so a test around it can be deterministic.
+        generated_at = _dt.datetime.now(_dt.UTC).replace(microsecond=0).isoformat()
+        write_package(
+            model, ReadableArchive.open(args.archive), Path(args.output), generated_at=generated_at
+        )
+    except (ValueError, DeriveError, ArchiveSourceError) as error:
+        print(f"connections-export package: {error}", file=sys.stderr)
+        return 1
+    blobs = sum(1 for asset in iter_all_assets(model) if asset.present and asset.blob_hash)
+    print(
+        f"connections-export package: {len(model.wikis)} wiki(s), {len(model.blogs)} blog(s), "
+        f"{len(model.forums)} forum(s), {blobs} blob(s) → {args.output}"
+    )
+    print("  interchange.json, manifest.json, provenance.json, blobs/, and INTERCHANGE.md")
     return 0
 
 
@@ -1723,6 +1839,7 @@ _SUBCOMMANDS: dict[str, Callable[..., object]] = {
     "pdf": pdf_main,
     "style": style_main,
     "ingest": ingest_main,
+    "package": package_main,
     "compare-author": compare_author_main,
     "licenses": licenses_main,
     "probe": probe_main,
@@ -1736,7 +1853,8 @@ _MAIN_USAGE = (
     "  serve           launch the local web console (--demo for a synthetic run)\n"
     "  open            open an existing archive/package to browse or export\n"
     "  pdf             render the reconstructed wiki to a PDF\n"
-    "  ingest          reconstruct a package into a target (obsidian vault)\n"
+    "  ingest          reconstruct an archive or package into a target (obsidian vault)\n"
+    "  package         write a capture's portable interchange package\n"
     "  style           show or dump the PDF stylesheet, and list its settings\n"
     "  licenses        what is in this build, with licence texts to extract\n"
     "  probe           ask a live deployment a question it alone can answer\n"
