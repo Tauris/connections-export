@@ -171,7 +171,7 @@ connections-export ingest --format obsidian --archive PATH/TO/ARCHIVE --output P
 connections-export ingest --format jekyll   --archive PATH/TO/ARCHIVE --output PATH/TO/SITE
 ```
 
-`--archive` is an archive directory (the one holding `manifest.jsonl` and `blobs/`) or a `.zip` of one; `--package` takes a package written by `connections-export package` instead. Either flag accepts either kind — the directory says what it is — and `--author` narrows the output to one person's content. Nothing is read from or sent to the source deployment during an export — it only ever touches what is on disk. The single-file executable has both exporters built in; installing with `pip` instead, add the matching extra (it pulls in `markdownify`, which turns bodies into Markdown): `pip install 'connections-export[obsidian]'` or `pip install 'connections-export[jekyll]'`.
+`--archive` is an archive directory (the one holding `manifest.jsonl` and `blobs/`) or a `.zip` of one; `--package` takes a package written by `connections-export package` instead. Either flag accepts either kind — the directory says what it is — and `--author` narrows the output to one person's content. Nothing is read from or sent to the source deployment during an export — it only ever touches what is on disk. Both exporters work from a plain install — the executable has them built in, and a `pip`/`uv` install includes what they need (`markdownify`) as a base dependency, so no extra is required.
 
 ### <a id="man-export-obsidian"></a>Obsidian — a linked vault
 

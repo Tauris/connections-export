@@ -30,8 +30,8 @@ Markdown with `markdownify` and lays the content out as an Obsidian vault:
   provenance (`hcl_id`) for traceability.
 
 Loss, if any, happens *here* -- in this writer, mapping onto Obsidian's
-model -- against a package that still has the data (§7 step 6). Install
-with the `obsidian` extra (`pip install connections-export[obsidian]`).
+model -- against a package that still has the data (§7 step 6). The
+converter (`markdownify`) is a base dependency, so a plain install runs it.
 """
 
 from __future__ import annotations
@@ -89,13 +89,13 @@ class VaultStats:
 
 
 def _md():
-    """`markdownify` lazily, with a clear message when the extra is absent."""
+    """`markdownify` lazily, with a clear message if it is somehow absent."""
     try:
         from markdownify import markdownify  # noqa: PLC0415
-    except ImportError as exc:  # pragma: no cover - exercised only without the extra
+    except ImportError as exc:  # pragma: no cover - a base dependency, normally present
         raise RuntimeError(
-            "the Obsidian ingester needs `markdownify` — install the extra: "
-            "pip install 'connections-export[obsidian]'"
+            "the Obsidian ingester needs `markdownify`, a base dependency of "
+            "connections-export — reinstall the package to restore it"
         ) from exc
     return markdownify
 

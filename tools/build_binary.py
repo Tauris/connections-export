@@ -316,6 +316,13 @@ def build(
         str(scratch),
         "--collect-data",
         "connections_export",
+        # Bundle the package's own .dist-info so `importlib.metadata.version`
+        # works inside the frozen app. Without it `own_version()` raises
+        # PackageNotFoundError and falls back to "0.0.0+unknown" -- which then
+        # shows in the console's version line and is stamped into every
+        # archive's `generator_version` and the SBOM.
+        "--copy-metadata",
+        "connections-export",
     ]
     for module in collect_submodules:
         cmd += ["--collect-submodules", module]

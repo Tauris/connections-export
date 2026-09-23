@@ -7,19 +7,27 @@ recording the commit and git ref it built from (a data file, so PyInstaller's
 `--collect-data connections_export` carries it into the executable); this reads
 it and turns it into a channel and a human label:
 
-- **release** — built from a `v*` tag: shown as just `v0.1.6`.
+- **release** — built from a `v*` tag, OR installed normally from a wheel (a
+  PyPI install has no stamp but is a real release): shown as just `v0.1.6`.
 - **test** — built from a branch (a downloadable test build): shown with the
   short commit, `v0.1.6 · test build · 0b83bb3`, so it can never be mistaken
   for an official release.
-- **dev** — a source checkout with no stamp: `v0.1.6 · dev`.
+- **dev** — a source/editable checkout, or a copy that cannot name its own
+  version: `v0.1.6 · dev`.
+
+A wheel install carries no `_build_stamp.json` (only the executables do), so a
+stamp's absence must NOT mean "dev": that would label every `pip install` of a
+release "· dev". An editable checkout is what "dev" means, and PEP 610's
+`direct_url.json` is how it is told apart from an installed wheel.
 """
 
 from __future__ import annotations
 
 import json
+from importlib.metadata import PackageNotFoundError, distribution
 from importlib.resources import files
 
-from connections_export.sbom import own_version
+from connections_export.sbom import OWN_NAME, own_version
 
 
 def _read_stamp() -> dict:
@@ -40,23 +48,45 @@ def _read_stamp() -> dict:
     }
 
 
-def build_info(stamp: dict | None = None) -> dict:
+def _is_editable_install() -> bool:
+    """True for a source / `pip install -e` checkout, via PEP 610.
+
+    An installed wheel has no `direct_url.json`, or one that is not editable; an
+    editable install records `dir_info.editable == true`.
+    """
+    try:
+        raw = distribution(OWN_NAME).read_text("direct_url.json")
+    except (PackageNotFoundError, OSError):
+        return False
+    if not raw:
+        return False
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        return False
+    return bool(isinstance(data, dict) and data.get("dir_info", {}).get("editable"))
+
+
+def build_info(stamp: dict | None = None, *, editable: bool | None = None) -> dict:
     """`{version, commit, ref, channel, label}` for the running build.
 
-    `stamp` is injectable for tests; in normal use it is read from the
-    CI-written `_build_stamp` module (absent → a dev checkout).
+    `stamp` and `editable` are injectable for tests; in normal use the stamp is
+    read from the CI-written `_build_stamp.json` and `editable` from PEP 610.
     """
     stamp = _read_stamp() if stamp is None else stamp
     version = own_version()
     commit = (stamp.get("commit") or "")[:7]
     ref = stamp.get("ref") or ""
+    editable = _is_editable_install() if editable is None else editable
 
-    if not commit:
+    if commit:
+        channel = "release" if ref.startswith("refs/tags/v") else "test"
+    elif version.endswith("+unknown") or editable:
+        # No stamp AND either no readable version or an editable checkout: dev.
         channel = "dev"
-    elif ref.startswith("refs/tags/v"):
-        channel = "release"
     else:
-        channel = "test"
+        # No stamp but a real installed wheel (a PyPI install): a release.
+        channel = "release"
 
     if channel == "release":
         label = f"v{version}"

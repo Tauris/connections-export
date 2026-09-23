@@ -10,12 +10,21 @@ from __future__ import annotations
 from connections_export.build_info import build_info
 
 
-def test_a_source_checkout_has_no_stamp_and_is_dev():
-    info = build_info({})
+def test_an_editable_checkout_with_no_stamp_is_dev():
+    info = build_info({}, editable=True)
     assert info["channel"] == "dev"
     assert info["commit"] == ""
     assert info["label"].endswith("· dev")
     assert info["label"].startswith("v")
+
+
+def test_an_installed_wheel_with_no_stamp_is_a_release_not_dev():
+    # A `pip install` of a release carries no build stamp (only the executables
+    # do) and is NOT editable. It must read as a clean release, never "· dev".
+    info = build_info({}, editable=False)
+    assert info["channel"] == "release"
+    assert info["label"] == "v" + info["version"]
+    assert "dev" not in info["label"]
 
 
 def test_a_branch_build_is_a_test_build_and_shows_its_commit():
@@ -40,3 +49,14 @@ def test_a_stamp_with_a_commit_but_a_non_v_tag_is_still_a_test_build():
     info = build_info({"commit": "abcdef0", "ref": "refs/tags/test-blog-comment-repair"})
     assert info["channel"] == "test"
     assert "test build" in info["label"]
+
+
+def test_the_cli_version_flag_prints_the_build_label(capsys):
+    from connections_export.build_info import build_info
+    from connections_export.cli import main
+
+    assert main(["--version"]) == 0
+    out = capsys.readouterr().out.strip()
+    assert out == build_info()["label"]
+    assert out.startswith("v")
+    assert "0.0.0" not in out  # a source checkout still knows its version

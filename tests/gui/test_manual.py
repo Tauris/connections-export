@@ -15,11 +15,12 @@ HTML = served_console_html()
 MANUAL = HTML[HTML.index('id="man-intro"') : HTML.index('id="panel-settings"')]
 
 
-def test_the_executable_has_the_obsidian_exporter_built_in():
-    """It bundles markdownify and bs4, so the `pip install...[obsidian]` line
-    is advice for one of the two ways people get the tool."""
-    assert "executable has both exporters built in" in MANUAL
-    assert "connections-export[obsidian]" in MANUAL  # still right for pip
+def test_the_exporters_need_no_extra():
+    """`markdownify` is a base dependency now, so a plain install runs both
+    exporters — the manual must not send people to an opt-in extra."""
+    assert "no extra is required" in MANUAL
+    assert "connections-export[obsidian]" not in MANUAL
+    assert "connections-export[jekyll]" not in MANUAL
 
 
 def test_the_manual_no_longer_says_a_linked_file_is_left_behind():

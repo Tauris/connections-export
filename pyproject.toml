@@ -1,6 +1,6 @@
 [project]
 name = "connections-export"
-version = "0.1.7"
+version = "0.1.8"
 description = "Lossless, archive-first export of HCL Connections content — wikis, blogs, and forums — to a portable, self-documenting package"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -36,6 +36,12 @@ dependencies = [
     "httpx>=0.28.1",
     "lxml>=6.1.1",
     "markdown>=3.7",
+    # The Obsidian and Jekyll exporters use `markdownify` (pure Python, pulls
+    # only beautifulsoup4 + six -- no system libraries). It was an opt-in extra,
+    # which meant a plain install could not run those exporters and the error
+    # for it landed in the terminal rather than the console. Light enough to be
+    # a base dependency, so the exporters just work.
+    "markdownify>=0.13",
     "playwright>=1.61.0",
     "pydantic>=2.13",
     # Merges the per-page PDFs the live browser export renders into one
@@ -64,14 +70,12 @@ sspi = [
     "requests-negotiate-sspi>=0.5.2; sys_platform == 'win32'",
     "requests-kerberos>=0.15.0",
 ]
-# The reference Obsidian ingester (`connections-export ingest --format obsidian`).
-obsidian = [
-    "markdownify>=0.13",
-]
-# A conventional Jekyll site fragment (`connections-export ingest --format jekyll`).
-jekyll = [
-    "markdownify>=0.13",
-]
+# `markdownify` moved into the base dependencies, so the Obsidian and Jekyll
+# exporters work from a plain install. These extras are kept as empty aliases
+# so an existing `connections-export[obsidian]` / `[jekyll]` install still
+# resolves instead of erroring.
+obsidian = []
+jekyll = []
 
 [dependency-groups]
 dev = [
@@ -82,7 +86,6 @@ dev = [
     # Windows, which is where the hang that motivated this appeared.
     "pytest-timeout>=2.3",
     "ruff>=0.15",
-    "markdownify>=0.13",
     # `just release-check` freezes the CLI into a single-file executable so a
     # user without Python can run it. Build-time only; never a runtime import.
     "pyinstaller>=6.11",

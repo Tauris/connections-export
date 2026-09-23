@@ -233,13 +233,14 @@ wheels = [
 
 [[package]]
 name = "connections-export"
-version = "0.1.7"
+version = "0.1.8"
 source = { editable = "." }
 dependencies = [
     { name = "fastapi" },
     { name = "httpx" },
     { name = "lxml" },
     { name = "markdown" },
+    { name = "markdownify" },
     { name = "playwright" },
     { name = "pydantic" },
     { name = "pypdf" },
@@ -247,12 +248,6 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
-jekyll = [
-    { name = "markdownify" },
-]
-obsidian = [
-    { name = "markdownify" },
-]
 sspi = [
     { name = "requests-kerberos" },
     { name = "requests-negotiate-sspi", marker = "sys_platform == 'win32'" },
@@ -260,7 +255,6 @@ sspi = [
 
 [package.dev-dependencies]
 dev = [
-    { name = "markdownify" },
     { name = "pyinstaller" },
     { name = "pytest" },
     { name = "pytest-timeout" },
@@ -273,8 +267,7 @@ requires-dist = [
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "lxml", specifier = ">=6.1.1" },
     { name = "markdown", specifier = ">=3.7" },
-    { name = "markdownify", marker = "extra == 'jekyll'", specifier = ">=0.13" },
-    { name = "markdownify", marker = "extra == 'obsidian'", specifier = ">=0.13" },
+    { name = "markdownify", specifier = ">=0.13" },
     { name = "playwright", specifier = ">=1.61.0" },
     { name = "pydantic", specifier = ">=2.13" },
     { name = "pypdf", specifier = ">=4" },
@@ -286,7 +279,6 @@ provides-extras = ["sspi", "obsidian", "jekyll"]
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "markdownify", specifier = ">=0.13" },
     { name = "pyinstaller", specifier = ">=6.11" },
     { name = "pytest", specifier = ">=9.1" },
     { name = "pytest-timeout", specifier = ">=2.3" },

@@ -810,8 +810,8 @@ def ingest_main(argv: Sequence[str] | None = None, *, env: Mapping[str, str] | N
     """`connections-export ingest --format obsidian --archive DIR --output VAULT`:
     a reference ingester that reconstructs captured content into a target
     (docs/reference/interchange-format.md §7). The built-in formats are
-    `obsidian` and `jekyll`; both use the `markdownify` dependency through
-    their respective extras.
+    `obsidian` and `jekyll`; both use `markdownify`, a base dependency, so a
+    plain install runs them.
 
     Takes what a capture actually produces -- an archive directory, or a zip
     of one -- as readily as a written package. `--package` and `--archive`
@@ -2095,6 +2095,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
     if args and args[0] in ("-h", "--help"):
         print(_MAIN_USAGE)
+        return 0
+    if args and args[0] in ("--version", "-V"):
+        from connections_export.build_info import build_info  # noqa: PLC0415
+
+        # The same string the console shows at the sidebar foot: the version,
+        # and for a test build or a dev checkout, which it is.
+        print(build_info()["label"])
         return 0
     if not args:
         # Bare `connections-export` shows the thing rather than describing

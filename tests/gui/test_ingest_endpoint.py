@@ -83,3 +83,24 @@ def test_ingest_needs_an_open_archive(tmp_path):
 
     assert response.status_code == 422
     assert "archive" in response.json()["error"].lower()
+
+
+def test_an_exporter_failure_is_surfaced_to_the_client(tmp_path, monkeypatch):
+    """A failure inside the exporter (e.g. a missing dependency) must reach the
+    console with its message, not fall through to a bare 500 with the reason
+    only in the terminal."""
+    import connections_export.ingest as ingest_mod
+
+    archive_dir = tmp_path / "archive"
+    run_demo((lambda _e: None), archive_dir=archive_dir, delay=0)
+    app = make_app(demo=True, archive_dir=archive_dir)
+
+    def boom(*_a, **_k):
+        raise ImportError("the Obsidian ingester needs `markdownify`")
+
+    monkeypatch.setattr(ingest_mod, "from_source_for_format", boom)
+
+    response = _post(app, {"format": "obsidian"})
+
+    assert response.status_code == 500
+    assert "markdownify" in response.json()["error"]

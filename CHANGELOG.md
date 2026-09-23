@@ -5,6 +5,40 @@ Notable changes to `connections-export`, newest first. Versions follow
 the archive format may still change between minor versions — the format's own
 version is recorded inside every archive.
 
+## 0.1.8 — 2026-09-23
+
+### The Obsidian and Jekyll exporters work from a plain install
+
+- **`markdownify` is now a base dependency**, not an opt-in extra. The Obsidian
+  and Jekyll exporters need only it (pure Python: `beautifulsoup4` + `six`, no
+  system libraries), so gating them behind `pip install
+  'connections-export[obsidian]'` bought little and confused people — a plain
+  `pip`/`uv install connections-export` now runs both. The `[obsidian]` and
+  `[jekyll]` extras remain as empty aliases so an existing install command still
+  resolves. The only opt-in extra left is `[sspi]`, which genuinely needs system
+  Kerberos headers.
+- **A failed export in the console shows why, in the console.** The
+  developer-format export surfaced only some failures to the browser and let the
+  rest (for example a missing dependency) fall through to a bare "export failed"
+  with the real message in the terminal. It now returns the reason for any
+  failure, so the console shows it.
+
+### The version reads correctly everywhere
+
+- **The executable now names its own version.** The single-file build could not
+  read its own package metadata, so `own_version()` fell back to
+  `0.0.0+unknown` — which showed in the console's version line and was stamped
+  into every archive's `generator_version` and the SBOM. The build now bundles
+  the package's `.dist-info` (`--copy-metadata`), and the release gate fails if
+  the frozen executable cannot state its version.
+- **A `pip`/`uv` install shows a clean release version.** Only the downloadable
+  executables carry a build stamp, so a wheel install had none — and the
+  console treated a missing stamp as "dev", labelling every installed release
+  "v0.1.7 · dev". An installed wheel is now recognised as a release (via PEP 610
+  `direct_url.json`); only a source/editable checkout reads "· dev".
+- **`connections-export --version`** prints the build label — the same string
+  the console shows (`v0.1.8`, or `… · test build · <commit>`, or `… · dev`).
+
 ## 0.1.7 — 2026-09-23
 
 ### Storing and sharing an archive

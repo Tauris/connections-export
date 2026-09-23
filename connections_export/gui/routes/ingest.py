@@ -96,6 +96,15 @@ def register(
             return JSONResponse({"error": str(error)}, status_code=422)
         except OSError as error:
             return JSONResponse({"error": f"could not write the export: {error}"}, status_code=500)
+        except Exception as error:  # noqa: BLE001 - the reason belongs in the console
+            # Any other failure (e.g. a missing optional dependency) must reach
+            # the console with its message, not disappear into the terminal as a
+            # bare "export failed". The message the exporter raised is the
+            # useful part -- surface it verbatim.
+            return JSONResponse(
+                {"error": str(error) or f"{spec['label']} export failed ({type(error).__name__})"},
+                status_code=500,
+            )
 
         missing = getattr(stats, "assets_missing", 0) or 0
         return JSONResponse(
