@@ -139,6 +139,25 @@ class _BulkDeleteRequest(BaseModel):
     confirmation: str
 
 
+class _BulkRepairRequest(BaseModel):
+    """The archives selected for a one-shot repair from the archive list."""
+
+    names: list[str]
+    confirmation: str
+
+
+class _IngestRequest(BaseModel):
+    """Which developer format to reconstruct the open archive into."""
+
+    format: str
+
+
+class _ArchiveZipRequest(BaseModel):
+    """Which archive to write out as a `.zip` beside itself."""
+
+    name: str
+
+
 class _SettingsRequest(BaseModel):
     base_url: str | None = None
     auth_mode: str = "sspi"
@@ -162,6 +181,7 @@ class _SettingsRequest(BaseModel):
     pdf_style: dict[str, str] = Field(default_factory=dict)
     #: Running header/footer settings (see `connections_export.pdf.marks`).
     pdf_marks: dict[str, str] = Field(default_factory=dict)
+    pdf_timeout: float = 120.0
 
 
 class _ArchivesDirRequest(BaseModel):

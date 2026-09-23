@@ -82,6 +82,7 @@ def register(
                 "default_author_filter": settings["default_author_filter"],
                 "pdf_style": settings.get("pdf_style") or {},
                 "pdf_marks": settings.get("pdf_marks") or {},
+                "pdf_timeout": settings.get("pdf_timeout", 120.0),
                 "archive_only": bool(settings.get("archive_only")),
                 "pdf_mark_defaults": DEFAULT_MARKS,
                 # The controls are built from this rather than a list in the
@@ -98,6 +99,8 @@ def register(
             return JSONResponse({"error": "unsupported auth mode"}, status_code=422)
         if body.min_interval < 0:
             return JSONResponse({"error": "min_interval must be non-negative"}, status_code=422)
+        if body.pdf_timeout <= 0:
+            return JSONResponse({"error": "pdf_timeout must be positive"}, status_code=422)
         # An omitted `base_url` leaves the stored one alone. The console no
         # longer offers the field -- the deployment address comes from the URL
         # you drop -- so a save from there must not clear a value someone set
@@ -116,6 +119,7 @@ def register(
             ),
             "pdf_style": dict(body.pdf_style),
             "pdf_marks": dict(body.pdf_marks),
+            "pdf_timeout": body.pdf_timeout,
             # Omitted means unchanged, exactly as `base_url` above: this is
             # set from a different card than the one the Save buttons sit in.
             "archive_only": (

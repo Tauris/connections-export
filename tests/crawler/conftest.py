@@ -12,6 +12,7 @@ is cheaper than making it a cross-package dependency.
 from __future__ import annotations
 
 import asyncio
+import threading
 from collections.abc import Callable
 
 import httpx
@@ -20,8 +21,21 @@ from connections_export.http.client import HttpClient, RetryPolicy
 
 
 class SyncASGIBridge(httpx.BaseTransport):
+    # One reused event loop per thread, not a fresh `asyncio.run` per request:
+    # a crawl makes thousands of requests, and a new loop each time builds a
+    # Windows self-pipe via `socket.socketpair()`, whose fallback can deadlock
+    # at `accept()` on Python 3.14 -- rarely per call, but eventually across a
+    # whole crawl. See `connections_export/gui/bridge.py` for the same fix.
     def __init__(self, app):
         self._async_transport = httpx.ASGITransport(app=app)
+        self._local = threading.local()
+
+    def _loop(self) -> asyncio.AbstractEventLoop:
+        loop = getattr(self._local, "loop", None)
+        if loop is None or loop.is_closed():
+            loop = asyncio.new_event_loop()
+            self._local.loop = loop
+        return loop
 
     def handle_request(self, request: httpx.Request) -> httpx.Response:
         async def _do():
@@ -29,7 +43,7 @@ class SyncASGIBridge(httpx.BaseTransport):
             content = await response.aread()
             return content, response.status_code, response.headers
 
-        content, status, headers = asyncio.run(_do())
+        content, status, headers = self._loop().run_until_complete(_do())
         return httpx.Response(status_code=status, headers=headers, content=content, request=request)
 
 

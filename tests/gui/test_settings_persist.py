@@ -77,3 +77,27 @@ def test_what_is_stored_is_only_what_the_user_chose(store):
     client.put("/api/settings", json={"min_interval": 0.2}, headers=HOST)
     stored = json.loads(store.read_text(encoding="utf-8"))
     assert set(stored) <= set(settings_store.PERSISTED_KEYS)
+
+
+def test_the_pdf_render_timeout_is_configurable_and_persists(store):
+    """The PDF render timeout was plumbed through the backend but had no visible
+    control; it must be saveable, survive a restart, and refuse a non-positive
+    value."""
+    client = TestClient(make_app(demo=True))
+
+    # It is exposed to the console...
+    shown = client.get("/api/settings", headers=HOST).json()
+    assert "pdf_timeout" in shown
+
+    # ...saved...
+    saved = client.put("/api/settings", json={"pdf_timeout": 45}, headers=HOST)
+    assert saved.status_code == 200
+    assert json.loads(store.read_text(encoding="utf-8"))["pdf_timeout"] == 45
+
+    # ...read back by a fresh server...
+    again = TestClient(make_app(demo=True))
+    assert again.get("/api/settings", headers=HOST).json()["pdf_timeout"] == 45
+
+    # ...and a non-positive timeout is refused rather than stored.
+    bad = client.put("/api/settings", json={"pdf_timeout": 0}, headers=HOST)
+    assert bad.status_code == 422

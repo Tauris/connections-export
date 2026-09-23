@@ -106,6 +106,7 @@ def test_panel_settings_has_the_expected_status_fields():
         "settings-save",
         "set-pdf-status",
         "set-pdf-detail",
+        "settings-pdf-timeout",
         "set-archives-dir",
         "set-archives-count",
     ):

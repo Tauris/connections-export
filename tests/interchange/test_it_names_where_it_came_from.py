@@ -101,6 +101,7 @@ def test_the_run_record_names_the_tool_and_where_to_get_it(tmp_path):
     )
 
     assert run.generator_url == sbom.OWN_PACKAGE_URL
+    assert run.generator_repo_url == sbom.OWN_REPO_URL
     assert run.generator_version
 
 
@@ -132,3 +133,18 @@ def test_the_summary_beside_an_archive_says_it_too():
     summary = model_summary(Interchange())
 
     assert summary["generator_url"] == sbom.OWN_PACKAGE_URL
+    assert summary["generator_repo_url"] == sbom.OWN_REPO_URL
+
+
+def test_the_repo_url_matches_what_the_project_publishes():
+    """The address is only useful if it is the real one -- keep OWN_REPO_URL in
+    step with pyproject's declared Repository."""
+    import tomllib
+
+    from connections_export.interchange.package import REPO_ROOT
+
+    pyproject = REPO_ROOT / "pyproject.toml"
+    if not pyproject.is_file():
+        return  # an installed copy has no source tree to compare against
+    urls = tomllib.loads(pyproject.read_text(encoding="utf-8"))["project"]["urls"]
+    assert sbom.OWN_REPO_URL == urls["Repository"]

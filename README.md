@@ -332,4 +332,4 @@ justfile, if you would rather not install `just`.
 
 ## License
 
-[BSD 3-Clause](https://github.com/Tauris/connections-export/blob/main/LICENSE)
+[BSD 3-Clause](https://github.com/Tauris/connections-export/blob/main/LICENSE) © 2026 Jörg Türmer

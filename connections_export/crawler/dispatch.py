@@ -91,6 +91,7 @@ def run_selection(
     community_uuid: str | None = None,
     community_title: str | None = None,
     search_userid: str | None = None,
+    repair_comments_only: bool = False,
 ) -> list[CrawlResult]:
     """Run one crawl per selected app, into one archive.
 
@@ -131,6 +132,7 @@ def run_selection(
         if app.kind in ("blog", "ideation_blog"):
             common["blogs_homepage"] = blogs_homepage
             common["entry_ids"] = list(single.get("entries") or ()) or None
+            common["repair_comments_only"] = repair_comments_only
         if app.kind == "wiki" and community_uuid:
             # Only wikis need telling. Blogs, forums, files and rich content
             # all recover their community from a feed they already fetch; a

@@ -48,6 +48,11 @@ OWN_NAME = "connections-export"
 #: needs an address, not a search term. Derived from the name rather than
 #: written out again, so there is nothing here to fall out of step.
 OWN_PACKAGE_URL = f"https://pypi.org/project/{OWN_NAME}/"
+#: The source repository, recorded alongside the package URL for the same
+#: reason: the PyPI page is where to install it, the repository is where to
+#: read the code, file an issue, or find it if it ever leaves PyPI. Kept in
+#: step with `[project.urls]` in `pyproject.toml`.
+OWN_REPO_URL = "https://github.com/Tauris/connections-export"
 
 
 #: Researched licences for packages whose own manifest does not carry one.

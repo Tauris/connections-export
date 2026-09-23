@@ -2238,6 +2238,54 @@
     }
   }
   $("r-pdf").addEventListener("click", exportPdf);
+
+  // Developer-format export (Obsidian vault / Jekyll site). Unlike PDF these
+  // write a folder next to the archive, so the result is a path, not a
+  // download — reported inline rather than as a browser save.
+  async function exportDevFormat(format, btn) {
+    const label = btn.textContent;
+    const result = $("r-dev-export-result");
+    btn.disabled = true;
+    btn.textContent = "⏳ Writing…";
+    if (result) {
+      result.hidden = false;
+      result.className = "dev-export-result";
+      result.textContent = "Writing the " + (format === "jekyll" ? "Jekyll site" : "Obsidian vault") + "…";
+    }
+    try {
+      const res = await fetch("/api/ingest", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ format }),
+      });
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok || !j.ok) {
+        const msg = j.error || "Export failed (" + res.status + ").";
+        if (result) { result.className = "dev-export-result is-error"; result.textContent = msg; }
+        notify(msg, "Export failed");
+        return;
+      }
+      const gaps = j.assets_missing
+        ? " " + j.assets_missing + " referenced asset(s) were never captured and show as gaps."
+        : "";
+      if (result) {
+        result.className = "dev-export-result is-done";
+        result.textContent = j.label + " written to " + j.path + " — " + j.summary + "." + gaps;
+      }
+      notify(j.label + " written to " + j.path, "Export complete");
+    } catch (_) {
+      if (result) { result.className = "dev-export-result is-error"; result.textContent = "The exporter isn't reachable right now."; }
+      notify("The developer-format exporter isn't reachable right now.");
+    } finally {
+      btn.disabled = false;
+      btn.textContent = label;
+    }
+  }
+  if ($("r-export-obsidian"))
+    $("r-export-obsidian").addEventListener("click", (e) => exportDevFormat("obsidian", e.currentTarget));
+  if ($("r-export-jekyll"))
+    $("r-export-jekyll").addEventListener("click", (e) => exportDevFormat("jekyll", e.currentTarget));
+
   // Accumulating, abortable export preview (page by page). Same viewer the
   // dashboard "Live PDF preview" uses; here it renders the reader's model.
   if ($("r-preview")) $("r-preview").addEventListener("click", startLivePdfPreview);
@@ -6297,6 +6345,151 @@
   let archivesOnPage = [];   // every archive the server returned, not just rendered
   let lastCheckedIndex = null;
 
+  // Archives that an older release may have captured without their
+  // first-page blog comments. `archivesOnPage` is every archive the server
+  // returned, so "all" here is all of them, not just the rendered rows.
+  function affectedArchives() {
+    return archivesOnPage.filter((a) => a.repair_needed && !a.is_demo);
+  }
+
+  let repairActive = false;
+
+  // The banner is the obvious way in (the toolbar button was easy to miss)
+  // AND the persistent status line during and after a repair -- so clicking
+  // it is never followed by "nothing visible happened".
+  function renderRepairBanner() {
+    const banner = $("repair-banner");
+    const msg = $("repair-banner-msg");
+    const allBtn = $("repair-all");
+    const toolbarBtn = $("repair-affected");
+    const affected = affectedArchives();
+    if (toolbarBtn) {
+      toolbarBtn.disabled = repairActive || !affected.length;
+      toolbarBtn.textContent = affected.length ? "Repair affected (" + affected.length + ")" : "Repair affected";
+    }
+    if (!banner || !msg || !allBtn) return;
+    if (repairActive) return;  // a running/finished job owns the banner text
+    if (!affected.length) { banner.hidden = true; banner.classList.remove("is-done", "is-running"); return; }
+    banner.hidden = false;
+    banner.classList.remove("is-done", "is-running");
+    const n = affected.length;
+    msg.textContent = n + " archive" + (n === 1 ? "" : "s") + " may be missing blog comments from an older capture. "
+      + "Repairing re-reads only the comment feeds into the archives you already have — nothing is recaptured.";
+    allBtn.hidden = false;
+    allBtn.disabled = false;
+    allBtn.textContent = "Repair all " + n;
+  }
+
+  async function startRepair() {
+    if (repairActive) return;
+    const affected = affectedArchives();
+    if (!affected.length) return;
+    const n = affected.length;
+    const ok = await showDialog({
+      title: "Repair " + n + " archive" + (n === 1 ? "" : "s") + "?",
+      bodyHtml: "<p>This re-reads each archive using the source, components and author scope it "
+        + "recorded, and adds blog comments an older release missed. It changes nothing else, is "
+        + "safe to run again, and may take a little while.</p>",
+      confirmLabel: "Repair all " + n,
+    });
+    if (!ok) return;
+    repairActive = true;
+    const banner = $("repair-banner");
+    const msg = $("repair-banner-msg");
+    const allBtn = $("repair-all");
+    if (banner) { banner.hidden = false; banner.classList.add("is-running"); banner.classList.remove("is-done"); }
+    if (allBtn) allBtn.hidden = true;
+    if ($("repair-stop")) { $("repair-stop").hidden = false; $("repair-stop").disabled = false; }
+    if (msg) msg.textContent = "Starting repair of " + n + " archive" + (n === 1 ? "" : "s") + "…";
+    if ($("repair-affected")) $("repair-affected").disabled = true;
+    try {
+      const res = await fetch("/api/repair-archives", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ names: affected.map((a) => a.name), confirmation: String(n) }),
+      });
+      if (!res.ok) { const j = await res.json().catch(() => ({})); throw new Error(j.error || "Repair failed"); }
+      await pollRepairStatus(n);
+    } catch (e) {
+      repairActive = false;
+      if (banner) banner.classList.remove("is-running");
+      if ($("repair-stop")) $("repair-stop").hidden = true;
+      if (msg) msg.textContent = (e && e.message) || "Could not start the repair.";
+      notify((e && e.message) || "Could not start archive repair.");
+      renderRepairBanner();
+    }
+  }
+
+  // Stop a repair that is going awry: finishes the archive it is on, does not
+  // start the rest. The worker reflects it as a "stopped" done state.
+  async function stopRepair() {
+    const stopBtn = $("repair-stop");
+    if (stopBtn) { stopBtn.disabled = true; stopBtn.textContent = "Stopping…"; }
+    try {
+      await fetch("/api/repair-stop", { method: "POST" });
+    } catch (_) {
+      notify("Could not reach the console to stop the repair.");
+    }
+  }
+
+  // Poll the job so the banner shows real progress and, at the end, how many
+  // comments were recovered and that everything is up to date.
+  async function pollRepairStatus(total) {
+    const msg = $("repair-banner-msg");
+    const banner = $("repair-banner");
+    const pollDelayMs = 1500;
+    for (;;) {
+      await new Promise((r) => setTimeout(r, pollDelayMs));
+      let job;
+      try { job = await (await fetch("/api/repair-status")).json(); }
+      catch (_) { continue; }
+      if (!job || job.state === "idle") continue;
+      if (job.state === "running" && msg) {
+        const at = Math.min((job.done || 0) + 1, job.total || total);
+        // Kept as separate, labelled dimensions — index pages, post feeds and
+        // unique posts are different work and are never added together.
+        const bits = [job.stage || "working"];
+        if (job.aggregate_pages) bits.push(job.aggregate_pages + " index page" + (job.aggregate_pages === 1 ? "" : "s"));
+        if (job.posts_total)
+          bits.push(Math.min(job.posts_done || 0, job.posts_total) + " / " + job.posts_total + " posts");
+        if (job.post_feeds_done) bits.push(job.post_feeds_done + " comment feed" + (job.post_feeds_done === 1 ? "" : "s"));
+        if (job.comments_restored)
+          bits.push("recovered " + job.comments_restored + " comment" + (job.comments_restored === 1 ? "" : "s"));
+        msg.textContent = "Repairing archive " + at + " of " + (job.total || total) + " — " + bits.join(" · ") + "…";
+        // Pacing note when it is the slow default with no config file found.
+        const banner = $("repair-banner");
+        if (banner && job.min_interval) {
+          banner.title = "Pacing: " + job.min_interval + "s between requests (" + (job.config_source || "") + ")";
+        }
+      }
+      if (job.state === "done") {
+        repairActive = false;
+        if ($("repair-stop")) { $("repair-stop").hidden = true; $("repair-stop").textContent = "Stop"; }
+        const failed = (job.results || []).filter((r) => !r.ok).length;
+        const restored = job.comments_restored || 0;
+        const nn = job.total || total || 0;
+        const done = job.done || 0;
+        if (banner) { banner.classList.remove("is-running"); banner.classList.add("is-done"); }
+        if (msg) {
+          if (job.stopped) {
+            msg.textContent = "Stopped. Repaired " + done + " of " + nn + " archive" + (nn === 1 ? "" : "s")
+              + " and recovered " + restored + " previously-missing comment" + (restored === 1 ? "" : "s")
+              + ". The rest were not started — run Repair again to finish them.";
+          } else {
+            msg.textContent = "Done. Repaired " + nn + " archive" + (nn === 1 ? "" : "s")
+              + " and recovered " + restored + " previously-missing comment" + (restored === 1 ? "" : "s")
+              + ". Every archive is now up to date."
+              + (failed ? " " + failed + " could not be repaired — see the log." : "");
+          }
+        }
+        notify((job.stopped ? "Stopped after " + done + " of " + nn : "Recovered " + restored + " comment" + (restored === 1 ? "" : "s") + " across " + nn)
+          + " archive" + (nn === 1 ? "" : "s") + ".", job.stopped ? "Repair stopped" : "Archive repair complete");
+        loadRecentArchives();  // re-reads the list; repaired archives drop their "repair needed" flag
+        return;
+      }
+    }
+  }
+
+
   function updateSelectionSummary() {
     const toolbar = $("archive-toolbar");
     if (toolbar) toolbar.hidden = !archivesOnPage.length;
@@ -6318,6 +6511,7 @@
       del.disabled = count === 0;
       del.textContent = count ? "Delete selected (" + count + ")" : "Delete selected";
     }
+    renderRepairBanner();
     document.querySelectorAll(".recent-archive-row").forEach((row) => {
       const box = row.querySelector(".archive-select");
       if (box) row.classList.toggle("is-selected", archiveSelection.has(box.dataset.name));
@@ -6372,6 +6566,9 @@
       archiveSelection.clear();
       syncCheckboxes();
     });
+    $("repair-all")?.addEventListener("click", startRepair);
+    $("repair-affected")?.addEventListener("click", startRepair);
+    $("repair-stop")?.addEventListener("click", stopRepair);
     $("delete-selected")?.addEventListener("click", async () => {
       const names = Array.from(archiveSelection);
       if (!names.length) return;
@@ -6521,6 +6718,13 @@
         detail.className = "foot-note archive-detail";
         detail.textContent = itemsFact + " · reading archive details…";
         b.appendChild(detail);
+        if (a.repair_needed) {
+          const repairNote = document.createElement("span");
+          repairNote.className = "archive-repair-note";
+          repairNote.textContent = "Comments may be missing — repair available";
+          repairNote.title = a.repair_reason || "This archive was created by an older adapter.";
+          b.appendChild(repairNote);
+        }
         // `/api/archives` already carried the persisted summary, so only ask
         // for it separately when this archive has none stored yet.
         (a.summary ? Promise.resolve(a.summary)
@@ -6558,6 +6762,45 @@
           openArchiveForUpdate(a.name);
         });
         actions.appendChild(extend);
+        // Save the whole archive as one .zip BESIDE it on disk — archives are
+        // local and can be large, so nothing is streamed through the browser;
+        // it writes <name>.zip next to the archive and reports where.
+        if (!a.is_demo) {
+          const dl = document.createElement("button");
+          dl.type = "button";
+          dl.className = "btn";
+          dl.textContent = "Save as .zip";
+          dl.title =
+            "Write this archive as a single .zip beside it, to keep or move elsewhere " +
+            "(OneDrive, a share, email). It opens straight back in the Reader, read-only.";
+          dl.addEventListener("click", async (event) => {
+            event.stopPropagation();
+            dl.disabled = true;
+            const label = dl.textContent;
+            dl.textContent = "⏳ Zipping…";
+            try {
+              const res = await fetch("/api/archive-zip", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ name: a.name }),
+              });
+              const j = await res.json().catch(() => ({}));
+              if (!res.ok || !j.ok) { notify(j.error || "Could not create the zip.", "Zip failed"); return; }
+              const mb = j.size ? " (" + (j.size / 1048576).toFixed(1) + " MB)" : "";
+              notify(
+                (j.already_zip ? "This archive is already a .zip: " : "Saved beside the archive: ") + j.path + mb,
+                "Zip ready"
+              );
+              loadRecentArchives();  // the new .zip shows up in the list
+            } catch (_) {
+              notify("Could not create the zip.");
+            } finally {
+              dl.disabled = false;
+              dl.textContent = label;
+            }
+          });
+          actions.appendChild(dl);
+        }
         row.appendChild(actions);
         const del = document.createElement("button");
         del.className = "btn danger archive-delete";
@@ -6776,6 +7019,7 @@
       archive_only: !!($("settings-archive-only") || {}).checked,
       pdf_style: currentStyleOverrides(),
       pdf_marks: currentMarkOverrides(),
+      pdf_timeout: parseFloat(($("settings-pdf-timeout") || {}).value) || 120,
     };
   }
 
@@ -6865,6 +7109,10 @@
     }
     const authorInput = $("settings-author-filter");
     if (authorInput && document.activeElement !== authorInput) authorInput.value = s.default_author_filter || "";
+    const pdfTimeoutInput = $("settings-pdf-timeout");
+    if (pdfTimeoutInput && document.activeElement !== pdfTimeoutInput && s.pdf_timeout != null) {
+      pdfTimeoutInput.value = String(s.pdf_timeout);
+    }
 
     const pdfStatusEl = $("set-pdf-status");
     const pdfDetailEl = $("set-pdf-detail");
@@ -7317,8 +7565,29 @@
     });
   }
 
+  // Show which build this is at the sidebar foot. A test build is called out
+  // (colour + "test build" + commit) so it is never mistaken for a release.
+  async function loadVersion() {
+    const el = $("sb-version");
+    const text = $("sb-version-text");
+    if (!el || !text) return;
+    try {
+      const info = await (await fetch("/api/version")).json();
+      text.textContent = info.label || ("v" + (info.version || ""));
+      el.classList.remove("is-test", "is-dev");
+      if (info.channel === "test") el.classList.add("is-test");
+      else if (info.channel === "dev") el.classList.add("is-dev");
+      const bits = [];
+      if (info.commit) bits.push("commit " + info.commit);
+      if (info.ref) bits.push(info.ref);
+      el.title = bits.join(" · ");
+      el.hidden = false;
+    } catch (_) { /* leave the version line hidden if it can't be read */ }
+  }
+
   function boot() {
     initTheme();
+    loadVersion();
     syncDelayFromSettings();
     wireLivePacing();
     setSidebarCollapsed((localStorage.getItem("hcl-export-sidebar") || "0") === "1");

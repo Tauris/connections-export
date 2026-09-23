@@ -8,6 +8,8 @@ capabilities land. Secrets are shown as `***`, never their value.
 from __future__ import annotations
 
 import argparse
+import json
+import re
 import sys
 import webbrowser
 from collections.abc import Callable, Mapping, Sequence
@@ -392,6 +394,12 @@ def _add_crawl_args(parser: argparse.ArgumentParser) -> None:
         "content. Costs about one extra request per item.",
     )
     parser.add_argument(
+        "--repair",
+        action="store_true",
+        help="With --into, re-read the components and author scope recorded in the "
+        "archive, without a date cutoff, to recover content missed by an older release.",
+    )
+    parser.add_argument(
         "--max-entries",
         type=int,
         default=None,
@@ -415,6 +423,41 @@ def _add_crawl_args(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def _legacy_repair_scope(archive_dir: Path) -> tuple[dict[str, list[str]], str | None]:
+    """Recover component IDs from pre-provenance manifest URLs."""
+    selected = {
+        kind: [] for kind in ("wiki", "blog", "ideation_blog", "forum", "files", "rich_content")
+    }
+    community_uuid = None
+    manifest = archive_dir / "manifest.jsonl"
+    if not manifest.is_file():
+        return selected, community_uuid
+    for line in manifest.read_text(encoding="utf-8", errors="replace").splitlines():
+        try:
+            url = json.loads(line).get("url", "")
+        except (TypeError, ValueError):
+            continue
+        split = urlsplit(url)
+        query = parse_qs(split.query)
+        community_uuid = community_uuid or (query.get("communityUuid") or [None])[0]
+        match = re.search(r"/blogs/roller-ui/rendering/feed/([^/]+)/entries/atom", split.path)
+        if match and match.group(1) not in selected["blog"]:
+            selected["blog"].append(match.group(1))
+        match = re.search(r"/blogs/([^/]+)/feed/entrycomments/", split.path)
+        if match and match.group(1) not in selected["blog"]:
+            selected["blog"].append(match.group(1))
+        forum_uuid = (query.get("forumUuid") or [None])[0]
+        if forum_uuid and forum_uuid not in selected["forum"]:
+            selected["forum"].append(forum_uuid)
+        wiki = re.search(r"/api/wiki/([^/]+)/feed", split.path)
+        if wiki and wiki.group(1) not in selected["wiki"]:
+            selected["wiki"].append(wiki.group(1))
+        files = re.search(r"/community/([^/]+)/", split.path)
+        if "/files/" in split.path and files and files.group(1) not in selected["files"]:
+            selected["files"].append(files.group(1))
+    return selected, community_uuid
+
+
 def crawl_main(
     argv: Sequence[str] | None = None,
     *,
@@ -422,6 +465,7 @@ def crawl_main(
     client: HttpClient | None = None,
     archive: Archive | None = None,
     emit: Emit | None = None,
+    stop_event: Any = None,
 ) -> int:
     """Run a real crawl (thin; testable with injected
     deps). `client`/`archive`/`emit` are injected by tests (and could
@@ -464,12 +508,99 @@ def crawl_main(
         print(f"  archive: {result.archive_dir}")
         return 0
 
-    try:
-        selected = _split_components(args.components)
-        from_urls, identity = _targets_from_urls(args.url)
-    except ConfigError as error:
-        print(f"connections-export crawl: {error}", file=sys.stderr)
-        return 2
+    if args.repair:
+        if config.into is None or args.url or args.components:
+            print(
+                "connections-export crawl: --repair requires --into and cannot be combined "
+                "with URLs or --component.",
+                file=sys.stderr,
+            )
+            return 2
+        from connections_export.crawler.provenance import (  # noqa: PLC0415
+            archive_base_url,
+            components_captured,
+            last_successful_run,
+        )
+
+        target = Archive.open(config.into)
+        source_run = last_successful_run(target)
+        captured = components_captured(target)
+        base_url = archive_base_url(target)
+        summary: dict = {}
+        if target.root.is_dir():
+            summary_path = target.root / "archive-summary.json"
+            if summary_path.is_file():
+                try:
+                    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+                except (OSError, ValueError):
+                    summary = {}
+        legacy_selected, legacy_community = _legacy_repair_scope(target.root)
+        if not captured:
+            captured = [
+                {"kind": kind, "id": ident, "action": "capture"}
+                for kind, ids in legacy_selected.items()
+                for ident in ids
+            ]
+        # This repair targets the known blog-comment pagination defect. Do not
+        # re-run unrelated legacy forum/wiki components: one stale 404 there
+        # would mark the whole command as failed and hide comments recovered
+        # successfully from the blog.
+        captured = [
+            component for component in captured if component["kind"] in {"blog", "ideation_blog"}
+        ]
+        if not captured:
+            for group in summary.get("groups", []):
+                if group.get("kind") and group.get("id"):
+                    captured.append({"kind": group["kind"], "id": group["id"], "action": "capture"})
+        base_url = base_url or summary.get("base_url")
+        if not source_run and not legacy_community:
+            legacy_community = (summary.get("communities") or [{}])[0].get("id")
+        if not captured or not base_url:
+            print(
+                "connections-export crawl: cannot repair this archive; its completed "
+                "run provenance does not identify a source and captured components.",
+                file=sys.stderr,
+            )
+            return 2
+        selected = {
+            kind: [] for kind in ("wiki", "blog", "ideation_blog", "forum", "files", "rich_content")
+        }
+        for component in captured:
+            if component["action"] != "skip" and component["id"]:
+                selected[component["kind"]].append(component["id"])
+        from_urls = {}
+        identity = {
+            "base_url": base_url,
+            "auth_root": None,
+            "community_uuid": source_run.community_uuid if source_run else legacy_community,
+            "community_title": source_run.community_title if source_run else None,
+            "single": {},
+        }
+        config = config.model_copy(
+            update={
+                "base_url": base_url,
+                "fetch": "update",
+                "recheck_comments": True,
+                "filter_author": source_run.author_filter if source_run else None,
+            }
+        )
+        plan = plan.__class__(fetch="update", output_dir=plan.output_dir, since=None)
+        print(
+            "connections-export crawl: repairing "
+            + ", ".join(f"{len(ids)} {kind}" for kind, ids in selected.items() if ids)
+            + (
+                f" for author {source_run.author_filter}"
+                if source_run and source_run.author_filter
+                else ""
+            )
+        )
+    else:
+        try:
+            selected = _split_components(args.components)
+            from_urls, identity = _targets_from_urls(args.url)
+        except ConfigError as error:
+            print(f"connections-export crawl: {error}", file=sys.stderr)
+            return 2
     for kind, idents in from_urls.items():
         for ident in idents:
             if ident not in selected[kind]:
@@ -552,6 +683,8 @@ def crawl_main(
         # reporting success. Every test asserted against the plan object, which
         # is how the feature stayed inert and green.
         since=plan.since,
+        repair_comments_only=args.repair,
+        stop_event=stop_event,
     )
 
 
@@ -604,6 +737,8 @@ def _run_selected_crawls(
     author,
     since=None,
     search_userid=None,
+    repair_comments_only=False,
+    stop_event=None,
 ) -> int:
     """Run one crawl per app for whatever was selected, into one archive.
 
@@ -633,6 +768,8 @@ def _run_selected_crawls(
         community_uuid=identity.get("community_uuid") or None,
         community_title=identity.get("community_title") or None,
         search_userid=search_userid,
+        repair_comments_only=repair_comments_only,
+        stop_event=stop_event,
     )
     for result in results:
         _print_crawl_report(result)

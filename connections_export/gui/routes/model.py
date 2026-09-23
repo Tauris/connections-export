@@ -32,6 +32,15 @@ def register(
         # request, from its URL, so there is no server-wide demo to report.
         return {"status": "ok"}
 
+    @app.get("/api/version")
+    def version() -> dict:
+        """The running build's version and provenance, so the console can show
+        which copy this is — and, for a downloadable test build, that it is a
+        test build (with its commit) rather than an official release."""
+        from connections_export.build_info import build_info  # noqa: PLC0415
+
+        return build_info()
+
     @app.get("/api/model")
     def get_model() -> Response:
         """The derived model of the run this server exposes. `503 {"status": "pending"}` until a

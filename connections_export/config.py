@@ -125,6 +125,9 @@ class Config(BaseModel):
     #: contain `{page}`, `{pages}`, `{title}`, `{date}`, `{section}` and literal
     #: text. See `connections_export.pdf.marks`.
     pdf_marks: dict[str, str] = Field(default_factory=dict)
+    #: Maximum seconds the PDF browser/paged-media renderer may wait for a
+    #: document to finish loading and paginating.
+    pdf_timeout: float = 120.0
     #: A stylesheet appended after everything else, including the captured
     #: page's own CSS -- the escape hatch for anything the tokens do not cover.
     pdf_css: Path | None = None

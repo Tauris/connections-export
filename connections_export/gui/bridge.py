@@ -12,14 +12,24 @@ from `tests`, which may not even be installed alongside the package.
 `httpx.ASGITransport` only implements `handle_async_request`; a sync
 `httpx.Client` (what `HttpClient` is built on) requires
 `handle_request`. This wraps the async transport and runs it to
-completion per request via `asyncio.run`, then rebuilds a fully
-buffered, sync-compatible `httpx.Response` -- still entirely
-in-process, no socket, no certificate.
+completion per request, then rebuilds a fully buffered,
+sync-compatible `httpx.Response` -- still entirely in-process, no
+socket, no certificate.
+
+It runs each request on ONE reused event loop per thread, not a fresh
+`asyncio.run` per request. Creating a loop is not free, and on Windows
+it builds a self-pipe with `socket.socketpair()`, whose no-AF_UNIX
+fallback (listen/connect/accept on loopback) can deadlock at `accept()`
+on Python 3.14 -- rarely, but a demo crawl makes thousands of requests,
+so a per-request loop turned "rarely" into "eventually". One loop per
+thread creates that self-pipe once, is thread-safe (each thread has its
+own), and is the shape a sync-over-async bridge should have anyway.
 """
 
 from __future__ import annotations
 
 import asyncio
+import threading
 
 import httpx
 
@@ -27,6 +37,14 @@ import httpx
 class SyncASGIBridge(httpx.BaseTransport):
     def __init__(self, app) -> None:
         self._async_transport = httpx.ASGITransport(app=app)
+        self._local = threading.local()
+
+    def _loop(self) -> asyncio.AbstractEventLoop:
+        loop = getattr(self._local, "loop", None)
+        if loop is None or loop.is_closed():
+            loop = asyncio.new_event_loop()
+            self._local.loop = loop
+        return loop
 
     def handle_request(self, request: httpx.Request) -> httpx.Response:
         async def _do():
@@ -34,5 +52,5 @@ class SyncASGIBridge(httpx.BaseTransport):
             content = await response.aread()
             return content, response.status_code, response.headers
 
-        content, status, headers = asyncio.run(_do())
+        content, status, headers = self._loop().run_until_complete(_do())
         return httpx.Response(status_code=status, headers=headers, content=content, request=request)

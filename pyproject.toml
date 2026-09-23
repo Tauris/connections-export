@@ -1,6 +1,6 @@
 [project]
 name = "connections-export"
-version = "0.1.6"
+version = "0.1.7"
 description = "Lossless, archive-first export of HCL Connections content — wikis, blogs, and forums — to a portable, self-documenting package"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -76,6 +76,11 @@ jekyll = [
 [dependency-groups]
 dev = [
     "pytest>=9.1",
+    # A per-test timeout in CI turns a hang into a named failure with a
+    # traceback, instead of a job that sits until the runner's own limit --
+    # `--timeout-method=thread` because the signal method does not work on
+    # Windows, which is where the hang that motivated this appeared.
+    "pytest-timeout>=2.3",
     "ruff>=0.15",
     "markdownify>=0.13",
     # `just release-check` freezes the CLI into a single-file executable so a

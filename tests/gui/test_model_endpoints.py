@@ -355,3 +355,18 @@ def test_current_user_without_a_deployment_says_so():
 
     assert response.status_code == 503
     assert response.json()["status"] == "no_base_url"
+
+
+# --- /api/version ----------------------------------------------------------
+
+
+def test_api_version_reports_the_running_build():
+    app = make_app(demo=True)
+    response = asyncio.run(_get(app, "/api/version"))
+    assert response.status_code == 200
+    info = response.json()
+    # From a source checkout / test run there is no build stamp, so it is dev;
+    # the shape is what the console reads regardless of channel.
+    assert set(info) >= {"version", "commit", "ref", "channel", "label"}
+    assert info["label"].startswith("v")
+    assert info["channel"] in {"dev", "test", "release"}

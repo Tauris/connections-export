@@ -29,6 +29,7 @@ jobs:
       matrix:
         python: ["3.12", "3.13", "3.14"]
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
@@ -50,7 +51,7 @@ jobs:
           uv run --all-extras ruff check .
           uv run --all-extras ruff format --check .
       - name: Tests
-        run: uv run --all-extras pytest
+        run: uv run --all-extras pytest --timeout=180 --timeout-method=thread
 
   # The expensive half: only before a release, or when asked. macOS bills at
   # 10x and Windows at 2x, so this job costs more than everything else in the
@@ -68,6 +69,9 @@ jobs:
         os: [macos-latest, windows-latest]
         python: ["3.12", "3.13", "3.14"]
     runs-on: ${{ matrix.os }}
+    # A hung test must not hold a runner until GitHub's 6-hour default. The
+    # suite is minutes; this is a wide margin that still bounds a deadlock.
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
@@ -79,4 +83,4 @@ jobs:
           uv run --all-extras ruff check .
           uv run --all-extras ruff format --check .
       - name: Tests
-        run: uv run --all-extras pytest
+        run: uv run --all-extras pytest --timeout=180 --timeout-method=thread

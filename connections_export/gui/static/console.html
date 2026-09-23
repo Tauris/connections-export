@@ -31,6 +31,7 @@
     <div id="sb-run-status" class="sb-status" hidden></div>
     <div class="sb-identity" id="sb-identity" hidden><svg class="icon" aria-hidden="true"><use href="#i-target"/></svg><span id="sb-identity-text">Checking…</span></div>
     <button id="theme-toggle" class="theme-btn" type="button" title="Toggle dark / light / auto theme"><span class="ti-icon" aria-hidden="true"><svg class="icon"><use href="#i-theme"/></svg></span> <span class="sb-label">Auto</span></button>
+    <div class="sb-version" id="sb-version" hidden><span class="sb-label" id="sb-version-text"></span></div>
     <button id="sb-collapse" class="sb-collapse" type="button" title="Collapse sidebar">«</button>
   </nav>
   <main id="app-main">
@@ -79,8 +80,15 @@
   <section class="section-panel" id="panel-archives" hidden>
     <div class="wrap archive-page-wrap">
       <div class="page-heading"><div><h1>Archives</h1><p class="foot-note">Open a captured archive in the Reader, or remove old captures.</p></div><button class="btn danger" id="delete-demo-archives" type="button">Delete all demo archives</button></div>
+      <div class="archive-repair-banner" id="repair-banner" hidden>
+        <span class="repair-banner-icon" aria-hidden="true">&#9888;</span>
+        <span class="repair-banner-msg" id="repair-banner-msg"></span>
+        <button class="btn primary" id="repair-all" type="button">Repair all</button>
+        <button class="btn danger" id="repair-stop" type="button" hidden title="Stop the repair. The archive it is on keeps what it already fetched; the rest are not started.">Stop</button>
+      </div>
       <div class="archive-toolbar" id="archive-toolbar" hidden>
         <button class="btn" id="select-superseded" type="button" title="Select every run that a later attempt at the same target has replaced">Select superseded</button>
+        <button class="btn" id="repair-affected" type="button" disabled>Repair affected</button>
         <button class="btn" id="clear-selection" type="button">Clear selection</button>
         <input type="search" id="archive-filter" placeholder="Filter by name or content…" aria-label="Filter archives" />
         <span class="foot-note" id="selection-summary">Nothing selected.</span>
@@ -90,7 +98,9 @@
         <div class="archive-drop-main">
           <b>An archive from anywhere</b>
           <p class="foot-note">Drop a folder or a <code>.zip</code> here — from your file manager,
-            from OneDrive or SharePoint, or a link to one — and it opens in the Reader. It does not
+            from OneDrive or SharePoint, or a link to one — and it opens in the Reader. A
+            <code>.zip</code> is simply an archive folder compressed: zip a capture to email, move or
+            store it, and open it here directly, read-only, without unpacking. It does not
             have to live in this folder, and nothing is copied when it is already on this machine.</p>
         </div>
         <div class="archive-drop-actions">
@@ -506,6 +516,15 @@
           <button class="btn" id="r-pdf" title="Render this archive to a PDF"><svg class="icon" aria-hidden="true"><use href="#i-download"/></svg> Export PDF</button>
           <button class="btn" id="r-preview" title="Preview the export page by page — watch it render and Stop early if the formatting or content is wrong"><svg class="icon" aria-hidden="true"><use href="#i-eye"/></svg> Preview first</button>
           <button class="btn" id="r-live-pdf" title="Render from the live HCL system via browser.&#10;Works without a prior import — drag a page URL onto this button."><svg class="icon" aria-hidden="true"><use href="#i-globe"/></svg> Live PDF from source</button>
+          <details class="dev-export" id="r-dev-export">
+            <summary>Advanced — developer formats</summary>
+            <p class="dev-export-note">For re-homing the content into a tool you edit yourself. If a PDF is all you need, you can ignore this. Both write a folder of Markdown next to the archive.</p>
+            <p class="dev-export-note"><a href="https://obsidian.md" target="_blank" rel="noopener noreferrer">Obsidian</a> is a local Markdown notes app — the vault opens as a linked, browsable knowledge base. <a href="https://jekyllrb.com" target="_blank" rel="noopener noreferrer">Jekyll</a> builds a static website from Markdown you can publish anywhere.</p>
+            <p class="dev-export-note">Obsidian and Jekyll are independent, third-party applications, not part of this tool. These exporters are provided for convenience only and are not an endorsement; each application is governed by its own licence and terms.</p>
+            <button class="btn" id="r-export-obsidian" title="Write an Obsidian vault (one Markdown note per page/post/topic) beside the archive."><svg class="icon" aria-hidden="true"><use href="#i-layers"/></svg> Export Obsidian vault</button>
+            <button class="btn" id="r-export-jekyll" title="Write a Jekyll site (dated Markdown posts and assets) beside the archive."><svg class="icon" aria-hidden="true"><use href="#i-globe"/></svg> Export Jekyll site</button>
+            <div class="dev-export-result" id="r-dev-export-result" hidden></div>
+          </details>
         </div>
       </details>
     </div>
@@ -588,6 +607,7 @@
           <div class="settings-body">
             <div class="settings-row"><span class="k">Renderer</span><span class="v" id="set-pdf-status">—</span></div>
             <div class="setup-note warn" id="set-pdf-detail" hidden></div>
+            <label class="settings-field">Render timeout (seconds)<input id="settings-pdf-timeout" type="number" min="1" step="5" value="120" /><span class="foot-note">How long the browser may take to lay out and paginate a document before the export gives up. Raise it for a very large PDF, or one with slow images, that times out; lower it if a failing export should fail sooner.</span></label>
             <p class="foot-note">Sizes and colours used when rendering a PDF. Leave a field empty to keep the default shown in it. For anything not listed, <code>connections-export style --dump</code> writes the whole stylesheet out to edit.</p>
             <div class="style-grid" id="style-grid"></div>
             <h3 class="style-subhead">Header and footer</h3>

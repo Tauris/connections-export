@@ -8,6 +8,7 @@ import re
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import parse_qs, urlsplit
 
 from connections_export.archive.source import ArchiveSourceError, source_for
 from connections_export.archive.store import Archive
@@ -141,6 +142,8 @@ class ArchiveInfo:
     target_key: str | None
     display_name: str
     item_count: int
+    repair_needed: bool = False
+    repair_reason: str | None = None
 
 
 #: Source hosts that mark a run as demo data (the fake server's own hosts).
@@ -217,13 +220,15 @@ def model_summary(model, *, captured_at: str | None = None) -> dict:
         }
         for highlights in model.rich_content
     )
-    from connections_export.sbom import OWN_PACKAGE_URL  # noqa: PLC0415
+    from connections_export.sbom import OWN_PACKAGE_URL, OWN_REPO_URL  # noqa: PLC0415
 
     return {
         "status": "ok",
         # The smallest readable file in an archive directory, and so the first
-        # one a stranger opens. It says what will read the rest of it.
+        # one a stranger opens. It says what will read the rest of it -- and
+        # both where to get that tool (PyPI) and where its source lives (repo).
         "generator_url": OWN_PACKAGE_URL,
+        "generator_repo_url": OWN_REPO_URL,
         "base_url": model.base_url,
         "source_version": model.source_version,
         "hcl_hosts": model.hcl_hosts,
@@ -327,6 +332,85 @@ def archive_ledger(archive_dir: Path) -> dict:
         # holds now -- which is the only way to know what is missing.
         "communities": summary.get("communities") or [],
     }
+
+
+def archive_repair_status(archive_dir: Path) -> dict:
+    """Detect whether the latest component run predates a known repair.
+
+    This reads only run metadata. An old blog capture is repairable because
+    the blog adapter version records whether its comment pagination fix was
+    present; no model derivation or network request is needed to list it.
+    """
+    try:
+        source = source_for(archive_dir)
+        runs = []
+        for entry in source.run_metadata():
+            try:
+                from connections_export.archive.records import RunMetadata  # noqa: PLC0415
+
+                runs.append(RunMetadata.model_validate_json(entry.data))
+            except (OSError, ValueError):
+                continue
+
+        # The blog adapter stamps every blog run with its version, so the run
+        # metadata -- not the append-only manifest -- is the authority on
+        # whether the pagination fix was in force. Key off the run, not its
+        # components: a blog run records an empty component list, and the run's
+        # `adapter_version` and completion are what matter. The LATEST blog run
+        # decides, so a completed repair supersedes both the old capture and any
+        # earlier interrupted attempt -- which is why a repaired archive must
+        # stop offering a repair here rather than fall through to the manifest
+        # heuristic below, where the old run's failed page-1 comment requests
+        # live forever and would keep proposing a repair that already ran.
+        def _run_key(run) -> tuple[str, str]:
+            return (getattr(run, "started_at", "") or "", getattr(run, "run_id", "") or "")
+
+        blog_runs = [run for run in runs if run.adapter_version in {"blogs-1", "blogs-2"}]
+        if blog_runs:
+            latest_blog = max(blog_runs, key=_run_key)
+            if latest_blog.adapter_version == "blogs-1":
+                return {
+                    "repair_needed": True,
+                    "repair_reason": "blog comments may be missing from this older capture",
+                }
+            if not latest_blog.completed_at:
+                return {
+                    "repair_needed": True,
+                    "repair_reason": "the previous blog comment repair did not finish",
+                }
+            # The most recent blog run is a completed `blogs-2` capture/repair:
+            # this archive is current. Do not consult the manifest heuristic.
+            return {"repair_needed": False, "repair_reason": None}
+
+        # No blog run metadata at all -- an archive from before run metadata
+        # existed can still be recognized from the append-only request manifest.
+        # This is deliberately conservative: uncertainty becomes an offered
+        # repair, never a claim of completeness. (A repair writes a `blogs-2`
+        # run, so a legacy archive that has been repaired is caught above and
+        # never reaches here.)
+        records = [json.loads(line) for line in source.read_lines("manifest.jsonl") if line.strip()]
+        entry_seen = any(
+            "/blogs/" in record.get("url", "") and "/entries/atom" in record.get("url", "")
+            for record in records
+        )
+        comment_records = [
+            record for record in records if "/entrycomments/" in record.get("url", "")
+        ]
+        page_zero_seen = any(
+            parse_qs(urlsplit(record.get("url", "")).query).get("page") == ["0"]
+            for record in comment_records
+        )
+        comment_failed = any(record.get("outcome") != "ok" for record in comment_records)
+        if entry_seen and (not comment_records or comment_failed or not page_zero_seen):
+            return {
+                "repair_needed": True,
+                "repair_reason": (
+                    "blog comments may be missing or incomplete in this legacy capture"
+                ),
+            }
+    except (ArchiveSourceError, OSError, ValueError):
+        pass
+    return {"repair_needed": False, "repair_reason": None}
 
 
 def write_archive_summary(archive_dir: Path, model) -> None:
@@ -489,6 +573,7 @@ def list_archives(base: Path) -> list[ArchiveInfo]:
                 target_key=archive_target_key(summary),
                 display_name=_display_name_for(child, summary),
                 item_count=_item_count(child),
+                **archive_repair_status(child),
             )
         )
     # Name breaks the tie, because mtime alone does not: two archives written

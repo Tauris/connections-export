@@ -18,6 +18,7 @@ change that seam (out of scope for this change).
 """
 
 import asyncio
+import threading
 
 import httpx
 
@@ -33,13 +34,22 @@ class _SyncASGIBridge(httpx.BaseTransport):
 
     `httpx.ASGITransport` only implements `handle_async_request`; a
     sync `httpx.Client` requires `handle_request`. This wraps the async
-    transport and runs it to completion per-request via `asyncio.run`,
-    which is safe here because each call is independent (no streaming
-    across calls, no shared event loop state).
+    transport and runs it to completion on one reused event loop per
+    thread -- not a fresh `asyncio.run` per request, whose Windows
+    self-pipe (`socket.socketpair()`) can deadlock at `accept()` on
+    Python 3.14 across a crawl's many requests.
     """
 
     def __init__(self, app):
         self._async_transport = httpx.ASGITransport(app=app)
+        self._local = threading.local()
+
+    def _loop(self) -> asyncio.AbstractEventLoop:
+        loop = getattr(self._local, "loop", None)
+        if loop is None or loop.is_closed():
+            loop = asyncio.new_event_loop()
+            self._local.loop = loop
+        return loop
 
     def handle_request(self, request: httpx.Request) -> httpx.Response:
         async def _do():
@@ -47,7 +57,7 @@ class _SyncASGIBridge(httpx.BaseTransport):
             content = await response.aread()
             return content, response.status_code, response.headers
 
-        content, status, headers = asyncio.run(_do())
+        content, status, headers = self._loop().run_until_complete(_do())
         return httpx.Response(status_code=status, headers=headers, content=content, request=request)
 
 

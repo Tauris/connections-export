@@ -68,6 +68,21 @@ jobs:
       # the bundle: the Obsidian ingester imports it lazily, which means a
       # bundle built without it still starts and still passes `--help`.
       # build_binary.py asserts the module is present rather than trusting it.
+      # A test build (from a branch) and a real release (from a v* tag) share
+      # the pyproject version, so the version alone cannot tell them apart. Record
+      # the commit and ref THIS binary was built from as a package data file;
+      # `--collect-data connections_export` carries it into the executable, and
+      # `build_info.build_info()` turns it into the version line the console shows.
+      - name: Stamp the build with its commit and ref
+        shell: bash
+        run: |
+          # github.sha is hex and github.ref is a plain ref path, so neither
+          # needs JSON escaping. bash printf avoids depending on `python` being
+          # on PATH (setup-uv does not guarantee it).
+          printf '{"commit": "%s", "ref": "%s"}\n' "${{ github.sha }}" "${{ github.ref }}" \
+            > connections_export/_build_stamp.json
+          cat connections_export/_build_stamp.json
+
       - name: Build executable
         run: uv run --all-extras --python 3.13 python tools/build_binary.py --dist dist
 

@@ -35,6 +35,7 @@ PERSISTED_KEYS = (
     "default_author_filter",
     "pdf_style",
     "pdf_marks",
+    "pdf_timeout",
     "archive_only",
 )
 

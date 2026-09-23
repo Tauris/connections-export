@@ -54,11 +54,19 @@ from connections_export.http.client import HttpClient
 def _posts_from_changed_comments(changed: list, known_posts: set[str]) -> tuple[set[str], set[str]]:
     """`(posts to refresh, references we could not place)`.
 
-    A comment's `ref` is its IMMEDIATE parent, which for a reply is a sibling
-    comment rather than the entry -- so a ref is not a post id and must never
-    be used as one. The chain always ENDS at a post, though, so it is followed:
-    a parent that also changed is in this same feed, and one that did not is
-    already in the archive under the post that holds it.
+    A comment's `parent_ref` is its IMMEDIATE parent ID: for a top-level comment
+    that is the blog post, for a reply it is a sibling comment. The chain of
+    `parent_ref`s always ends at a post, so it is followed until it reaches one
+    this run knows: a parent that also changed is in this same feed, and one
+    that did not is already in the archive under the post that holds it.
+
+    `parent_source` is NOT part of that chain: it is a FEED URL -- the entries
+    feed for a top-level comment, the post's `entrycomments` feed for a reply --
+    and so does not compare with the post IDs the entries feed returns. It must
+    not outrank the ID chain: as a first target it matches no known post, so
+    every reference falls through unplaced and the crawl re-reads almost every
+    post's comment feed. It is consulted only as a last resort, and only if it
+    happens to name a post already known.
 
     What comes back unplaced is a reference to something this run has not seen,
     which is a thing to go and look for rather than a reason to guess.
@@ -68,18 +76,24 @@ def _posts_from_changed_comments(changed: list, known_posts: set[str]) -> tuple[
     unplaced: set[str] = set()
     for comment in changed:
         seen: set[str] = set()
-        # `source` names the entry outright when the server fills it in.
-        target = comment.parent_source or comment.parent_ref
+        target = comment.parent_ref  # walk IDs, never the feed URL
+        resolved: str | None = None
         while target and target not in seen:
             seen.add(target)
             if target in known_posts:
-                posts.add(target)
+                resolved = target
                 break
             parent = by_id.get(target)
             if parent is None:
-                unplaced.add(target)
-                break
-            target = parent.parent_source or parent.parent_ref
+                break  # the chain left the changed set; look it up below
+            target = parent.parent_ref
+        if resolved is not None:
+            posts.add(resolved)
+        elif comment.parent_source and comment.parent_source in known_posts:
+            # Last resort: only when the source actually names a known post.
+            posts.add(comment.parent_source)
+        elif target:
+            unplaced.add(target)
     return posts, unplaced
 
 
@@ -99,15 +113,18 @@ def _post_holding_comment(
         if not href:
             continue
         # Through `paginate`, not a bare `get_content`: the capture stored
-        # these feeds under their PAGINATED urls (`?ps=…&page=1`), so asking
-        # for the bare href misses every cached record and turns a local
-        # lookup into a request per post -- measured, before this line.
+        # these feeds under their PAGINATED urls (`?ps=…&page=0` -- blog feeds
+        # are 0-indexed), so asking for the bare href, or from page 1, misses
+        # every cached record and turns a local lookup into a request per post
+        # -- measured, before this line. `start_page=0` must match where the
+        # capture wrote them, or this reads nothing back.
         comments = fetcher.paginate(
             href,
             parse_entry_comments_feed,
             "comments",
             discovered_from,
             max_pages=paging.MAX_PAGES,
+            start_page=0,
             policy=CachePolicy.IF_MISSING,
         )
         if comments and any(comment.id == comment_id for comment in comments):
@@ -134,6 +151,24 @@ def _changed_comments(fetcher, session, blogref, since: str) -> list | None:
     if changed is None:
         return None
     return changed
+
+
+def _all_changed_comments(fetcher, session, blogref) -> list | None:
+    """Read the aggregate comments feed as a repair index."""
+    if not blogref.uuid:
+        return None
+    url = blogs_adapter.all_comments_feed_url(base_url=session.base_url, blog_uuid=blogref.uuid)
+    had_issue = fetcher.issues.had_issue
+    changed = fetcher.paginate(
+        url,
+        blogs_adapter.parse_changed_comments,
+        "comments",
+        blogref.self_url,
+        max_pages=paging.MAX_PAGES,
+        start_page=0,
+        policy=CachePolicy.ALWAYS,
+    )
+    return None if fetcher.issues.had_issue and not had_issue else changed
 
 
 def _blogs_entries_since(entries_url: str, since: str) -> str:
@@ -166,6 +201,7 @@ def crawl_blogs(
     entry_ids: list[str] | None = None,
     author: str | None = None,
     stop_event: threading.Event | None = None,
+    repair_comments_only: bool = False,
 ) -> CrawlResult:
     """Crawl one deployment's Blogs into `archive`, mirroring `crawl`:
     list feed -> per blog: entries feed (page-walked) -> per post:
@@ -239,7 +275,11 @@ def crawl_blogs(
     blogs_url = blogs_list_url(base_url=session.base_url, homepage=blogs_homepage)
     # ALWAYS: which blogs exist is exactly what an update needs to re-read.
     # The entries inside them are still filtered by `since`.
-    blogrefs = paginate(blogs_url, parse_blogs_feed, "blog", None, policy=CachePolicy.ALWAYS)
+    blogrefs = (
+        []
+        if blog_uuids is not None
+        else paginate(blogs_url, parse_blogs_feed, "blog", None, policy=CachePolicy.ALWAYS)
+    )
     # Scope to a specific blog / single entry when the URL identified one, so
     # the archive holds only what was imported (mirrors `crawl`'s wiki_labels).
     if blog_uuids is not None:
@@ -299,7 +339,12 @@ def crawl_blogs(
         # `None` means "could not be sure" and every post is re-read, exactly
         # as before: a saved request is never worth a lost conversation. A set
         # -- possibly empty -- means the feed answered and named these posts.
-        changed_comments = _changed_comments(fetcher, session, blogref, since) if since else None
+        if repair_comments_only:
+            changed_comments = _all_changed_comments(fetcher, session, blogref)
+        else:
+            changed_comments = (
+                _changed_comments(fetcher, session, blogref, since) if since else None
+            )
         if since:
             # Ask the server for what changed instead of walking the whole
             # blog. The cutoff goes on in RFC 3339 -- the adapter owns that
@@ -372,6 +417,7 @@ def crawl_blogs(
                         *pairs,
                         *[all_posts[pid] for pid in posts_with_new_comments - reached],
                     ]
+        repair_comment_ids = posts_with_new_comments if repair_comments_only else None
 
         comment_max_pages = (
             max(1, (max_posts + session.config.page_size - 1) // session.config.page_size)
@@ -410,13 +456,14 @@ def crawl_blogs(
                 )
             comment_count = 0
             comments = []
-            if comments_href:
+            if comments_href and (repair_comment_ids is None or post.id in repair_comment_ids):
                 comments = fetcher.paginate(
                     comments_href,
                     parse_entry_comments_feed,
                     "comments",
                     entries_url,
                     max_pages=comment_max_pages,
+                    start_page=0,
                     stop_event=stop_event,
                     # Always, and not because the option says so.
                     #

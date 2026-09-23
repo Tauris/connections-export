@@ -9,6 +9,7 @@
   <a href="#man-move">Moving an archive around</a>
   <a href="#man-communities">Several communities in one archive</a>
   <a href="#man-update">Adding to an archive later</a>
+  <a href="#man-repair">Repairing a blog archive from an older release</a>
   <a href="#man-pacing">Pacing, and running overnight</a>
   <a href="#man-proxy">Proxies</a>
   <a href="#man-cli">The command line</a>
@@ -152,26 +153,33 @@ The sections above summarize the shape reconstruction needs; the full document �
 
 ## <a id="man-export"></a>Export — reconstructing into other tools
 
-A package on its own is just data. Turning it into something usable in another tool is the job of an **ingester**: a small program that reads an interchange package plus a way to fetch its blobs, and writes a target format. One ships today.
+For most people the export they want is the **PDF** — a document to keep, print or send, produced right from the Reader. This section is about something different, and a bit more involved: turning a capture into a **Markdown project you can edit and re-home** into another tool. It is aimed at people who are comfortable with developer tools; if the PDF is all you need, you can happily skip the rest of this section.
 
-### <a id="man-export-obsidian"></a>The Obsidian exporter
+Two such exporters ship today, on an equal footing — **Obsidian** and **Jekyll**. Both read the same capture and write a folder of Markdown next to it; they differ only in what that folder is shaped for.
 
-The Obsidian ingester converts a capture into an Obsidian vault. Every wiki becomes one note per page, with the page hierarchy mirrored as nested folders. Every blog becomes a folder with one note per post, in the blog's own order, comments beneath each. Every forum becomes a folder with one note per topic, its replies laid out beneath it as nested headings so a thread reads as a thread — each reply converted the same way as the topic, images and all, rather than flattened to a line. Links between items inside the export become `[[wikilinks]]` to the target note, whatever kind of item is on either end; other links are kept as-is. Images and attachments are copied out of the capture into the vault's `attachments/` folder and embedded by name (`![[file]]` / `[[file]]`) — an asset that was never captured becomes a visible marker instead of vanishing. YAML frontmatter carries each item's title, author, dates and tags, a `kind` for posts and topics, and its source provenance; a `README.md` at the vault root indexes every wiki, blog and forum.
+- **[Obsidian](https://obsidian.md)** is a free, local Markdown notes app. The export is an Obsidian *vault* — a linked, browsable knowledge base you open and edit on your own machine, with the community's structure and cross-links preserved as `[[wikilinks]]`.
+- **[Jekyll](https://jekyllrb.com)** is a static-site generator: it turns a folder of Markdown into a plain website. The export is a Jekyll *site* you can preview locally and publish anywhere static files are served — [GitHub Pages](https://pages.github.com), for instance.
 
-**The single-file executable has the exporter built in** — nothing to install. Point it at the archive a capture wrote, the directory the console lists under Archives:
+Obsidian and Jekyll are **independent, third-party applications**, not part of this tool and not affiliated with it. These exporters are provided purely for convenience, to write formats those tools can read; providing them is **not an endorsement** of either, and this project makes no claim about them. Each is governed by its own licence and terms — obtain and use it from its own project. The names are the property of their respective owners.
+
+**From the console.** Open an archive in the Reader, then use **Export → “Advanced — developer formats”** and choose **Export Obsidian vault** or **Export Jekyll site**. Each writes a folder beside the archive (`…-obsidian-vault` / `…-jekyll-site`) and tells you exactly where. The advanced section is tucked away on purpose, so the everyday PDF export stays front and centre.
+
+**From the command line**, the same two exporters are one command:
 
 ```
 connections-export ingest --format obsidian --archive PATH/TO/ARCHIVE --output PATH/TO/VAULT
+connections-export ingest --format jekyll   --archive PATH/TO/ARCHIVE --output PATH/TO/SITE
 ```
 
-Installing with `pip` instead, the exporter needs the `obsidian` extra, because it uses `markdownify` to turn bodies into Markdown and a plain install does not carry it:
+`--archive` is an archive directory (the one holding `manifest.jsonl` and `blobs/`) or a `.zip` of one; `--package` takes a package written by `connections-export package` instead. Either flag accepts either kind — the directory says what it is — and `--author` narrows the output to one person's content. Nothing is read from or sent to the source deployment during an export — it only ever touches what is on disk. The single-file executable has both exporters built in; installing with `pip` instead, add the matching extra (it pulls in `markdownify`, which turns bodies into Markdown): `pip install 'connections-export[obsidian]'` or `pip install 'connections-export[jekyll]'`.
 
-```
-pip install 'connections-export[obsidian]'
-connections-export ingest --format obsidian --archive PATH/TO/ARCHIVE --output PATH/TO/VAULT
-```
+### <a id="man-export-obsidian"></a>Obsidian — a linked vault
 
-`--format jekyll` writes a Jekyll site fragment instead — dated files under `_posts/`, images under `assets/images/imported/` — ready to drop into a GitHub Pages site whose `_config.yml` and layouts you own. `--archive` is an archive directory (the one holding `manifest.jsonl` and `blobs/`) or a `.zip` of one; `--package` takes a package written by `connections-export package` instead. Either flag accepts either kind — the directory says what it is — and `--author` narrows the vault to one person's content. Nothing is read from or sent to the source deployment during ingest — it only ever touches what is on disk.
+The Obsidian exporter converts a capture into a vault. Every wiki becomes one note per page, with the page hierarchy mirrored as nested folders. Every blog becomes a folder with one note per post, in the blog's own order, comments beneath each. Every forum becomes a folder with one note per topic, its replies laid out beneath it as nested headings so a thread reads as a thread — each reply converted the same way as the topic, images and all, rather than flattened to a line. Links between items inside the export become `[[wikilinks]]` to the target note, whatever kind of item is on either end; other links are kept as-is. Images and attachments are copied out of the capture into the vault's `attachments/` folder and embedded by name (`![[file]]` / `[[file]]`) — an asset that was never captured becomes a visible marker instead of vanishing. YAML frontmatter carries each item's title, author, dates and tags, a `kind` for posts and topics, and its source provenance; a `README.md` at the vault root indexes every wiki, blog and forum. Open the folder in Obsidian as a vault and the whole community is there to browse.
+
+### <a id="man-export-jekyll"></a>Jekyll — a publishable site
+
+The Jekyll exporter writes a site fragment: dated Markdown files under `_posts/`, with images under `assets/images/imported/`, ready to drop into a Jekyll site whose `_config.yml` and layouts you own. It is the shape a static-site generator expects, so `jekyll serve` previews it locally and a push to a [GitHub Pages](https://pages.github.com) repository publishes it. It is the right choice when the goal is a public, browsable website rather than a private notebook — the same captured content, aimed at a different destination.
 
 ### <a id="man-export-new"></a>Building a new exporter
 
@@ -247,15 +255,17 @@ Only archives are treated this way: a dropped Connections URL still starts a cap
 
 An archive is a directory of many small files. That is the right shape to write — each item lands as it is captured, and a run that stops halfway leaves everything up to that point readable — and an awkward shape to move. File sync (SharePoint, OneDrive) handles thousands of small files worst of all, and a copy that silently drops some of them is the failure mode an archive can least afford.
 
-So an archive is read from a **`.zip` directly, without unpacking it**. Zip the archive folder, put the zip wherever your archives live, and it appears in the console's archive list like any other — or point a command at it:
+So an archive is also read from a **`.zip` directly, without unpacking it**. To make one, use **Save as .zip** beside any archive on the Archives screen: the console writes `<name>.zip` next to the archive folder — on your own disk, nothing sent through the browser, so it works for archives of any size — and tells you where. (You can still zip the folder yourself if you prefer.) The `.zip` appears in the console's archive list like any other; move it wherever you like (a share, OneDrive, an email, a USB stick), or point a command at it:
 
 ```
 connections-export open my-export.zip
 ```
 
-Both zip layouts work: the archive's files at the top of the zip, and the archive nested under one folder, which is what Windows' "Send to → Compressed folder" produces. You do not have to know which one you have.
+Both zip layouts work: the archive's files at the top of the zip, and the archive nested under one folder — which is what Windows' "Send to → Compressed folder" and the **Save as .zip** button both produce. You do not have to know which one you have.
 
-A zipped archive is **read-only**. It browses and it exports to PDF; "Extend & update" refuses in words rather than appearing to run and landing nowhere. Unpack it to add to it.
+**A directory is read/write; a `.zip` is read-only.** Both browse identically in the Reader, and both export to PDF, Obsidian and Jekyll. The one difference is that a directory can be _extended_: "Extend & update" can add a component it never captured, or bring it up to date, because it writes back into the folder. A `.zip` cannot be written into, so "Extend & update" refuses in words rather than appearing to run and landing nowhere — unpack it to a folder to add to it. So keep the working copy as a directory, and make a `.zip` when you want to store or send a finished snapshot.
+
+**Reading a `.zip` in place is efficient** when the file is actually on the machine: the console reads it by random access — the two small index files when it opens, then images only as you view the pages that use them — so it never unpacks the whole thing or loads it into memory. Two cases are slower and worth knowing. An **online-only cloud file** (OneDrive "Files On-Demand") is downloaded in full by the operating system the first time any byte is read; a **live network share** turns each of those random reads into a network round-trip. For either, a large archive is quicker if you let it download once — copy it to a local disk, or open it from a link, which fetches it a single time — rather than reading it repeatedly over the wire. A `.zip` that is synced and available offline is just a local file, and none of this applies.
 
 ## <a id="man-communities"></a>Several communities in one archive
 
@@ -321,6 +331,22 @@ Asking a system “what changed since Tuesday” returns the items that _changed
 - **Blogs and Ideas** — a comment moves neither the post nor the dated feed, so each blog is asked which _comments_ changed as well. An update sees it; there is nothing to switch on.
 
 **“Also re-check comments and replies”** re-reads comments for every item whether or not the item looks changed. Nothing above needs it — it is there for a deployment that behaves differently, and it costs roughly one extra request per item, which on a large wiki is thousands. It is wikis and forums it covers; a blog is asked its separate question either way.
+
+### <a id="man-repair"></a>Repairing a blog archive from an older release
+
+A release before this one read blog **comments** starting from the second page of each comment feed, because it assumed those feeds were numbered from 1. HCL numbers them from 0, so any comments on the first page were missed — silently, with no error. Blog **posts** were unaffected; only their comments, and only on blogs, were short.
+
+**You do not need to recapture anything.** If any archive was captured with an older release, the console tells you the moment you open **Archives**: a banner across the top says how many archives may be missing blog comments and offers a single **Repair all** button. You do not have to find the affected archives or confirm a count — one click repairs exactly the ones that need it. The same banner then becomes a live status line: “Repairing archive X of N — recovered K comments so far…”, and when it is done it reports how many previously-missing comments were recovered and that **every archive is now up to date**. Repair re-reads only the comment feeds — from page 0 this time — into the archives you already have. It adds the missing comments and touches nothing else; posts, images, other components and every other archive are left exactly as they were, and it is safe to run again. A **Stop** button beside it halts a repair that is taking too long: the archive it is on keeps what it already fetched, the remaining archives are simply not started, and running Repair again picks up the rest.
+
+From the command line the same repair is:
+
+```
+connections-export crawl --repair --into PATH\TO\ARCHIVE
+```
+
+`--repair` needs `--into` and takes nothing else — no URL, no `--component`. What to re-read is taken from the archive’s own record of what it captured and for whom, so it repairs precisely the blogs (and author scope) that are in it, against the same deployment, with no date cutoff. It is safe to run more than once.
+
+**How the archive is recognised as needing repair.** A capture records which version of each component reader produced it; a blog captured before the fix is marked with the older reader and is what the offer keys off. An older archive from before that record existed is recognised instead from its own request log — a blog whose comment feeds were never read from page 0 — so the offer is made whenever completeness cannot be confirmed, and never withheld on a guess. An archive captured by this release or later is never flagged, because its comments are already complete.
 
 ## <a id="man-pacing"></a>Pacing, and running overnight
 
@@ -411,7 +437,7 @@ These need no deployment: they work from an archive or a package.
 | `pdf --archive DIR`<br>`pdf --package DIR` | Render it. `--output` names the file. |
 | `pdf --fidelity` | Render through the original system’s own stylesheets instead of the portable ones. Needs the deployment. |
 | `pdf --css FILE` | Your own stylesheet, appended after the captured pages’ own CSS so it wins. |
-| `ingest --archive DIR --output DIR` | Write an Obsidian vault from a capture. `--package` takes a package instead; `--format` selects the target. |
+| `ingest --archive DIR --output DIR` | Reconstruct a capture into a developer format: `--format obsidian` writes an Obsidian vault, `--format jekyll` a Jekyll site. `--package` takes a package instead of an archive. |
 | `package --archive DIR --output DIR` | Write the portable interchange package for a capture — for an ingester of your own, or to hand to someone who has never seen this tool. |
 | `style --dump` | Write the whole stylesheet out to edit. `--marks` lists the header and footer settings. |
 
@@ -434,6 +460,8 @@ toc_title_size = "18pt"
 `connections-export style --tokens` lists every name.
 
 The quickest way to try one is **Settings → PDF appearance**: change a value, press Preview, and a real two-page sample is rendered with it. Each field shows its default, so an empty one means unchanged.
+
+The same card has a **Render timeout (seconds)** — how long the browser may take to lay out and paginate a document before an export gives up (120 seconds by default). Raise it for a very large PDF, or one with slow-loading images, that would otherwise time out; lower it if you would rather a failing export failed sooner. When an export does hit the limit, the console says so and writes a `pdf-failure-*.md` report naming what did not finish, rather than failing silently.
 
 For anything the tokens do not cover, do not guess at class names — have the program write its own stylesheet out, edit that, and pass it back:
 

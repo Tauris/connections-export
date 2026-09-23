@@ -95,6 +95,12 @@ def _generator_url() -> str:
     return OWN_PACKAGE_URL
 
 
+def _generator_repo_url() -> str:
+    from connections_export.sbom import OWN_REPO_URL  # noqa: PLC0415
+
+    return OWN_REPO_URL
+
+
 class RunMetadata(BaseModel):
     """One `run-<run_id>.json` file: provenance for a single crawl run.
 
@@ -165,3 +171,7 @@ class RunMetadata(BaseModel):
     generator: str = Field(default_factory=lambda: _generator())
     generator_version: str = Field(default_factory=lambda: _generator_version())
     generator_url: str = Field(default_factory=lambda: _generator_url())
+    #: The source repository, next to the PyPI URL: where to read the code, file
+    #: an issue, or find the tool if it ever leaves PyPI. Defaulted like the
+    #: others so an older record with no such key still validates.
+    generator_repo_url: str = Field(default_factory=lambda: _generator_repo_url())

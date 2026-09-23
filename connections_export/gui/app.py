@@ -68,6 +68,7 @@ from connections_export.gui.requests import (  # noqa: F401 (public at this addr
     _StylePreviewRequest,
 )
 from connections_export.gui.routes import archives as routes_archives
+from connections_export.gui.routes import ingest as routes_ingest
 from connections_export.gui.routes import lookup as routes_lookup
 from connections_export.gui.routes import model as routes_model
 from connections_export.gui.routes import pdf as routes_pdf
@@ -185,6 +186,7 @@ def make_app(
         "min_interval": 1.0,
         "pdf_style": {},
         "pdf_marks": {},
+        "pdf_timeout": 120.0,
         "archive_only": False,
         "default_author_filter": author_filter,
     }
@@ -233,6 +235,7 @@ def make_app(
     routes_archives.register(app, **_route_kwargs)
     routes_settings.register(app, **_route_kwargs)
     routes_pdf.register(app, **_route_kwargs)
+    routes_ingest.register(app, **_route_kwargs)
     routes_static.register(app, **_route_kwargs)
     routes_run.register(app, **_route_kwargs)
 

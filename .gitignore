@@ -27,3 +27,4 @@ connections-export.toml
 # hcl-serve's default run-archive location when run from the repo root
 # (CONNECTIONS_EXPORT_ARCHIVES_DIR unset) — dev/testing archives, never commit.
 /connections-export-archives/
+connections_export/_build_stamp.json

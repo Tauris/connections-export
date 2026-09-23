@@ -3,12 +3,84 @@
 from __future__ import annotations
 
 import datetime
+import traceback
+from pathlib import Path
 from typing import Annotated, Any
 
 from fastapi import Query
 from fastapi.responses import JSONResponse, Response
 
 from connections_export.config import load_config
+
+
+def _write_pdf_failure_report(
+    *,
+    app,
+    model,
+    fidelity: str,
+    scope: str,
+    kind: str | None,
+    item_id: str | None,
+    timeout: float,
+    exc: Exception,
+) -> Path | None:
+    """Write a durable Markdown report for a failed PDF render."""
+    root = app.state.model_source.package_root()
+    report_dir = root if root is not None and root.is_dir() else Path.cwd() / "pdf-failure-reports"
+    try:
+        report_dir.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.datetime.now(datetime.UTC).strftime("%Y%m%dT%H%M%SZ")
+        path = report_dir / f"pdf-failure-{stamp}.md"
+        failures = list(dict.fromkeys(getattr(exc, "failures", []) or []))
+        links: list[str] = []
+
+        def collect(value) -> None:
+            if isinstance(value, dict):
+                for key, child in value.items():
+                    if key in {"source_url", "alternate_url", "url"} and isinstance(child, str):
+                        links.append(child)
+                    collect(child)
+            elif isinstance(value, list):
+                for child in value:
+                    collect(child)
+
+        collect(model.model_dump(mode="json"))
+        links = list(dict.fromkeys(link for link in links if link))
+        lines = [
+            "# PDF export failure",
+            "",
+            f"- Time (UTC): `{stamp}`",
+            f"- Renderer fidelity: `{fidelity}`",
+            f"- Scope: `{scope}`",
+            f"- Kind: `{kind or ''}`",
+            f"- Item ID: `{item_id or ''}`",
+            f"- Archive/package: `{root or ''}`",
+            f"- Exception: `{type(exc).__name__}`",
+            f"- Maximum wait: `{timeout:g} seconds`",
+            "",
+            "## Error",
+            "",
+            "```text",
+            str(exc) or "(no exception message)",
+            "```",
+            "",
+            "## Failed browser resources",
+            "",
+        ]
+        if failures:
+            lines.extend(f"- {failure}" for failure in failures)
+        else:
+            lines.append("- No individual browser resource failure was captured.")
+        lines.extend(["", "## Source links in the rendered model", ""])
+        if links:
+            lines.extend(f"- <{link}>" for link in links[:500])
+        else:
+            lines.append("- No source links were present in the rendered model.")
+        lines.extend(["", "## Traceback", "", "```text", traceback.format_exc(), "```", ""])
+        path.write_text("\n".join(lines), encoding="utf-8")
+        return path
+    except (OSError, TypeError, ValueError):
+        return None
 
 
 def register(
@@ -162,12 +234,41 @@ def register(
                 )
 
                 renderer = render_pdf_paged if PAGED_AVAILABLE else render_pdf
+                if renderer is render_pdf_paged:
+                    render_kwargs["pdf_timeout"] = float(
+                        app.state.editable_settings.get("pdf_timeout", 120.0)
+                    )
 
         def blob_bytes(digest: str) -> bytes | None:
             result = app.state.model_source.get_blob(digest)
             return result[0] if result is not None else None
 
-        pdf = renderer(model, blob_bytes, **render_kwargs)
+        try:
+            pdf = renderer(model, blob_bytes, **render_kwargs)
+        except Exception as exc:  # noqa: BLE001 - convert renderer failures to a useful API error
+            error_type = type(exc).__name__
+            detail = f"PDF rendering failed ({error_type}) using {fidelity} fidelity."
+            if error_type == "TimeoutError":
+                detail += (
+                    " The browser did not finish loading or paginating the document within "
+                    "the renderer timeout; check the server log for the blocked resource."
+                )
+            else:
+                detail += f" {exc}" if str(exc) else " Check the server log for the full traceback."
+            report = _write_pdf_failure_report(
+                app=app,
+                model=model,
+                fidelity=fidelity,
+                scope=scope,
+                kind=kind,
+                item_id=id,
+                timeout=float(app.state.editable_settings.get("pdf_timeout", 120.0)),
+                exc=exc,
+            )
+            if report is not None:
+                detail += f" Failure report: {report}"
+            print(f"connections-export: {detail}", flush=True)
+            return JSONResponse({"status": "pdf_error", "detail": detail}, status_code=500)
         return Response(
             content=pdf,
             media_type="application/pdf",

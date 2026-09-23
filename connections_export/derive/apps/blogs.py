@@ -103,9 +103,19 @@ def _assemble_blog_post(
     comments_items: list = []
     if comments_href:
         comments_items = index.paginate(
-            comments_href, parse_entry_comments_feed, page_size=page_size
+            comments_href, parse_entry_comments_feed, page_size=page_size, start_page=0
         )
-        note = _feed_note(index, "comments", comments_href, page_size=page_size)
+        legacy_comment_pages = False
+        if not comments_items:
+            comments_items = index.paginate(
+                comments_href, parse_entry_comments_feed, page_size=page_size, start_page=1
+            )
+            legacy_comment_pages = bool(comments_items)
+        note = (
+            None
+            if legacy_comment_pages
+            else _feed_note(index, "comments", comments_href, page_size=page_size)
+        )
         if note:
             notes.append(note)
 

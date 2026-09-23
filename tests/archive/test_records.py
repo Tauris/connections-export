@@ -137,6 +137,7 @@ def test_run_metadata_has_stable_field_order_and_schema_version():
         "generator",
         "generator_version",
         "generator_url",
+        "generator_repo_url",
     ]
     assert run.schema_version == 1
 

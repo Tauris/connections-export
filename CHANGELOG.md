@@ -5,6 +5,132 @@ Notable changes to `connections-export`, newest first. Versions follow
 the archive format may still change between minor versions — the format's own
 version is recorded inside every archive.
 
+## 0.1.7 — 2026-09-23
+
+### Storing and sharing an archive
+
+- **Save an archive as a single `.zip`, from the console.** Each archive on the
+  Archives screen has a **Save as .zip** action: because archives are local and
+  can be large, it writes `<name>.zip` beside the archive on your own disk
+  (nothing is streamed through the browser) and tells you where. The `.zip`
+  opens straight back in the Reader, read-only, and can be moved to OneDrive, a
+  share, or an email.
+- **The manual now explains** zipping an archive to move it, the read/write vs.
+  read-only difference between a directory and a `.zip`, and how efficiently a
+  `.zip` reads from local disk versus an online-only cloud file or a network
+  share.
+- **Each archive records the source repository** (GitHub) alongside the PyPI
+  URL it already carried, so whoever is handed one can find both the tool and
+  its code.
+
+### The build you are running is now visible
+
+- **The console shows its version at the sidebar foot.** A real release reads
+  "v0.1.7"; a downloadable **test build reads "v0.1.7 · test build · <commit>"**
+  in a called-out colour, so a test build can never be mistaken for an official
+  release; a source checkout reads "v0.1.7 · dev". The commit and git ref are
+  stamped into the executable at build time.
+
+### Clearer, honest repair progress
+
+- **The aggregate comment index now actually narrows the repair.** It resolves
+  which posts a change touched by walking the parent-comment ID chain, instead
+  of a feed URL that matched no post — which had made it fall back to re-reading
+  almost every post's comment feed (thousands of requests on a large blog). A
+  repair now fetches only the affected posts' feeds.
+- **A repair can be stopped.** A **Stop** button halts a run that is going awry
+  (too slow, too many feeds): the archive it is on keeps what it already
+  fetched, the rest are not started, and running Repair again finishes them.
+
+- **Repair progress is reported as separate dimensions**, not one blended
+  number that could confusingly exceed the post count. The status line now
+  shows aggregate index pages, per-post comment feeds, and unique posts done of
+  total — each counted for the current run from its own events, never from the
+  cumulative request log of past attempts.
+- **The effective pacing is shown**, so it is obvious when a run launched away
+  from its config file is pacing at the 1-second default rather than a faster
+  configured interval.
+- **Each repair leaves a `repair-report.json`** in the archive — run time,
+  index pages read, posts done, feeds fetched, comments recovered, pacing —
+  so a finished or interrupted repair is understandable after a reload.
+- An interrupted (never-completed) blog repair stays offered for retry, with
+  the reason that the previous repair did not finish.
+- **A repaired archive stops offering a repair.** Whether an archive needs
+  repair is now decided from its latest blog run — a completed capture with the
+  fixed adapter means done — rather than from the append-only request log, in
+  which the original capture's failed first-page requests lived forever and
+  kept proposing a repair that had already run.
+
+### PDF export
+
+- **The PDF render timeout is configurable.** Settings → PDF appearance gains a
+  **Render timeout (seconds)** field (120 by default): raise it for a large or
+  slow-loading document that was timing out, lower it to fail sooner. When an
+  export does hit the limit, the console reports it and writes a
+  `pdf-failure-*.md` report naming the resource that did not finish, instead of
+  failing silently.
+
+### Exporting to Obsidian and Jekyll
+
+- **Both developer exporters are now reachable from the console, and on equal
+  footing.** The Reader's Export menu gains an "Advanced — developer formats"
+  section offering **Export Obsidian vault** and **Export Jekyll site** — the
+  same two exporters the CLI has always had. Each writes a folder beside the
+  archive and reports where. It sits behind a disclosure on purpose: PDF stays
+  the everyday export, so casual users see no new clutter.
+- **The manual now introduces Obsidian and Jekyll side by side**, with a
+  sentence on what each is and a link to its website, framed for people who
+  want to re-home content into a tool they edit — while making clear the PDF is
+  all most people need.
+- **Both the manual and the console state plainly** that Obsidian and Jekyll are
+  independent, third-party applications: the exporters are a convenience, not an
+  endorsement, and each application is governed by its own licence and terms.
+
+### Blog comments
+
+- **Blog comments are captured in full.** Comment feeds are numbered from
+  page 0, like blog entry feeds, but the crawl read them from page 1 — so any
+  comments on the first page were silently missed. Every new capture now reads
+  them from page 0. Blog posts were unaffected; only their comments.
+- **A repaired archive now shows the comments it recovered.** Reading an
+  archive back (derive/replay) also defaulted to page 1 for blog comments, so
+  an archive could hold the page-0 comment responses and still display zero.
+  Derivation now reads comments from page 0, falling back to page 1 only for
+  older archives whose comments genuinely sit there. This was the reason an
+  early repair could report "recovered 0" though the responses were present.
+- **Older blog archives can be repaired in place, without recapturing.** When
+  any archive may be missing first-page comments, a banner appears at the top
+  of Archives with a single **Repair all** button. It doubles as a live status
+  line — "Repairing archive X of N — recovered K comments so far…" — and
+  finishes with how many previously-missing comments were recovered and that
+  every archive is now up to date. Repair re-reads only the comment feeds into
+  the archives you already have; it recaptures nothing, is safe to run again,
+  and no longer asks you to type a count. From the command line:
+  `connections-export crawl --repair --into <archive>`, which needs only the
+  archive and takes what to re-read from its own recorded provenance. An
+  archive from before that provenance existed is recognised from its request
+  log, so the offer is made whenever completeness cannot be confirmed and
+  never withheld on a guess. See the manual's "Repairing a blog archive from
+  an older release."
+- **Repair works on old archives that predate run provenance.** The earliest
+  archives recorded only a source URL and adapter version — no completed-run
+  provenance — so repair could flag them but not reconstruct what to re-crawl.
+  It now falls back to `archive-summary.json` and the component IDs in
+  `manifest.jsonl`, so a legacy archive can be repaired from what it already
+  contains.
+- **A repair no longer fails because of an unrelated component.** Repair used
+  to re-crawl every component the archive captured, so one stale 404 in a
+  forum or wiki marked the whole run failed and suppressed the blog comments it
+  had just recovered — the archive would report "recovered 0" though the
+  comments were there. Repair now targets only blog components (the defect it
+  exists for), and the recovered count is reported even when something else in
+  the run did not come back cleanly.
+- **Repair is faster and shows its progress.** On a large blog, re-reading
+  every post's comment feed was slow and gave little sense of what was
+  happening. Repair now reads the blog's aggregate comments feed once, as an
+  index of which posts actually hold comments, and re-fetches only those — and
+  the console shows posts done, total, and comments recovered as it goes.
+
 ## 0.1.6 — 2026-09-21
 
 ### Capturing and exporting a community

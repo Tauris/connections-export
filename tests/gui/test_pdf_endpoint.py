@@ -47,6 +47,30 @@ def test_pdf_endpoint_returns_a_pdf_download(tmp_path):
     assert seen["wikis"], "the endpoint should pass the real derived model to the renderer"
 
 
+def test_pdf_endpoint_reports_renderer_failure(tmp_path):
+    archive_dir = tmp_path / "archive"
+    run_demo((lambda _e: None), archive_dir=archive_dir, delay=0)
+
+    def failing_renderer(model, blob_bytes, **kwargs):
+        raise TimeoutError("renderer timed out")
+
+    app = make_app(demo=True, archive_dir=archive_dir, pdf_renderer=failing_renderer)
+
+    async def _do():
+        async with _client(app) as client:
+            return await client.get("/api/pdf")
+
+    response = _run(_do())
+    assert response.status_code == 500
+    assert response.json()["status"] == "pdf_error"
+    assert "did not finish loading or paginating" in response.json()["detail"]
+    reports = list(archive_dir.glob("pdf-failure-*.md"))
+    assert len(reports) == 1
+    report = reports[0].read_text(encoding="utf-8")
+    assert "# PDF export failure" in report
+    assert "## Traceback" in report
+
+
 def test_pdf_endpoint_scopes_to_a_single_unit(tmp_path):
     archive_dir = tmp_path / "archive"
     run_demo((lambda _e: None), archive_dir=archive_dir, delay=0)

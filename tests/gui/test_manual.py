@@ -18,7 +18,7 @@ MANUAL = HTML[HTML.index('id="man-intro"') : HTML.index('id="panel-settings"')]
 def test_the_executable_has_the_obsidian_exporter_built_in():
     """It bundles markdownify and bs4, so the `pip install...[obsidian]` line
     is advice for one of the two ways people get the tool."""
-    assert "executable has the exporter built in" in MANUAL
+    assert "executable has both exporters built in" in MANUAL
     assert "connections-export[obsidian]" in MANUAL  # still right for pip
 
 

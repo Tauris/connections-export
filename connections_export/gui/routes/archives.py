@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
+import os
 import shutil
 import tempfile
+import threading
 import zipfile
 from pathlib import Path
 from urllib.parse import unquote, urlparse
@@ -30,7 +33,9 @@ from connections_export.gui.requests import (
     _ArchiveDeleteRequest,
     _ArchiveLabelRequest,
     _ArchivesDirRequest,
+    _ArchiveZipRequest,
     _BulkDeleteRequest,
+    _BulkRepairRequest,
     _OpenArchiveRequest,
     _OpenExternalRequest,
     _SelectedDeleteRequest,
@@ -72,6 +77,24 @@ def _fetch_url(url: str, *, timeout: float = 120.0) -> bytes:
     response = httpx.get(url, timeout=timeout, follow_redirects=True)
     response.raise_for_status()
     return response.content
+
+
+def _blog_comment_count(archive_dir) -> int | None:
+    """How many blog comments an archive holds, or None if it can't be read.
+
+    Used to measure a repair: the count before and after, so the console can
+    say how many were recovered rather than only that it ran. Best-effort --
+    a repair that succeeds is not undone by an unreadable count.
+    """
+    try:
+        from connections_export.gui.model_source import ModelSource  # noqa: PLC0415
+
+        model = ModelSource.from_archive(archive_dir).get_model()
+        if model is None:
+            return None
+        return sum(len(post.comments) for blog in model.blogs for post in blog.posts.values())
+    except Exception:  # noqa: BLE001 - a count is a courtesy, never the operation
+        return None
 
 
 def register(
@@ -117,6 +140,8 @@ def register(
                         "mtime": a.mtime,
                         "display_name": a.display_name,
                         "item_count": a.item_count,
+                        "repair_needed": a.repair_needed,
+                        "repair_reason": a.repair_reason,
                         "summary": read_archive_summary(a.path),
                     }
                     for a in infos
@@ -124,6 +149,201 @@ def register(
                 "archives_dir": str(support.ARCHIVES_BASE),
             }
         )
+
+    @app.get("/api/repair-status")
+    def repair_status() -> JSONResponse:
+        """How a running or just-finished repair is going -- so the console
+        can show progress and, at the end, how many comments were recovered
+        and that every archive is now up to date, rather than a bare
+        "started"."""
+        job = getattr(_app.state, "repair_job", None)
+        if job is None:
+            return JSONResponse({"state": "idle"})
+        return JSONResponse(job)
+
+    @app.post("/api/repair-stop")
+    def repair_stop() -> JSONResponse:
+        """Stop a running repair -- for when it goes awry (too slow, too many
+        feeds). It finishes the archive it is on, so what that one already
+        fetched is kept, and does not start the remaining archives."""
+        event = getattr(_app.state, "repair_stop_event", None)
+        if event is None or not getattr(_app.state, "repair_in_progress", False):
+            return JSONResponse({"stopped": False, "detail": "no repair is running"})
+        event.set()
+        job = getattr(_app.state, "repair_job", None)
+        if job is not None:
+            job["stage"] = "stopping…"
+        return JSONResponse({"stopped": True})
+
+    @app.post("/api/repair-archives")
+    def repair_archives(body: _BulkRepairRequest) -> JSONResponse:
+        """Repair every affected archive, measuring what each one recovered.
+
+        Names are taken as the selection, but each is re-checked against the
+        server's own list -- so "repair all" is exactly the archives that
+        actually need it, whatever the page showed.
+        """
+        names = list(dict.fromkeys(body.names or []))
+        if not names or body.confirmation != str(len(names)):
+            return JSONResponse(
+                {"error": "the archive selection confirmation is invalid"}, status_code=422
+            )
+        if getattr(_app.state, "repair_in_progress", False):
+            return JSONResponse(
+                {"error": "another archive repair is already running"}, status_code=409
+            )
+        infos = {info.name: info for info in list_archives(support.ARCHIVES_BASE)}
+        targets = []
+        for name in names:
+            info = infos.get(name)
+            if info is None or not info.repair_needed:
+                return JSONResponse(
+                    {"error": f"{name} is not detected as needing repair"}, status_code=422
+                )
+            if not writable_archive(info.path):
+                return JSONResponse({"error": f"{name} is read-only"}, status_code=422)
+            targets.append((name, info.path))
+
+        _app.state.repair_job = {
+            "state": "running",
+            "total": len(targets),
+            "done": 0,
+            "comments_restored": 0,
+            "current": targets[0][0] if targets else None,
+            "stage": "starting",
+            # Progress dimensions kept SEPARATE (hand-over #3): aggregate index
+            # pages and per-post comment feeds are different work and must not be
+            # summed into one counter, and posts are counted for THIS run from
+            # its own events -- never from the cumulative manifest.
+            "posts_total": 0,  # blog posts in the archive (the upper bound)
+            "posts_done": 0,  # posts re-derived this run (unique, event-counted)
+            "aggregate_pages": 0,  # aggregate comment-index pages read this run
+            "post_feeds_done": 0,  # per-post comment feeds fetched this run
+            "comments_recovered": 0,  # comments seen on the current archive
+            "min_interval": None,  # effective pacing, and where it came from
+            "config_source": None,
+            "stopped": False,  # set true when the user stops it early
+            "results": [],
+        }
+        # A fresh stop signal for this repair, settable by POST /api/repair-stop.
+        # Threaded through crawl_main so a run that goes awry can be halted.
+        _app.state.repair_stop_event = threading.Event()
+
+        def run_repairs() -> None:
+            job = _app.state.repair_job
+            stop_event = _app.state.repair_stop_event
+            try:
+                import json  # noqa: PLC0415
+                from datetime import UTC, datetime  # noqa: PLC0415
+
+                from connections_export.cli import crawl_main  # noqa: PLC0415
+                from connections_export.config import (  # noqa: PLC0415
+                    discover_config_file,
+                    load_config,
+                )
+                from connections_export.crawler import events as crawler_events  # noqa: PLC0415
+
+                # Pacing visibility (hand-over #3 §4): a repair fetches many
+                # feeds, and when the executable is launched away from the repo
+                # it finds no `connections-export.toml` and paces at the 1s
+                # default. Surface the effective interval and where it came from.
+                try:
+                    cfg = load_config({}, env=os.environ)
+                    src = discover_config_file(env=os.environ)
+                    job["min_interval"] = cfg.min_interval
+                    job["config_source"] = str(src) if src else "built-in defaults"
+                except Exception:  # noqa: BLE001 - pacing info is a courtesy
+                    pass
+
+                for name, target in targets:
+                    job["current"] = name
+                    summary = read_archive_summary(target) or {}
+                    job["stage"] = "counting before repair"
+                    job["posts_done"] = 0
+                    job["posts_total"] = sum(
+                        int(group.get("count") or 0)
+                        for group in summary.get("groups", [])
+                        if group.get("kind") in {"blog", "ideation_blog"}
+                    )
+                    job["aggregate_pages"] = 0
+                    job["post_feeds_done"] = 0
+                    job["comments_recovered"] = 0
+                    before = _blog_comment_count(target)
+                    job["stage"] = "reading aggregate index"
+
+                    def emit(event, job=job):
+                        # Two separate dimensions, told apart by URL: the blog's
+                        # aggregate comment index vs. a single post's
+                        # `entrycomments` feed. Never summed together.
+                        if isinstance(event, crawler_events.Fetched) and event.kind == "comments":
+                            if "entrycomments" in (event.url or ""):
+                                job["post_feeds_done"] += 1
+                                if job["stage"] == "reading aggregate index":
+                                    job["stage"] = "fetching affected post feeds"
+                            else:
+                                job["aggregate_pages"] += 1
+                        # Unique posts for THIS run, from its own derive events.
+                        if isinstance(event, crawler_events.BlogPostDerived):
+                            job["posts_done"] += 1
+                            job["comments_recovered"] += event.comment_count
+
+                    ok = (
+                        crawl_main(
+                            ["--repair", "--into", str(target)],
+                            env=os.environ,
+                            emit=emit,
+                            stop_event=stop_event,
+                        )
+                        == 0
+                    )
+                    job["stage"] = "counting after repair"
+                    after = _blog_comment_count(target)
+                    restored = (
+                        after - before
+                        if before is not None and after is not None and after >= before
+                        else None
+                    )
+                    if restored:
+                        job["comments_restored"] += restored
+                    result = {
+                        "name": name,
+                        "ok": ok,
+                        "comments_restored": restored,
+                        "aggregate_pages": job["aggregate_pages"],
+                        "post_feeds_done": job["post_feeds_done"],
+                        "posts_done": job["posts_done"],
+                        "posts_total": job["posts_total"],
+                        "min_interval": job["min_interval"],
+                        "config_source": job["config_source"],
+                        "run_at": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    }
+                    job["results"].append(result)
+                    # Durable report (hand-over #3 §5): survives a GUI reload and
+                    # makes a restarted repair understandable afterward.
+                    try:
+                        (target / "repair-report.json").write_text(
+                            json.dumps(result, indent=2), encoding="utf-8"
+                        )
+                    except OSError:
+                        pass
+                    job["done"] += 1
+                    # Stop the whole repair here if the user asked, rather than
+                    # rolling on to the next archive. The archive just finished
+                    # keeps what it recovered; the rest are simply not started.
+                    if stop_event.is_set():
+                        job["stopped"] = True
+                        break
+            except Exception as exc:  # noqa: BLE001 - the job records its own failure
+                job["error"] = str(exc)[:300]
+            finally:
+                job["current"] = None
+                job["stage"] = "stopped" if job.get("stopped") else "complete"
+                job["state"] = "done"
+                _app.state.repair_in_progress = False
+
+        _app.state.repair_in_progress = True
+        threading.Thread(target=run_repairs, name="archive-repair", daemon=True).start()
+        return JSONResponse({"status": "started", "count": len(targets)})
 
     @app.put("/api/archives-dir")
     def set_archives_dir(body: _ArchivesDirRequest) -> JSONResponse:
@@ -252,6 +472,60 @@ def register(
         if target is None:
             return JSONResponse({"status": "not_found"}, status_code=404)
         return JSONResponse(summarize_archive(target))
+
+    @app.post("/api/archive-zip")
+    def archive_zip(body: _ArchiveZipRequest) -> JSONResponse:
+        """Write an archive out as a single `.zip` beside it, and say where.
+
+        Archives are local and can be large, so this does not stream a download
+        through the browser: it creates `<name>.zip` in the archives folder,
+        next to the archive it came from -- saving the manual zip step -- and
+        reports the path and size. The `.zip` then shows up in the archive list
+        and opens straight back in the Reader, read-only. An archive that is
+        already a `.zip` needs nothing done.
+        """
+        name = (body.name or "").strip()
+        target = resolve_archive(support.ARCHIVES_BASE, name)
+        if target is None:
+            return JSONResponse({"error": f"no such archive: {name}"}, status_code=404)
+        if target.is_file():  # already a zip
+            return JSONResponse(
+                {
+                    "ok": True,
+                    "already_zip": True,
+                    "path": str(target),
+                    "size": target.stat().st_size,
+                }
+            )
+
+        dest = target.parent / f"{target.name}.zip"
+        # A temp file in the SAME directory, so the final rename is atomic (same
+        # filesystem) and a failure never leaves a half-written `<name>.zip`.
+        fd, tmp = tempfile.mkstemp(suffix=".zip", dir=str(target.parent))
+        os.close(fd)
+        try:
+            with zipfile.ZipFile(tmp, "w") as zf:
+                for path in sorted(target.rglob("*")):
+                    if not path.is_file():
+                        continue
+                    rel = str(path.relative_to(target)).replace("\\", "/")
+                    # Nest under the archive's own name so unzipping yields a
+                    # clean named folder (and the Reader reads that one prefix).
+                    arcname = f"{target.name}/{rel}"
+                    # Blobs are already-compressed media; storing them skips a
+                    # pointless recompression pass. Text (manifest/feeds) deflates.
+                    stored = rel.startswith("blobs/")
+                    zf.write(
+                        path,
+                        arcname,
+                        compress_type=zipfile.ZIP_STORED if stored else zipfile.ZIP_DEFLATED,
+                    )
+            os.replace(tmp, dest)
+        except OSError as error:
+            with contextlib.suppress(OSError):
+                os.remove(tmp)
+            return JSONResponse({"error": f"could not write the zip: {error}"}, status_code=500)
+        return JSONResponse({"ok": True, "path": str(dest), "size": dest.stat().st_size})
 
     @app.put("/api/archives/{name}/label")
     def set_archive_label(name: str, body: _ArchiveLabelRequest) -> JSONResponse:

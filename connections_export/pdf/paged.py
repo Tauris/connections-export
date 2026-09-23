@@ -29,6 +29,15 @@ from connections_export.derive.model import Interchange
 from connections_export.pdf.browser import CHROMIUM_AVAILABLE, _launch
 from connections_export.pdf.html import DEFAULT_GENERATED_AT, BlobBytes, render_html
 
+
+class PdfRenderError(RuntimeError):
+    """A PDF failure with browser resources that could not load."""
+
+    def __init__(self, message: str, *, failures: list[str] | None = None) -> None:
+        super().__init__(message)
+        self.failures = failures or []
+
+
 #: The vendored polyfill (MIT -- see the sibling `.LICENSE`). Injected into the
 #: print page at render time; nothing is fetched from the network.
 POLYFILL_PATH = Path(__file__).parent / "vendor" / "paged.polyfill.js"
@@ -250,7 +259,9 @@ def _stamp_args(marks, generated_at: str) -> dict:
     }
 
 
-def html_to_pdf_paged(html: str, *, marks=None, generated_at: str = "") -> bytes:
+def html_to_pdf_paged(
+    html: str, *, marks=None, generated_at: str = "", pdf_timeout: float = 120.0
+) -> bytes:
     """Paginate `html` with the vendored paged.js polyfill inside a headless
     Chromium and return the PDF bytes. Callers check `PAGED_AVAILABLE` first;
     this raises whatever Playwright raises if no usable browser is present.
@@ -264,7 +275,21 @@ def html_to_pdf_paged(html: str, *, marks=None, generated_at: str = "") -> bytes
         browser = _launch(playwright)
         try:
             page = browser.new_page()
-            page.set_content(_with_paged_assets(html), wait_until="load")
+            failures: list[str] = []
+
+            def request_failed(request) -> None:
+                failures.append(f"{request.url} ({request.failure or 'request failed'})")
+
+            def response_failed(response) -> None:
+                if response.status >= 400:
+                    failures.append(f"{response.url} (HTTP {response.status})")
+
+            page.on("requestfailed", request_failed)
+            page.on("response", response_failed)
+            # The document can contain user-provided image/footer resources
+            # that never complete a browser load event. DOM readiness is enough
+            # here; paged.js is the actual completion gate below.
+            page.set_content(_with_paged_assets(html), wait_until="domcontentloaded")
             # Signal completion via paged.js's own `after` hook (must be set
             # BEFORE the polyfill loads). Waiting on the first `.pagedjs_page`
             # instead is a race: pagination is async, so printing then yields a
@@ -274,9 +299,11 @@ def html_to_pdf_paged(html: str, *, marks=None, generated_at: str = "") -> bytes
                 "window.PagedConfig = { auto: true, after: () => { window.__pagedDone = true; } };"
             )
             page.add_script_tag(path=str(POLYFILL_PATH))
-            page.wait_for_function("window.__pagedDone === true", timeout=120_000)
+            page.wait_for_function("window.__pagedDone === true", timeout=int(pdf_timeout * 1000))
             page.evaluate(_STAMP_JS, _stamp_args(marks, generated_at))
             return page.pdf(print_background=True, prefer_css_page_size=True)
+        except Exception as exc:
+            raise PdfRenderError(str(exc), failures=failures) from exc
         finally:
             browser.close()
 
@@ -291,6 +318,7 @@ def render_pdf_paged(
     style_overrides: dict[str, str] | None = None,
     extra_css: str | None = None,
     marks=None,
+    pdf_timeout: float = 120.0,
 ) -> bytes:
     """`html_to_pdf_paged(render_html(...))` -- the end-to-end portable PDF
     with a running per-page footer (wiki/blog/forum name + page name + page
@@ -306,4 +334,4 @@ def render_pdf_paged(
         style_overrides=style_overrides,
         extra_css=extra_css,
     )
-    return html_to_pdf_paged(html, marks=marks, generated_at=generated_at)
+    return html_to_pdf_paged(html, marks=marks, generated_at=generated_at, pdf_timeout=pdf_timeout)

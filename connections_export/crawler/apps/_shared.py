@@ -24,22 +24,11 @@ from connections_export.crawler.engine import (
 #: precisely what happened before. Tests patch `paging.MAX_PAGES`.
 
 
-#: Identifies which adapter produced this archive's run metadata
-#: (crawler -- write it at run start). A plain module
-#: constant per traversal entry point.
-ADAPTER_VERSION = "wikis-1"
-BLOGS_ADAPTER_VERSION = "blogs-1"
-FORUMS_ADAPTER_VERSION = "forums-1"
-FILES_ADAPTER_VERSION = "files-1"
-RTE_ADAPTER_VERSION = "rte-1"
-COMMUNITY_ADAPTER_VERSION = "community-1"
-
-
 #: Identifies which adapter produced this archive's run metadata (the design,
 #: "crawler -- write it at run start"). A plain module constant per traversal
 #: entry point.
 ADAPTER_VERSION = "wikis-1"
-BLOGS_ADAPTER_VERSION = "blogs-1"
+BLOGS_ADAPTER_VERSION = "blogs-2"
 FORUMS_ADAPTER_VERSION = "forums-1"
 FILES_ADAPTER_VERSION = "files-1"
 RTE_ADAPTER_VERSION = "rte-1"
