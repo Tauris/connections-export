@@ -7097,8 +7097,14 @@
   function renderSettings(s) {
     renderStyleControls(s.pdf_style_tokens, s.pdf_style);
     renderMarkControls(s.pdf_mark_defaults, s.pdf_marks);
+    const authMode = s.auth_mode || "sspi";
     const authInput = $("settings-auth-mode");
-    if (authInput) authInput.value = s.auth_mode || "sspi";
+    if (authInput) authInput.value = authMode;
+    // The ingest form sends its own auth_mode field. Keep it synchronized with
+    // the persisted setting, otherwise saving Basic Auth here still starts the
+    // next ingest with its stale SSPI default.
+    const runAuthInput = $("field-auth-mode");
+    if (runAuthInput) runAuthInput.value = authMode;
     const delayInput = $("settings-min-interval");
     if (delayInput && document.activeElement !== delayInput) delayInput.value = s.min_interval ?? 1;
     // The run screen's own delay field shows the same value, or the two

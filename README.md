@@ -164,6 +164,19 @@ environment variables. Precedence is CLI flags → environment → config file �
 defaults. Secrets come only from the environment or a prompt, never from a file.
 Windows Integrated Auth (SSPI/Kerberos) uses your existing session.
 
+The config file is discovered in this order: `--config PATH`,
+`CONNECTIONS_EXPORT_CONFIG`, `./connections-export.toml` in the current working
+directory, then `$XDG_CONFIG_HOME/connections-export/config.toml` or
+`~/.config/connections-export/config.toml`.
+
+For Basic Auth, set the username and password in the environment and select
+`auth_mode = "basic"` in your configuration:
+
+```sh
+export CONNECTIONS_EXPORT_USER=username
+export CONNECTIONS_EXPORT_PASSWORD=password
+```
+
 Run `connections-export <command> --help` for the full set.
 
 ### Pacing, and running overnight

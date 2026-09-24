@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import datetime
 import json
+import os
 import queue
 import threading
 from pathlib import Path
@@ -345,7 +346,9 @@ def register(
             min_interval=min_interval,
         )
         try:
-            client = _build_default_client(config, env={})
+            # Use the serve process environment so Basic Auth can resolve
+            # CONNECTIONS_EXPORT_USER and CONNECTIONS_EXPORT_PASSWORD.
+            client = _build_default_client(config, env=os.environ)
             # Published so `/api/pace` can slow this run down while it runs:
             # the reason to do that only appears once it is under way.
             app.state.live_client = client
