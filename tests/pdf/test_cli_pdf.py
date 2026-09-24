@@ -56,3 +56,50 @@ def test_pdf_reports_when_no_model_is_available(tmp_path):
     )
     assert code == 1
     assert not out.exists()
+
+
+def _external_choice(tmp_path, monkeypatch, *flags: str):
+    import connections_export.pdf.external as external
+
+    monkeypatch.setattr(
+        external, "collect_external_image_urls", lambda _m: ["https://cdn.example.org/a.png"]
+    )
+    monkeypatch.setattr(external, "fetch_external_images", lambda urls: dict.fromkeys(urls, b"img"))
+    seen = {}
+
+    def fake_render(model, blob_bytes, *, external_images=None):
+        seen["external_images"] = external_images
+        return b"%PDF-1.4 fake"
+
+    archive_dir = _demo_archive(tmp_path)
+    out = tmp_path / "out.pdf"
+    assert (
+        pdf_main(["--archive", str(archive_dir), "--output", str(out), *flags], render=fake_render)
+        == 0
+    )
+    return seen["external_images"]
+
+
+def test_pdf_includes_external_images_by_default(tmp_path, monkeypatch):
+    assert _external_choice(tmp_path, monkeypatch) == {"https://cdn.example.org/a.png": b"img"}
+
+
+def test_pdf_can_leave_external_images_out(tmp_path, monkeypatch):
+    assert _external_choice(tmp_path, monkeypatch, "--no-external-images") is None
+
+
+def test_pdf_takes_the_small_image_size_from_the_config_file(tmp_path, monkeypatch):
+    seen = {}
+
+    def fake_render(model, blob_bytes, *, small_image_px=None):
+        seen["small_image_px"] = small_image_px
+        return b"%PDF-1.4 fake"
+
+    config = tmp_path / "connections-export.toml"
+    config.write_text("pdf_small_image_px = 20\n", encoding="utf-8")
+    archive_dir = _demo_archive(tmp_path)
+    out = tmp_path / "out.pdf"
+    argv = ["--config", str(config), "--archive", str(archive_dir), "--output", str(out)]
+
+    assert pdf_main(argv, render=fake_render) == 0
+    assert seen["small_image_px"] == 20

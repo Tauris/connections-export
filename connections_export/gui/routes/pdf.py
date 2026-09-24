@@ -107,6 +107,7 @@ def register(
         id: str | None = None,
         include: Annotated[list[str] | None, Query()] = None,
         chrome: bool = True,
+        external_images: bool = True,
     ) -> Response:
         """Render the current derived model to a PDF and return it as a
         download (the `pdf` capability). `fidelity=portable` is Path A
@@ -121,6 +122,11 @@ def register(
         the export to a single unit (the "one thread vs the whole" choice);
         `scope=all` (default) exports everything. An `id` that matches nothing
         yields `422 {"status":"empty_scope"}` rather than a blank PDF.
+
+        `external_images=0` leaves third-party images out (each keeps its
+        address as text). By default they are fetched now, embedded, marked
+        where they sit and listed on an "External content" page -- the
+        person exporting decides whether that is theirs to reproduce.
 
         `chrome=0` drops the cover + TOC, rendering just the body -- used by
         the live preview's per-entity tiles, where each entity is rendered on
@@ -238,6 +244,19 @@ def register(
                     render_kwargs["pdf_timeout"] = float(
                         app.state.editable_settings.get("pdf_timeout", 120.0)
                     )
+            from connections_export.pdf.external import (  # noqa: PLC0415
+                prepare_external_images,
+            )
+
+            # Fetched here, for just what is being exported, never by the
+            # browser: a third-party host that does not answer costs one
+            # bounded request, not the whole render timeout.
+            render_kwargs["external_images"] = prepare_external_images(
+                model, include=external_images
+            )
+            render_kwargs["small_image_px"] = int(
+                app.state.editable_settings.get("pdf_small_image_px", 48)
+            )
 
         def blob_bytes(digest: str) -> bytes | None:
             result = app.state.model_source.get_blob(digest)

@@ -246,7 +246,7 @@ def test_not_present_image_is_a_visible_marker_not_silent():
 
     html = render_html(interchange, blob_bytes=_no_blobs)
 
-    assert "[image not captured]" in html
+    assert "[image not captured: https://fake/gone.png]" in html
     assert 'src="cid:gone.png"' not in html
 
 
@@ -259,7 +259,7 @@ def test_unresolved_image_with_no_matching_asset_is_also_a_visible_marker():
 
     html = render_html(interchange, blob_bytes=_no_blobs)
 
-    assert "[image not captured]" in html
+    assert "[image not captured: cid:unknown.png]" in html
     assert 'src="cid:unknown.png"' not in html
 
 

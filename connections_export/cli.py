@@ -1076,6 +1076,15 @@ def pdf_main(
     parser.add_argument(
         "--with-comments", action="store_true", help="--quick: also fetch comments."
     )
+    parser.add_argument(
+        "--no-external-images",
+        dest="external_images",
+        action="store_false",
+        help="Leave images from other websites out of the PDF (their addresses stay in the "
+        'text). By default they are fetched now, embedded, marked "External image E1..." '
+        "and listed with their original addresses on an External content page; whether "
+        "you may reproduce them is for you to judge.",
+    )
     args = parser.parse_args(argv)
 
     if args.demo and not (args.package or args.archive):
@@ -1110,11 +1119,16 @@ def pdf_main(
     style_kwargs = _pdf_style_kwargs(args, env)
     if style_kwargs is None:
         return 2
+    from connections_export.pdf.external import prepare_external_images  # noqa: PLC0415
+
+    render_kwargs = {
+        **style_kwargs,
+        "external_images": prepare_external_images(model, include=args.external_images),
+    }
     try:
-        pdf_bytes = render(model, blob_bytes, **style_kwargs)
-    except TypeError:
-        # An injected renderer (tests, callers) need not accept styling.
-        pdf_bytes = render(model, blob_bytes)
+        # A renderer (browser fidelity, an injected one) need not accept
+        # every option; it gets the ones it does.
+        pdf_bytes = render(model, blob_bytes, **_accepted_kwargs(render, render_kwargs))
     except ValueError as error:  # an unknown token name
         print(f"connections-export pdf: {error}", file=sys.stderr)
         return 2
@@ -1124,6 +1138,19 @@ def pdf_main(
         f"({len(pdf_bytes)} bytes, {args.fidelity} fidelity)"
     )
     return 0
+
+
+def _accepted_kwargs(func: Callable[..., bytes], kwargs: dict) -> dict:
+    """The subset of `kwargs` that `func` takes (all of them if it takes **kwargs)."""
+    import inspect  # noqa: PLC0415
+
+    try:
+        parameters = inspect.signature(func).parameters
+    except (TypeError, ValueError):
+        return {}
+    if any(p.kind is inspect.Parameter.VAR_KEYWORD for p in parameters.values()):
+        return kwargs
+    return {name: value for name, value in kwargs.items() if name in parameters}
 
 
 def _pdf_style_kwargs(args: argparse.Namespace, env: Mapping[str, str] | None) -> dict | None:
@@ -1141,6 +1168,7 @@ def _pdf_style_kwargs(args: argparse.Namespace, env: Mapping[str, str] | None) -
         kwargs["style_overrides"] = dict(config.pdf_style)
     if config.pdf_marks:
         kwargs["marks"] = resolve_marks(dict(config.pdf_marks))
+    kwargs["small_image_px"] = config.pdf_small_image_px
     css_path = getattr(args, "css_path", None) or config.pdf_css
     if css_path:
         path = Path(css_path)

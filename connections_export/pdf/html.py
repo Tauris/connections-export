@@ -19,9 +19,13 @@ and `derive/links.py` do), it only *renders* what's already there.
 from __future__ import annotations
 
 import base64
+import contextlib
 import mimetypes
-from collections.abc import Callable
+import re
+from collections.abc import Callable, Iterator, Mapping
+from contextvars import ContextVar
 from html import escape as _escape
+from urllib.parse import urlsplit
 
 import lxml.etree
 import lxml.html
@@ -53,6 +57,54 @@ NOT_CAPTURED_MARKER = "[image not captured]"
 NOT_CAPTURED_ATTACHMENT_MARKER = "not captured"
 
 BlobBytes = Callable[[str], bytes | None]
+
+#: The default size at or below which, in both directions, an external image
+#: is an icon in running text (a status tick, an emoji, a badge): marked with
+#: a superscript E-number, since a frame and caption would break the line.
+#: The user can change it (settings `pdf_small_image_px`); 0 frames them all.
+SMALL_IMAGE_PX = 48
+
+
+class _ExternalRegister:
+    """One render's external images: numbered E1, E2, ... in document order,
+    each URL once. `fetched` is None when the person chose to leave them out."""
+
+    def __init__(
+        self, fetched: Mapping[str, bytes | None] | None, small_px: int = SMALL_IMAGE_PX
+    ) -> None:
+        self.fetched = fetched
+        self.small_px = small_px
+        self.numbers: dict[str, int] = {}
+
+    @property
+    def included(self) -> bool:
+        return self.fetched is not None
+
+    def number(self, url: str) -> tuple[int, bool]:
+        """The URL's number, and whether this is its first appearance."""
+        if url in self.numbers:
+            return self.numbers[url], False
+        self.numbers[url] = len(self.numbers) + 1
+        return self.numbers[url], True
+
+
+#: Unset outside a render that opened a register: external images left out.
+_EXTERNAL: ContextVar[_ExternalRegister | None] = ContextVar("external images", default=None)
+
+
+@contextlib.contextmanager
+def external_images_register(
+    fetched: Mapping[str, bytes | None] | None, small_px: int | None = None
+) -> Iterator[_ExternalRegister]:
+    """Scope one render's external-image numbering. Every renderer that walks
+    bodies (portable and browser fidelity) opens one around its walk."""
+    register = _ExternalRegister(fetched, SMALL_IMAGE_PX if small_px is None else small_px)
+    token = _EXTERNAL.set(register)
+    try:
+        yield register
+    finally:
+        _EXTERNAL.reset(token)
+
 
 # --- content-type sniffing ---------------------------------------------
 #
@@ -143,13 +195,125 @@ def _rewrite_images(
         if data is not None:
             img.set("src", _data_uri(asset.original_href, data))
             continue
+        if asset is not None and asset.scope == "external":
+            _rewrite_external_image(tree, img, asset.resolved_url or asset.original_href)
+            continue
         # Not present, unresolved, or the blob lookup came back empty:
-        # a visible marker, never a silently dropped image.
+        # a visible marker, never a silently dropped image -- with the
+        # address, so it can still be looked up.
+        url = (asset.resolved_url or asset.original_href) if asset is not None else src
         marker = tree.makeelement("span", {"class": "hcl-missing-image"})
-        marker.text = NOT_CAPTURED_MARKER
-        parent = img.getparent()
-        if parent is not None:
-            parent.replace(img, marker)
+        marker.text = f"[image not captured: {url}]" if url else NOT_CAPTURED_MARKER
+        _replace(img, marker)
+
+
+def _replace(old: lxml.html.HtmlElement, new: lxml.html.HtmlElement) -> None:
+    parent = old.getparent()
+    if parent is not None:
+        new.tail = old.tail
+        parent.replace(old, new)
+
+
+_CSS_PX = re.compile(r"^\s*(\d+(?:\.\d+)?)\s*(?:px)?\s*$")
+
+
+def _px(value: str | None) -> float | None:
+    match = _CSS_PX.match(value or "")
+    return float(match.group(1)) if match else None
+
+
+def _declared_size(img) -> tuple[float | None, float | None]:
+    """The size the page gives the image: inline style first, then attributes.
+    A percentage or any other unit is not a pixel size and counts as unknown."""
+    style = {}
+    for declaration in (img.get("style") or "").split(";"):
+        name, _, value = declaration.partition(":")
+        style[name.strip().lower()] = value
+    width = _px(style.get("width")) if "width" in style else _px(img.get("width"))
+    height = _px(style.get("height")) if "height" in style else _px(img.get("height"))
+    return width, height
+
+
+def _intrinsic_size(data: bytes) -> tuple[int, int] | None:
+    """Pixel size read from the file's own header; None if not recognised."""
+    if data.startswith(b"\x89PNG\r\n\x1a\n") and len(data) >= 24:
+        return int.from_bytes(data[16:20], "big"), int.from_bytes(data[20:24], "big")
+    if data[:6] in (b"GIF87a", b"GIF89a") and len(data) >= 10:
+        return int.from_bytes(data[6:8], "little"), int.from_bytes(data[8:10], "little")
+    if data.startswith(b"\xff\xd8"):
+        i = 2
+        while i + 9 < len(data) and data[i] == 0xFF:
+            marker = data[i + 1]
+            length = int.from_bytes(data[i + 2 : i + 4], "big")
+            if marker in (0xC0, 0xC1, 0xC2):
+                return int.from_bytes(data[i + 7 : i + 9], "big"), int.from_bytes(
+                    data[i + 5 : i + 7], "big"
+                )
+            i += 2 + length
+        return None
+    head = data[:1024].lstrip()
+    if head.startswith(b"<svg") or head.startswith(b"<?xml"):
+        width = re.search(rb'<svg[^>]*\swidth="(\d+(?:\.\d+)?)(?:px)?"', head)
+        height = re.search(rb'<svg[^>]*\sheight="(\d+(?:\.\d+)?)(?:px)?"', head)
+        if width and height:
+            return round(float(width.group(1))), round(float(height.group(1)))
+    return None
+
+
+def _is_small(img, data: bytes | None, limit: int) -> bool:
+    """Declared size decides; the file's own size only when none is declared.
+    Unknown counts as a figure, so nothing is marked more lightly by accident."""
+    width, height = _declared_size(img)
+    if width is not None or height is not None:
+        return all(side is None or side <= limit for side in (width, height))
+    size = _intrinsic_size(data) if data else None
+    return size is not None and max(size) <= limit
+
+
+def _rewrite_external_image(tree: lxml.html.HtmlElement, img, url: str) -> None:
+    """A third-party image: embedded and marked when included, otherwise a
+    marker that keeps its address. Never left as a live `src` -- the browser
+    rendering the PDF does not fetch anything from a third party."""
+    register = _EXTERNAL.get()
+    if register is None or not register.included:
+        marker = tree.makeelement("span", {"class": "hcl-missing-image"})
+        marker.text = f"[external image not included: {url}]"
+        _replace(img, marker)
+        return
+    number, first = register.number(url)
+    data = register.fetched.get(url)
+    small = _is_small(img, data, register.small_px)
+    if data is None:
+        marker = tree.makeelement(
+            "span", {"class": "hcl-missing-image" + ("" if small else " hcl-external-image")}
+        )
+        # In running text the address would swamp the sentence; the External
+        # content page carries it.
+        marker.text = (
+            f"[E{number} not retrieved]"
+            if small
+            else f"[external image E{number} could not be retrieved: {url}]"
+        )
+        if first:
+            marker.set("id", f"ext-{number}")
+        _replace(img, marker)
+        return
+    img.set("src", _data_uri(url, data))
+    wrapper = tree.makeelement(
+        "span", {"class": "hcl-external-inline" if small else "hcl-external-image"}
+    )
+    if first:
+        wrapper.set("id", f"ext-{number}")
+    if small:
+        mark = tree.makeelement("sup", {"class": "hcl-external-ref"})
+        mark.text = f"E{number}"
+    else:
+        mark = tree.makeelement("span", {"class": "hcl-external-caption"})
+        mark.text = f"External image E{number} · {urlsplit(url).hostname or url}"
+    _replace(img, wrapper)
+    img.tail = None
+    wrapper.append(img)
+    wrapper.append(mark)
 
 
 def _link_lookup(links: list[LinkRef]) -> dict[str, LinkRef]:
@@ -371,7 +535,36 @@ def _toc_page_rows(wiki: DerivedWiki, page_ids: list[str], depth: int = 0) -> li
     return rows
 
 
-def _render_toc(interchange: Interchange) -> str:
+def _render_external_content(register: _ExternalRegister) -> str:
+    """The reference page for the included external images: each E-number
+    with its original address and whether it made it in."""
+    rows = []
+    for url, number in register.numbers.items():
+        status = "included" if register.fetched.get(url) is not None else "could not be retrieved"
+        href = _escape(url)
+        rows.append(
+            f'<tr><td><a class="hcl-external-mark" href="#ext-{number}">E{number}</a></td>'
+            f'<td class="hcl-external-url"><a href="{href}">{href}</a></td>'
+            f"<td>{status}</td></tr>"
+        )
+    return (
+        '<section id="external-content" class="page-break">'
+        "<h1>External content</h1>"
+        '<p class="hcl-external-note">The images marked <em>External image E&hellip;</em> in '
+        "this document &mdash; or, for small images in running text such as icons, with a "
+        "superscript <em>E&hellip;</em> after them &mdash; are not part of the captured "
+        "archive. They are third-party material, "
+        "loaded from the addresses below when this PDF was made and reproduced as they were "
+        "found there. They belong to their respective owners. This tool does not assess who "
+        "holds the rights to them or whether they may be reproduced or shared; that decision "
+        "rests with whoever makes or passes on this document.</p>"
+        '<table class="hcl-external-table"><thead><tr><th>Mark</th><th>Original address</th>'
+        "<th>In this document</th></tr></thead><tbody>" + "".join(rows) + "</tbody></table>"
+        "</section>"
+    )
+
+
+def _render_toc(interchange: Interchange, *, external_content: bool = False) -> str:
     """The table of contents, pre-split into page-sized blocks.
 
     Container names are list ITEMS, not headings: a heading between lists is a
@@ -413,6 +606,9 @@ def _render_toc(interchange: Interchange) -> str:
                 + _escape(topic.title or topic.id)
                 + "</a></li>"
             )
+    if external_content:
+        # Its own group, not an entry under whichever container came last.
+        rows.append('<li class="toc-group"><a href="#external-content">External content</a></li>')
 
     rows.insert(0, '<li class="toc-title">Table of contents</li>')
     blocks = [
@@ -904,6 +1100,26 @@ img, svg, video, canvas, iframe, object, embed {
 .hcl-file-meta { font-size: var(--pdf-meta-size); color: var(--pdf-muted); white-space: nowrap; }
 .hcl-file-note { font-size: var(--pdf-meta-size); color: var(--pdf-muted); }
 .hcl-missing-image, .hcl-missing-attachment { color: #a00; font-style: italic; }
+/* A third-party image: recognisable on paper, not only by colour. */
+.hcl-external-image {
+  display: inline-block; max-width: 100%; border: 1px dashed #8a6d00; padding: 2px;
+}
+.hcl-external-image img { display: block; }
+.hcl-external-caption {
+  display: block; font-size: var(--pdf-meta-size); color: #6b5500; font-style: italic;
+}
+/* A small one in running text: a footnote-style mark, the line left alone. */
+.hcl-external-inline { white-space: nowrap; }
+.hcl-external-ref { font-size: 0.7em; color: #6b5500; font-style: italic; margin-left: 0.1em; }
+.hcl-external-note { font-size: var(--pdf-meta-size); color: var(--pdf-muted); }
+.hcl-external-table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+.hcl-external-table th, .hcl-external-table td {
+  text-align: left; padding: 0.25em 0.5em; border-bottom: 1px solid var(--pdf-rule);
+  vertical-align: top; font-size: var(--pdf-meta-size);
+}
+.hcl-external-table th:first-child, .hcl-external-table td:first-child { width: 6em; }
+.hcl-external-table th:last-child, .hcl-external-table td:last-child { width: 9em; }
+.hcl-external-url { overflow-wrap: anywhere; word-break: break-all; }
 .hcl-link-url { font-size: var(--pdf-meta-size); color: var(--pdf-muted); }
 /* Tag chips (wiki pages + blog posts). */
 .hcl-tags { margin: 0.2em 0 0.6em; }
@@ -1077,10 +1293,19 @@ def render_html(
     chrome: bool = True,
     style_overrides: dict[str, str] | None = None,
     extra_css: str | None = None,
+    external_images: Mapping[str, bytes | None] | None = None,
+    small_image_px: int | None = None,
 ) -> str:
     """Render `interchange` to one self-contained, print-ready HTML
     document (render_html (the core)). Pure: no
     browser, no filesystem, no wall clock.
+
+    `external_images` is the choice about third-party images: None leaves
+    them out (each keeps its address as text); a URL -> bytes mapping
+    (`pdf.external.prepare_external_images`) includes them, each marked
+    where it sits and listed on an "External content" page. `small_image_px`
+    is the size at or below which one is marked as an icon in running text
+    (default `SMALL_IMAGE_PX`).
 
     Pages appear in hierarchy + ordinal order (depth-first); each is a
     `<section id="p-{page_id}">` with its sanitized body, its comments
@@ -1092,28 +1317,13 @@ def render_html(
     # `chrome=False` renders just the body sections -- no cover, no TOC -- for
     # the live per-entity tiles, where each entity is rendered on its own and
     # a repeated cover/TOC per tile would be noise. The real export keeps both.
+    with external_images_register(external_images, small_image_px) as register:
+        body_sections = _render_bodies(interchange, blob_bytes, include_comments=include_comments)
+    external_content = chrome and register.included and bool(register.numbers)
     title_page = _render_title_page(interchange, generated_at) if chrome else ""
-    toc = _render_toc(interchange) if chrome else ""
-    # Comments are always ingested/archived; a caller (the PDF export) may omit
-    # them from the rendered document. Forum replies are the thread body, not
-    # secondary commentary, so they are never suppressed.
-    body_sections = (
-        "".join(
-            _render_wiki(wiki, blob_bytes, include_comments=include_comments)
-            for wiki in interchange.wikis
-        )
-        + "".join(
-            _render_blog(blog, blob_bytes, include_comments=include_comments)
-            for blog in interchange.blogs
-        )
-        + "".join(_render_forum(forum, blob_bytes) for forum in interchange.forums)
-        + "".join(
-            _render_rich_content(highlights, blob_bytes) for highlights in interchange.rich_content
-        )
-        + "".join(
-            _render_file_library(library, blob_bytes) for library in interchange.file_libraries
-        )
-    )
+    toc = _render_toc(interchange, external_content=external_content) if chrome else ""
+    if external_content:
+        body_sections += _render_external_content(register)
 
     # Both go LAST, after the captured pages' own <style> blocks. Author CSS
     # is emitted inside the body and outranks anything in <head> at equal
@@ -1135,4 +1345,29 @@ def render_html(
         f"{title_page}{toc}{body_sections}"
         f"{reader_css}"
         "</body></html>"
+    )
+
+
+def _render_bodies(
+    interchange: Interchange, blob_bytes: BlobBytes, *, include_comments: bool
+) -> str:
+    # Comments are always ingested/archived; a caller (the PDF export) may omit
+    # them from the rendered document. Forum replies are the thread body, not
+    # secondary commentary, so they are never suppressed.
+    return (
+        "".join(
+            _render_wiki(wiki, blob_bytes, include_comments=include_comments)
+            for wiki in interchange.wikis
+        )
+        + "".join(
+            _render_blog(blog, blob_bytes, include_comments=include_comments)
+            for blog in interchange.blogs
+        )
+        + "".join(_render_forum(forum, blob_bytes) for forum in interchange.forums)
+        + "".join(
+            _render_rich_content(highlights, blob_bytes) for highlights in interchange.rich_content
+        )
+        + "".join(
+            _render_file_library(library, blob_bytes) for library in interchange.file_libraries
+        )
     )

@@ -24,6 +24,8 @@ extension.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 import lxml.html
 
 from connections_export.derive.model import DerivedPage, Interchange
@@ -37,11 +39,13 @@ from connections_export.pdf.html import (
     _render_attachments,
     _render_blog,
     _render_comments,
+    _render_external_content,
     _render_forum,
     _render_title_page,
     _render_toc,
     _sanitize_body,
     _walk_pages,
+    external_images_register,
 )
 
 #: At-rules whose block contains nested style rules (so we recurse to scope
@@ -200,14 +204,35 @@ def render_html_browser(
     *,
     generated_at: str = DEFAULT_GENERATED_AT,
     include_comments: bool = True,
+    external_images: Mapping[str, bytes | None] | None = None,
+    small_image_px: int | None = None,
 ) -> str:
     """One combined, print-ready HTML document (cover + clickable TOC +
     every wiki page in hierarchy order), with each page's author CSS
     scoped to its own section. Pure — no browser. Printed as a single
     document so the TOC and in-export body links become active internal
     PDF links and the heading structure yields a bookmark outline."""
+    with external_images_register(external_images, small_image_px) as register:
+        body = _render_browser_bodies(interchange, blob_bytes, include_comments=include_comments)
+    external_content = register.included and bool(register.numbers)
+    if external_content:
+        body.append(_render_external_content(register))
     cover = _render_title_page(interchange, generated_at)
-    toc = _render_toc(interchange)
+    toc = _render_toc(interchange, external_content=external_content)
+    return (
+        "<!DOCTYPE html>"
+        '<html lang="en"><head><meta charset="utf-8">'
+        f"<title>{_escape(_document_title(interchange))}</title>"
+        f"<style>{_STYLE}</style>"
+        "</head><body>"
+        f"{cover}{toc}{''.join(body)}"
+        "</body></html>"
+    )
+
+
+def _render_browser_bodies(
+    interchange: Interchange, blob_bytes: BlobBytes, *, include_comments: bool
+) -> list[str]:
     body: list[str] = []
     for wiki in interchange.wikis:
         heading = _escape(wiki.title or wiki.label)
@@ -225,15 +250,7 @@ def render_html_browser(
         )
     for forum in interchange.forums:
         body.append(_render_forum(forum, blob_bytes, _scope_body_styles))
-    return (
-        "<!DOCTYPE html>"
-        '<html lang="en"><head><meta charset="utf-8">'
-        f"<title>{_escape(_document_title(interchange))}</title>"
-        f"<style>{_STYLE}</style>"
-        "</head><body>"
-        f"{cover}{toc}{''.join(body)}"
-        "</body></html>"
-    )
+    return body
 
 
 def render_pdf_browser(
@@ -242,6 +259,8 @@ def render_pdf_browser(
     *,
     generated_at: str = DEFAULT_GENERATED_AT,
     include_comments: bool = True,
+    external_images: Mapping[str, bytes | None] | None = None,
+    small_image_px: int | None = None,
 ) -> bytes:
     """Render `interchange` to a browser-fidelity PDF: one combined
     document (cover + clickable TOC + scoped pages), printed once with a
@@ -250,6 +269,11 @@ def render_pdf_browser(
     from connections_export.pdf.browser import html_to_pdf  # noqa: PLC0415
 
     html = render_html_browser(
-        interchange, blob_bytes, generated_at=generated_at, include_comments=include_comments
+        interchange,
+        blob_bytes,
+        generated_at=generated_at,
+        include_comments=include_comments,
+        external_images=external_images,
+        small_image_px=small_image_px,
     )
     return html_to_pdf(html, outline=True)

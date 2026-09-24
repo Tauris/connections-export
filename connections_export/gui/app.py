@@ -187,6 +187,7 @@ def make_app(
         "pdf_style": {},
         "pdf_marks": {},
         "pdf_timeout": 120.0,
+        "pdf_small_image_px": 48,
         "archive_only": False,
         "default_author_filter": author_filter,
     }

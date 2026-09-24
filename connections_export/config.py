@@ -128,6 +128,10 @@ class Config(BaseModel):
     #: Maximum seconds the PDF browser/paged-media renderer may wait for a
     #: document to finish loading and paginating.
     pdf_timeout: float = 120.0
+    #: External images shown at this many pixels or less in both directions
+    #: are icons in running text: marked with a superscript E-number rather
+    #: than framed and captioned. 0 frames every one.
+    pdf_small_image_px: int = Field(default=48, ge=0)
     #: A stylesheet appended after everything else, including the captured
     #: page's own CSS -- the escape hatch for anything the tokens do not cover.
     pdf_css: Path | None = None

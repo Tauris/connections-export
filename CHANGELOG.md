@@ -5,6 +5,36 @@ Notable changes to `connections-export`, newest first. Versions follow
 the archive format may still change between minor versions — the format's own
 version is recorded inside every archive.
 
+## 0.1.9 — 2026-09-24
+
+### External images in the PDF: included, marked, and credited — your choice
+
+- **The PDF can carry images from other websites.** Until now they were
+  dropped from the PDF with a bare "[image not captured]". A new export
+  option, **Include external images** (on by default; `pdf
+  --no-external-images` on the command line), fetches them at export time
+  and embeds them.
+- **Each one is recognisable on paper.** An included external image sits in
+  a dashed frame captioned _External image E1 · host_, and an **External
+  content** page at the end (in the table of contents) lists every E-number
+  with its full original address, the page it first appears on, and whether
+  it could be retrieved. Small images in running text — icons, emoji, badges,
+  anything shown at 48 px or less, adjustable under Settings → Small external
+  images or `pdf_small_image_px` in `connections-export.toml` — get a
+  superscript _E1_ instead of the frame,
+  so a sentence is not broken up; they are listed just the same. The page states that these are third-party material
+  and that the tool does not assess rights to them — that decision rests with
+  whoever makes or passes on the document.
+- **Left out, the address still travels.** With the option off, or when a
+  fetch fails, the marker carries the original URL; a deployment image that
+  was not captured now says which one, too.
+- **Fetched by the tool, not the browser, and without credentials.** Each
+  request is bounded (15 s, 20 MB, images only) and runs alongside the
+  others, so a third-party host that does not answer costs one request rather
+  than the whole render timeout; no cookies or sign-in headers are sent.
+- The reader and the Obsidian/Jekyll exports are unchanged: they keep
+  external images as references to their original addresses.
+
 ## 0.1.8 — 2026-09-23
 
 ### The Obsidian and Jekyll exporters work from a plain install

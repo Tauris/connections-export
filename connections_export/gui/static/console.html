@@ -512,6 +512,7 @@
             <div class="pdf-pick-tree" id="pdf-pick-tree"></div>
           </div>
           <label class="menu-check" title="Comments are always archived; untick to leave them out of the PDF."><input type="checkbox" id="r-pdf-comments" checked /> Include comments</label>
+          <label class="menu-check" title="Images the pages show from other websites are not in the archive. Ticked, they are fetched now and put in the PDF, each marked &quot;External image E1…&quot; and listed with its original address on an External content page. Whether you may reproduce them is for you to judge; untick to leave them out (their addresses stay in the text)."><input type="checkbox" id="r-pdf-external" checked /> Include external images</label>
           <div class="menu-sep"></div>
           <button class="btn" id="r-pdf" title="Render this archive to a PDF"><svg class="icon" aria-hidden="true"><use href="#i-download"/></svg> Export PDF</button>
           <button class="btn" id="r-preview" title="Preview the export page by page — watch it render and Stop early if the formatting or content is wrong"><svg class="icon" aria-hidden="true"><use href="#i-eye"/></svg> Preview first</button>
@@ -608,6 +609,7 @@
             <div class="settings-row"><span class="k">Renderer</span><span class="v" id="set-pdf-status">—</span></div>
             <div class="setup-note warn" id="set-pdf-detail" hidden></div>
             <label class="settings-field">Render timeout (seconds)<input id="settings-pdf-timeout" type="number" min="1" step="5" value="120" /><span class="foot-note">How long the browser may take to lay out and paginate a document before the export gives up. Raise it for a very large PDF, or one with slow images, that times out; lower it if a failing export should fail sooner.</span></label>
+            <label class="settings-field">Small external images (pixels)<input id="settings-pdf-small-image" type="number" min="0" step="4" value="48" /><span class="foot-note">An image from another website shown at this size or less, both ways, counts as an icon in running text — an emoji, a status tick, a badge — and gets a small superscript <em>E1</em> instead of a frame and caption, so the sentence stays readable. Larger ones are framed. Set 0 to frame every one.</span></label>
             <p class="foot-note">Sizes and colours used when rendering a PDF. Leave a field empty to keep the default shown in it. For anything not listed, <code>connections-export style --dump</code> writes the whole stylesheet out to edit.</p>
             <div class="style-grid" id="style-grid"></div>
             <h3 class="style-subhead">Header and footer</h3>

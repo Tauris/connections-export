@@ -23,6 +23,7 @@ headings that landed on each page) -> `page.pdf`.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from pathlib import Path
 
 from connections_export.derive.model import Interchange
@@ -123,6 +124,10 @@ _PAGED_STYLE = """
 #toc { break-before: page; }
 #toc .toc-title { font-size: 1.5em; font-weight: 700; margin-bottom: 0.6em; }
 #toc .toc-group { font-weight: 700; margin-top: 0.9em; break-after: avoid; }
+/* Where each external image first appears, as the TOC gives it. */
+.hcl-external-table a.hcl-external-mark::after {
+  content: " · p. " target-counter(attr(href), page);
+}
 /* Each block after the first starts its own page: the split is ours,
    so paged.js never has to fragment the list. */
 #toc .toc-continued { break-before: page; }
@@ -175,7 +180,8 @@ _STAMP_JS = r"""
     const content = pageEl.querySelector('.pagedjs_page_content');
     if (content) {
       // In document order, update whichever running name each heading sets.
-      content.querySelectorAll('.hcl-wiki > h1, .hcl-blog > h1, .hcl-forum > h1, .pdf-sectitle')
+      content.querySelectorAll(
+        '.hcl-wiki > h1, .hcl-blog > h1, .hcl-forum > h1, #external-content > h1, .pdf-sectitle')
         .forEach((h) => {
           const t = (h.textContent || '').trim();
           if (!t) return;
@@ -319,6 +325,8 @@ def render_pdf_paged(
     extra_css: str | None = None,
     marks=None,
     pdf_timeout: float = 120.0,
+    external_images: Mapping[str, bytes | None] | None = None,
+    small_image_px: int | None = None,
 ) -> bytes:
     """`html_to_pdf_paged(render_html(...))` -- the end-to-end portable PDF
     with a running per-page footer (wiki/blog/forum name + page name + page
@@ -333,5 +341,7 @@ def render_pdf_paged(
         chrome=chrome,
         style_overrides=style_overrides,
         extra_css=extra_css,
+        external_images=external_images,
+        small_image_px=small_image_px,
     )
     return html_to_pdf_paged(html, marks=marks, generated_at=generated_at, pdf_timeout=pdf_timeout)

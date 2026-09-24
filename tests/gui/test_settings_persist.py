@@ -101,3 +101,28 @@ def test_the_pdf_render_timeout_is_configurable_and_persists(store):
     # ...and a non-positive timeout is refused rather than stored.
     bad = client.put("/api/settings", json={"pdf_timeout": 0}, headers=HOST)
     assert bad.status_code == 422
+
+
+def test_the_small_image_size_for_external_images_is_configurable_and_persists(store):
+    """Where a third-party image stops being an icon in running text (a
+    superscript mark) and becomes a figure (frame and caption) is a judgement
+    about the content, so it is the user's to set."""
+    client = TestClient(make_app(demo=True))
+
+    assert client.get("/api/settings", headers=HOST).json()["pdf_small_image_px"] == 48
+
+    saved = client.put("/api/settings", json={"pdf_small_image_px": 32}, headers=HOST)
+    assert saved.status_code == 200
+    assert json.loads(store.read_text(encoding="utf-8"))["pdf_small_image_px"] == 32
+
+    again = TestClient(make_app(demo=True))
+    assert again.get("/api/settings", headers=HOST).json()["pdf_small_image_px"] == 32
+
+    # 0 is a real choice -- every external image framed -- a negative is not.
+    assert (
+        client.put("/api/settings", json={"pdf_small_image_px": 0}, headers=HOST).status_code == 200
+    )
+    assert (
+        client.put("/api/settings", json={"pdf_small_image_px": -1}, headers=HOST).status_code
+        == 422
+    )

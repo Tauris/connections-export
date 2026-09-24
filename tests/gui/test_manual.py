@@ -107,3 +107,17 @@ def test_the_manual_says_which_apps_catch_a_comment_for_free():
 def test_the_recheck_option_is_not_described_as_the_thing_that_closes_the_gap():
     assert "the option that closes it" not in MANUAL
     assert "for a deployment that behaves differently" in MANUAL
+
+
+def test_the_manual_explains_the_external_images_choice():
+    """Whether to reproduce a third-party image is the person's call; the
+    manual must say the choice exists, what the PDF does either way, and that
+    the tool does not judge the rights."""
+    assert 'id="man-external-images"' in MANUAL
+    assert "Include external images" in MANUAL
+    assert "External content" in MANUAL
+    assert "--no-external-images" in MANUAL
+    assert "does not assess who holds the rights" in MANUAL
+    assert "small image in running text" in MANUAL
+    assert "Small external images" in MANUAL
+    assert "pdf_small_image_px" in MANUAL

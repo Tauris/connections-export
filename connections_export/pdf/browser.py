@@ -294,6 +294,8 @@ def render_pdf(
     style_overrides: dict[str, str] | None = None,
     extra_css: str | None = None,
     marks: Marks | None = None,
+    external_images: Mapping[str, bytes | None] | None = None,
+    small_image_px: int | None = None,
 ) -> bytes:
     """`html_to_pdf(render_html(...))` -- the end-to-end
     entry point: interchange model -> PDF bytes. `include_comments=False`
@@ -307,5 +309,7 @@ def render_pdf(
         chrome=chrome,
         style_overrides=style_overrides,
         extra_css=extra_css,
+        external_images=external_images,
+        small_image_px=small_image_px,
     )
     return html_to_pdf(html, marks=marks)

@@ -229,6 +229,16 @@ Two limits, both deliberate. Only a link that names the document's **bytes** is 
 
 "Elsewhere on the deployment" means the system you are exporting from, plus any additional hosts you list as belonging to it. Images on the public web are **recorded but never fetched** — the archive notes them and leaves them where they are. Personal avatars are never exported at all: consent to appear in the source system does not extend to a copy of it.
 
+### <a id="man-external-images"></a>Images from other websites, in the reader and in the PDF
+
+An image a page shows from another website stays a reference to that website everywhere the archive goes. The **reader** shows it the way any browser would — loaded from where it lives, when it can be reached. The **Obsidian** and **Jekyll** exports keep its address.
+
+The **PDF** asks, because a PDF is a copy that travels without the web. **Export → Include external images** is ticked by default: such images are fetched when you export, put into the PDF, and each is **marked where it sits** — a dashed frame captioned _External image E1 · the website_ — so it can be told apart on paper, not only on screen. A **small image in running text** — an icon, an emoji, a status badge, anything shown at 48 pixels or less, a size you can change under **Settings → Small external images** — gets a lighter mark instead: a small superscript _E1_ after it, like a footnote number, so the line reads as it did. The size the page gives the image decides; when it gives none, the image's own size does, and an image whose size cannot be told is marked as a full one. An **External content** page at the end (listed in the table of contents) gives every E-number with its full original address, the page it first appears on, and whether it could be retrieved. An image that could not be fetched is marked in place with its address instead of disappearing.
+
+Untick it and they are left out: each becomes a marked line carrying its original address, and nothing is fetched. On the command line, `pdf --no-external-images` does the same.
+
+Only you know what those images are — your company's own logo, a chart from a public report, a stock photo someone pasted. The tool does not assess who holds the rights to them or whether they may be reproduced or passed on; it makes them recognisable and says where each came from, and whether to include them is your decision. The fetch sends no sign-in details: your session with the deployment never goes to another website.
+
 ### Links between things you captured: resolved
 
 Links are rewritten to point inside the archive whenever their target is _also in this export_. That works across everything a single run captured: page to page in a wiki, post to post in a blog, and **between components** — a blog post linking to a wiki page, a forum topic linking to a blog post. Capture a community and its wiki, blogs and forums cross-link to each other, because they were captured together.
@@ -437,6 +447,7 @@ These need no deployment: they work from an archive or a package.
 | `pdf --archive DIR`<br>`pdf --package DIR` | Render it. `--output` names the file. |
 | `pdf --fidelity` | Render through the original system’s own stylesheets instead of the portable ones. Needs the deployment. |
 | `pdf --css FILE` | Your own stylesheet, appended after the captured pages’ own CSS so it wins. |
+| `pdf --no-external-images` | Leave images from other websites out of the PDF, keeping their addresses; by default they are included, marked, and listed on an External content page. [More](#man-external-images) |
 | `ingest --archive DIR --output DIR` | Reconstruct a capture into a developer format: `--format obsidian` writes an Obsidian vault, `--format jekyll` a Jekyll site. `--package` takes a package instead of an archive. |
 | `package --archive DIR --output DIR` | Write the portable interchange package for a capture — for an ingester of your own, or to hand to someone who has never seen this tool. |
 | `style --dump` | Write the whole stylesheet out to edit. `--marks` lists the header and footer settings. |
@@ -462,6 +473,8 @@ toc_title_size = "18pt"
 The quickest way to try one is **Settings → PDF appearance**: change a value, press Preview, and a real two-page sample is rendered with it. Each field shows its default, so an empty one means unchanged.
 
 The same card has a **Render timeout (seconds)** — how long the browser may take to lay out and paginate a document before an export gives up (120 seconds by default). Raise it for a very large PDF, or one with slow-loading images, that would otherwise time out; lower it if you would rather a failing export failed sooner. When an export does hit the limit, the console says so and writes a `pdf-failure-*.md` report naming what did not finish, rather than failing silently.
+
+**Small external images (pixels)**, 48 by default, is where an image from another website stops counting as an icon in running text. At or below it in both directions, an included external image gets a small superscript _E1_ after it; above it, a dashed frame and caption ([more](#man-external-images)). Raise it if the pages use larger inline badges, lower it if small pictures should still be framed, or set 0 to frame every one. On the command line, `pdf_small_image_px` in `connections-export.toml` does the same.
 
 For anything the tokens do not cover, do not guess at class names — have the program write its own stylesheet out, edit that, and pass it back:
 

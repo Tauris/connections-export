@@ -2178,6 +2178,8 @@
       const withComments = $("r-pdf-comments") ? $("r-pdf-comments").checked : true;
       const params = [];
       if (!withComments) params.push("comments=0");
+      // Third-party images: fetched and marked by default (?external_images=0 leaves them out).
+      if ($("r-pdf-external") && !$("r-pdf-external").checked) params.push("external_images=0");
       // Scoped export: "one thread vs the whole". Only when the dropdown
       // is on "Current item" AND something is actually open.
       const sel = $("r-pdf-scope");
@@ -2400,7 +2402,12 @@
 
   function ensureLivePdfViewer() {
     let ov = $("livepdf-viewer");
-    if (ov) return ov;
+    if (ov) {
+      // Built once; the external-images choice may have changed since.
+      const dl = $("lp-download");
+      if (dl) dl.href = "/api/pdf?scope=all" + externalImagesQuery();
+      return ov;
+    }
     ov = document.createElement("div");
     ov.id = "livepdf-viewer";
     ov.className = "pdf-viewer";
@@ -2410,7 +2417,7 @@
         '<span class="lp-status" id="lp-status"></span>' +
         '<span class="spacer"></span>' +
         '<button class="btn crit" id="lp-stop" title="Abort the preview render — pages already shown stay up">' + icon('stop') + ' Stop</button>' +
-        '<a class="btn" id="lp-download" href="/api/pdf?scope=all" download="export.pdf" ' +
+        '<a class="btn" id="lp-download" href="/api/pdf?scope=all' + externalImagesQuery() + '" download="export.pdf" ' +
           'title="Download the full export PDF (cover + TOC)">' + icon('download') + ' Full PDF</a>' +
         '<button class="btn" id="lp-close">✕ Close</button>' +
       '</div><div class="lp-strip" id="lp-strip"></div>';
@@ -2461,13 +2468,19 @@
     return out;
   }
 
+  // The preview follows the export menu's "Include external images" choice.
+  function externalImagesQuery() {
+    const box = $("r-pdf-external");
+    return box && !box.checked ? "&external_images=0" : "";
+  }
+
   // Render one entity's bare PDF and append its page(s) as canvases. Returns
   // false (leave it unseen, retry next tick) if it isn't derivable yet.
   async function lpRenderTile(entity) {
     let res;
     try {
       res = await fetch("/api/pdf?scope=tile&kind=" + entity.kind +
-        "&id=" + encodeURIComponent(entity.id) + "&chrome=0");
+        "&id=" + encodeURIComponent(entity.id) + "&chrome=0" + externalImagesQuery());
     } catch (_) { return false; }
     if (res.status === 503) {
       let status = "pending";
@@ -7020,7 +7033,14 @@
       pdf_style: currentStyleOverrides(),
       pdf_marks: currentMarkOverrides(),
       pdf_timeout: parseFloat(($("settings-pdf-timeout") || {}).value) || 120,
+      pdf_small_image_px: smallImagePx(),
     };
+  }
+
+  // 0 is a real choice (frame every external image), so no `|| 48` here.
+  function smallImagePx() {
+    const n = parseInt(($("settings-pdf-small-image") || {}).value, 10);
+    return Number.isFinite(n) && n >= 0 ? n : 48;
   }
 
   function currentStyleOverrides() {
@@ -7112,6 +7132,10 @@
     const pdfTimeoutInput = $("settings-pdf-timeout");
     if (pdfTimeoutInput && document.activeElement !== pdfTimeoutInput && s.pdf_timeout != null) {
       pdfTimeoutInput.value = String(s.pdf_timeout);
+    }
+    const smallImageInput = $("settings-pdf-small-image");
+    if (smallImageInput && document.activeElement !== smallImageInput && s.pdf_small_image_px != null) {
+      smallImageInput.value = String(s.pdf_small_image_px);
     }
 
     const pdfStatusEl = $("set-pdf-status");

@@ -36,6 +36,7 @@ PERSISTED_KEYS = (
     "pdf_style",
     "pdf_marks",
     "pdf_timeout",
+    "pdf_small_image_px",
     "archive_only",
 )
 
