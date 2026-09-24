@@ -1,9 +1,10 @@
 # connections-export
 
-> Preserve HCL Connections content — wikis, blogs, and forums — as a portable,
-> self-documenting archive you control.
+> Preserve HCL Connections content — wikis, blogs, forums, files and a
+> community's front page — as a portable, self-documenting archive you control.
 
-Wikis, blogs, and forums hold years of a team's shared knowledge.
+Wikis, blogs, forums and a community's files hold years of a team's shared
+knowledge.
 **connections-export** captures that content from an HCL Connections deployment
 into a durable, open-format archive you can keep, browse, and re-home — so what
 matters isn't bound to the lifetime of any single platform.
@@ -34,10 +35,16 @@ content stays faithful today and portable for whatever you move it into next.
   tool-agnostic format (`interchange.json` + content-addressed blobs), with the
   format specification bundled inside every package, so anyone can build a
   reader without product-specific knowledge.
-- **Browse it back** — a built-in local web console reconstructs the wiki, with
-  hierarchy, threaded comments, images, and search.
-- **Export onward** — render to a single print-ready **PDF**, or reconstruct a
-  wiki as an **Obsidian vault** (Markdown with `[[wikilinks]]`).
+- **Browse it back** — a built-in local web console reconstructs everything you
+  captured, with hierarchy, threaded comments, images, and search. It reads an
+  archive folder or a `.zip` of one where it lies, so an archive can be kept
+  zipped on a share or in OneDrive and still opened.
+- **Export onward** — render to a single print-ready **PDF**, or, for people who
+  work with developer tools, reconstruct a capture as an **Obsidian vault**
+  (Markdown with `[[wikilinks]]`) or a **Jekyll site** (a static website you can
+  publish). [Obsidian](https://obsidian.md) and [Jekyll](https://jekyllrb.com)
+  are independent third-party applications; the exporters are provided for
+  convenience and are not an endorsement of either.
 - **Respects people** — personal avatars are never exported; consent for the
   source system doesn't extend to a copy.
 
@@ -45,9 +52,10 @@ content stays faithful today and portable for whatever you move it into next.
 
 ```sh
 pip install connections-export
-# with the Obsidian exporter:
-pip install "connections-export[obsidian]"
 ```
+
+That includes everything, the Obsidian and Jekyll exporters too; the only
+optional extra is Windows Integrated Auth, below.
 
 Requires Python 3.12 or newer (tested on 3.12, 3.13 and 3.14, on Linux, macOS
 and Windows).
@@ -89,8 +97,8 @@ Two things worth knowing:
   (`msedge` or `chrome`) or `CONNECTIONS_EXPORT_BROWSER_PATH` (an explicit
   executable).
 
-Everything else — capture, browsing, the Obsidian export — works with no
-browser at all.
+Everything else — capture, browsing, the Obsidian and Jekyll exports — works
+with no browser at all.
 
 ## Quick start
 
@@ -102,12 +110,8 @@ connections-export serve
 ```
 
 To see the whole thing working with no deployment at all — against a synthetic
-one that ships inside the tool — start the console and drop one of the demo
-URLs it offers on the setup screen:
-
-```sh
-connections-export serve
-```
+one that ships inside the tool — drop one of the demo URLs the console offers
+on its setup screen.
 
 The console carries **the manual** — what an archive is, what a capture takes
 in and leaves out, what an update costs, and every command-line switch. It is
@@ -157,6 +161,7 @@ Then render or convert what you captured:
 ```sh
 connections-export pdf --archive ./archive --output export.pdf
 connections-export ingest --format obsidian --archive <dir> --output <vault>
+connections-export ingest --format jekyll   --archive <dir> --output <site>
 ```
 
 Settings can also come from `connections-export.toml` or `CONNECTIONS_EXPORT_*`
@@ -170,7 +175,8 @@ directory, then `$XDG_CONFIG_HOME/connections-export/config.toml` or
 `~/.config/connections-export/config.toml`.
 
 For Basic Auth, set the username and password in the environment and select
-`auth_mode = "basic"` in your configuration:
+`auth_mode = "basic"` in your configuration (in the console: **Settings →
+Authentication → Username and password**):
 
 ```sh
 export CONNECTIONS_EXPORT_USER=username
@@ -230,7 +236,9 @@ An export captures **what you selected**, and is honest about the edges.
   naming the document's bytes, and only with your own credentials: one you
   could not open in the live system is recorded as not captured, with the
   reason. Images on the public web are recorded but never fetched, and
-  personal avatars are never exported at all.
+  personal avatars are never exported at all. The PDF export can include those
+  web images at export time, if you choose to, each marked and credited with
+  its original address.
 - **A community's files come down as files.** Documents land in `files/`, under
   their real names and in their folders — copying that directory out is the
   whole job. Where a name cannot survive a filesystem (two files called
@@ -281,13 +289,14 @@ shape of the thing it produces.
 
 The export is deliberately not a proprietary blob. It's an open interchange
 package described by [the format specification](https://github.com/Tauris/connections-export/blob/main/docs/reference/interchange-format.md), a copy
-of which travels inside every package — the Obsidian exporter is just a worked
-example of consuming it. Your content stays portable and readable long after the
+of which travels inside every package — the Obsidian and Jekyll exporters are
+worked examples of consuming it. Your content stays portable and readable long after the
 export.
 
 **On writing your own exporter:** how much work that is depends far more on the
-destination than on the package. Obsidian is a directory of Markdown files, so
-the exporter can write whatever it decides to write. Hosted platforms often
+destination than on the package. An Obsidian vault or a Jekyll site is a
+directory of Markdown files, so the exporter can write whatever it decides to
+write. Hosted platforms often
 impose a fixed content model that no amount of care on the reading side can
 widen — SharePoint site pages, for instance, have a straightforward ingestion
 API, but their rich-text editor retains only a limited subset of HTML: headings

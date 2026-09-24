@@ -5,6 +5,36 @@ Notable changes to `connections-export`, newest first. Versions follow
 the archive format may still change between minor versions — the format's own
 version is recorded inside every archive.
 
+## 0.1.10 — 2026-09-24
+
+### Username/password sign-in works from the console
+
+Found, diagnosed and first fixed by Christoph Stoettner
+([@stoeps13](https://github.com/stoeps13)) in pull request #1 — thank you.
+
+- **The Settings screen shows the sign-in method you saved.** It reported none
+  whenever the console was built the default way — a leftover of the removed
+  demo mode — so it always showed Windows sign-in, and choosing Username and
+  password never stuck.
+- **A run starts with that method.** The run form kept its own Windows sign-in
+  default and sent it with every start; it now follows the saved setting.
+- **The console reads credentials from the environment**, as the command line
+  always has: `CONNECTIONS_EXPORT_USER`/`CONNECTIONS_EXPORT_PASSWORD` (and a
+  pasted token, and the proxy variables) were invisible to console runs and to
+  the item-count lookups, which also asked with Windows sign-in whatever was
+  configured.
+- The README now says where the configuration file is looked for, and how to
+  set up Basic Auth.
+
+### The README is up to date
+
+- Jekyll is named alongside Obsidian throughout, with the note that both are
+  independent third-party applications; both exporters, and the console, cover
+  everything captured, not only wikis; the console reads an archive or a `.zip`
+  of one where it lies.
+- The install instructions no longer point to the `[obsidian]` extra, which has
+  not been needed since 0.1.8.
+
 ## 0.1.9 — 2026-09-24
 
 ### External images in the PDF: included, marked, and credited — your choice
