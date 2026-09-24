@@ -32,21 +32,26 @@ def _client(app) -> httpx.AsyncClient:
 # --- GET /api/settings -------------------------------------------------
 
 
-def test_settings_endpoint_in_demo_mode():
-    app = make_app(demo=True)
+def test_settings_endpoint_reports_the_saved_auth_mode(tmp_path, monkeypatch):
+    """There is no demo mode, and the settings no longer pretend there is.
+    Answering "no sign-in method" whenever the app was built the default way
+    made the Settings screen show Windows sign-in whatever had been saved --
+    so choosing Username and password there never stuck (public PR #1)."""
+    monkeypatch.chdir(tmp_path)  # no connections-export.toml here
+    app = make_app()
 
     async def _do():
         async with _client(app) as client:
-            return await client.get("/api/settings")
+            before = await client.get("/api/settings")
+            await client.put("/api/settings", json={"auth_mode": "basic"})
+            return before, await client.get("/api/settings")
 
-    response = _run(_do())
+    before, response = _run(_do())
 
+    assert before.json()["auth_mode"] == "sspi"
     assert response.status_code == 200
     body = response.json()
-    assert body["demo"] is True
-    # A demo server never resolves the host's real config.
-    assert body["base_url"] is None
-    assert body["auth_mode"] is None
+    assert body["auth_mode"] == "basic"
     assert "archives_dir" in body
     assert isinstance(body["archives_dir"], str) and body["archives_dir"]
     assert "archives_count" in body

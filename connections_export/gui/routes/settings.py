@@ -43,23 +43,25 @@ def register(
         which source system/auth a real crawl would use, where run
         archives land, and whether a PDF-capable browser is available.
         No secrets: `base_url`/`auth_mode` are configuration, not
-        credentials. In demo mode `base_url`/`auth_mode` are always
-        `None` -- a demo server never resolves the host's real config
-        (mirrors `/api/start`, which only loads config for a non-demo
-        server with no explicit `base_url`)."""
+        credentials.
+
+        Always the real, saved-or-configured values. They were withheld
+        whenever the app was built with `demo=True` -- the default, and what
+        `serve` builds -- although there is no demo mode any more (the demo
+        is an address, not a server). The console then showed Windows
+        sign-in whatever had been saved, and started runs with it."""
+        from connections_export.config import load_config  # noqa: PLC0415
+
         settings = app.state.editable_settings
         base_url: str | None = settings["base_url"]
-        auth_mode: str | None = None if demo else settings["auth_mode"]
-        if not demo:
-            from connections_export.config import load_config  # noqa: PLC0415
-
-            try:
-                cfg = load_config({})
-                base_url = settings["base_url"] or cfg.base_url
-                auth_mode = settings["auth_mode"] or cfg.auth_mode
-            except Exception:
-                base_url = None
-                auth_mode = None
+        auth_mode: str | None = settings["auth_mode"]
+        try:
+            cfg = load_config({})
+            base_url = settings["base_url"] or cfg.base_url
+            auth_mode = settings["auth_mode"] or cfg.auth_mode
+        except Exception:
+            base_url = None
+            auth_mode = None
 
         from connections_export.pdf.browser import (  # noqa: PLC0415
             CHROMIUM_AVAILABLE,

@@ -1249,18 +1249,9 @@ def serve_main(
     config = load_config(cli_overrides, config_path=args.config_path, env=env)
 
     host, port = args.host, args.port
-    # A real base URL makes this a live console by default; an explicit
-    # --demo/--no-demo choice wins. Pass the resolved value through because
-    # the settings route uses it to decide whether live authentication settings
-    # should be shown.
-    use_demo = args.demo if args.demo is not None else not bool(config.base_url)
     # Pass the bound host so LocalGuardMiddleware still admits requests
     # addressed to it (the localhost defaults are already allowlisted).
-    app = make_app(
-        demo=use_demo,
-        bound_host=host,
-        author_filter=config.filter_author,
-    )
+    app = make_app(bound_host=host, author_filter=config.filter_author)
     if run is None:
         # Real launch path only: if the requested port is busy, pick the
         # next free one so a common conflict (e.g. another dev server on
