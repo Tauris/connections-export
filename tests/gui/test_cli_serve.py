@@ -60,8 +60,8 @@ def test_a_configured_base_url_exposes_live_auth_settings(tmp_path, monkeypatch)
     response = TestClient(captured["app"]).get(
         "http://127.0.0.1/api/settings", headers={"host": "127.0.0.1"}
     )
-    assert response.json()["demo"] is False
     assert response.json()["auth_mode"] == "sspi"
+    assert response.json()["base_url"] == "https://connections.example.corp"
 
 
 def test_a_configured_base_url_does_not_change_what_is_built(tmp_path, monkeypatch):

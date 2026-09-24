@@ -10,6 +10,7 @@ feel broken.
 from __future__ import annotations
 
 import json
+import os
 import queue
 import threading
 from collections.abc import Callable
@@ -646,15 +647,18 @@ def register(
 
             # Build an authenticated client once; reuse it for all requests
             # in this handler (topic lookup + feed probe). Falls back to
-            # session-cookie-only if SSPI setup fails.
-            _cfg = Config(base_url=base, auth_mode="sspi", output_dir=Path("."))
+            # session-cookie-only if authentication cannot be prepared. The
+            # configured mode and the process environment, as every other
+            # lookup uses -- not Windows sign-in with no credentials.
+            _mode = _lookup_deployment(app, base)[1] or "sspi"
+            _cfg = Config(base_url=base, auth_mode=_mode, output_dir=Path("."))
             _http = app.state.feed_info_client.get(base)
             if _http is None:
                 try:
-                    _http = _build_default_client(_cfg, env={})
+                    _http = _build_default_client(_cfg, env=os.environ)
                     app.state.feed_info_client[base] = _http
                 except Exception:
-                    # SSPI not available / failed — fall back to session cookies.
+                    # Authentication unavailable / failed — fall back to session cookies.
                     import httpx as _httpx  # noqa: PLC0415
 
                     cookies = {c["name"]: c["value"] for c in (app.state.live_cookies or [])}
@@ -716,9 +720,10 @@ def register(
             # works even before the first crawl populates live_cookies.
             from connections_export.cli import _build_default_client  # noqa: PLC0415
 
-            _cfg = Config(base_url=base, auth_mode="sspi", output_dir=Path("."))
+            _mode = _lookup_deployment(app, base)[1] or "sspi"
+            _cfg = Config(base_url=base, auth_mode=_mode, output_dir=Path("."))
             try:
-                _client = _build_default_client(_cfg, env={})
+                _client = _build_default_client(_cfg, env=os.environ)
             except Exception:
                 _client = None
 
