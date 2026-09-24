@@ -48,6 +48,22 @@ def test_the_demo_switches_are_accepted_and_change_nothing(tmp_path, monkeypatch
     assert len(routes) == 1, "the switches build different apps"
 
 
+def test_a_configured_base_url_exposes_live_auth_settings(tmp_path, monkeypatch):
+    """A live console must not hide authentication settings as demo-only."""
+    (tmp_path / "connections-export.toml").write_text(
+        'base_url = "https://connections.example.corp"\n', encoding="utf-8"
+    )
+    captured = _served([], tmp_path, monkeypatch)
+
+    from starlette.testclient import TestClient
+
+    response = TestClient(captured["app"]).get(
+        "http://127.0.0.1/api/settings", headers={"host": "127.0.0.1"}
+    )
+    assert response.json()["demo"] is False
+    assert response.json()["auth_mode"] == "sspi"
+
+
 def test_a_configured_base_url_does_not_change_what_is_built(tmp_path, monkeypatch):
     """It decides what a URL-less request means, not what the server is."""
     (tmp_path / "connections-export.toml").write_text(

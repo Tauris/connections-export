@@ -134,6 +134,11 @@ def test_console_js_references_load_settings_and_its_endpoint():
     assert "/api/settings" in JS
 
 
+def test_saved_auth_mode_is_applied_to_the_ingest_form():
+    assert 'const runAuthInput = $("field-auth-mode");' in JS
+    assert "if (runAuthInput) runAuthInput.value = authMode;" in JS
+
+
 def test_show_section_settings_triggers_load_settings():
     assert 'if (id === "settings"' in JS
 
