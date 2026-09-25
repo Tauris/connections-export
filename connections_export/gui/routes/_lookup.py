@@ -59,24 +59,29 @@ def _lookup_deployment(app, base_url_param: str | None):
     auth_root: str | None = None
     try:
         cfg = load_config({})
-        # The Settings panel is the source of truth for the current browser
-        # session. Falling back to the file/environment is needed on startup,
-        # but ignoring this state makes discovery use SSPI after the user has
-        # selected Basic Auth in the UI.
-        saved = app.state.editable_settings or {}
-        # The app state contains defaults as well as user choices. Only a
-        # persisted setting is an explicit UI choice; otherwise config-file /
-        # environment auth must win over the built-in SSPI default.
+        auth_mode = cfg.auth_mode
+        auth_root = cfg.auth_root
+        # A configured address is a fallback, not the answer: the address a
+        # capture uses comes from the URL you drop.
+        base = base or cfg.base_url
+    except Exception:  # noqa: BLE001 - unreadable configuration is not fatal to a lookup
+        pass
+    # The Settings panel is the source of truth for the current browser
+    # session. Falling back to the file/environment is needed on startup,
+    # but ignoring this state makes discovery use SSPI after the user has
+    # selected Basic Auth in the UI.
+    saved = app.state.editable_settings or {}
+    # The app state contains defaults as well as user choices. Only a
+    # persisted setting is an explicit UI choice; otherwise config-file /
+    # environment auth must win over the built-in SSPI default.
+    try:
         from connections_export.gui.settings_store import load_settings  # noqa: PLC0415
 
         persisted = load_settings()
-        auth_mode = persisted.get("auth_mode") or cfg.auth_mode
-        auth_root = persisted.get("auth_root") or cfg.auth_root
-        # A configured address is a fallback, not the answer: the address a
-        # capture uses comes from the URL you drop.
-        base = base or persisted.get("base_url") or saved.get("base_url") or cfg.base_url
-    except Exception:  # noqa: BLE001 - unreadable configuration is not fatal to a lookup
-        pass
+    except Exception:  # noqa: BLE001 - an unreadable settings file keeps the configured mode
+        persisted = {}
+    auth_mode = persisted.get("auth_mode") or auth_mode
+    base = base or persisted.get("base_url") or saved.get("base_url")
     # The address in hand may have come from a captured page the Reader is
     # showing; it is only used if the user chose that deployment.
     require_trusted(app, base)
