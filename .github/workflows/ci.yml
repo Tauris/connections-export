@@ -22,6 +22,11 @@ on:
   pull_request:
   workflow_dispatch:
 
+# Tests only read the checkout. Without this the token gets the repository's
+# default grant, which may include write -- more than a pull request needs.
+permissions:
+  contents: read
+
 jobs:
   test:
     strategy:
@@ -31,8 +36,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5.4.2
         with:
           python-version: ${{ matrix.python }}
           enable-cache: true
@@ -46,12 +51,15 @@ jobs:
 
       # No Playwright browsers installed on purpose: the suite runs offline
       # against the in-process fake server; the ~2 browser-PDF tests skip.
+      # `--locked` everywhere: a uv.lock out of step with pyproject.toml fails
+      # here, rather than being quietly re-resolved and tested as something
+      # the lock does not describe.
       - name: Lint
         run: |
-          uv run --all-extras ruff check .
-          uv run --all-extras ruff format --check .
+          uv run --locked --all-extras ruff check .
+          uv run --locked --all-extras ruff format --check .
       - name: Tests
-        run: uv run --all-extras pytest --timeout=180 --timeout-method=thread
+        run: uv run --locked --all-extras pytest --timeout=180 --timeout-method=thread
 
   # The expensive half: only before a release, or when asked. macOS bills at
   # 10x and Windows at 2x, so this job costs more than everything else in the
@@ -73,14 +81,14 @@ jobs:
     # suite is minutes; this is a wide margin that still bounds a deadlock.
     timeout-minutes: 25
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5.4.2
         with:
           python-version: ${{ matrix.python }}
           enable-cache: true
       - name: Lint
         run: |
-          uv run --all-extras ruff check .
-          uv run --all-extras ruff format --check .
+          uv run --locked --all-extras ruff check .
+          uv run --locked --all-extras ruff format --check .
       - name: Tests
-        run: uv run --all-extras pytest --timeout=180 --timeout-method=thread
+        run: uv run --locked --all-extras pytest --timeout=180 --timeout-method=thread

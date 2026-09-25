@@ -53,6 +53,25 @@ _RESERVED = {
 MAX_STEM = 120
 
 
+def is_reserved_device_name(name: str) -> bool:
+    """Whether Windows reads `name` as a device, not a file.
+
+    Windows takes the device name up to the FIRST dot and ignores trailing
+    spaces before it, so `CON`, `con.txt`, `CON.tar.gz` and `COM1 .txt` are
+    all the device.
+    """
+    return name.split(".", 1)[0].rstrip(" ").lower() in _RESERVED
+
+
+def unreserve(name: str) -> str:
+    """`name` with its device-name part suffixed, so Windows reads a file:
+    `CON.tar.gz` -> `CON_.tar.gz`. Unchanged when it is not reserved."""
+    if not is_reserved_device_name(name):
+        return name
+    head, dot, rest = name.partition(".")
+    return f"{head}_{dot}{rest}"
+
+
 def _split_extension(name: str) -> tuple[str, str]:
     """`("Report", ".pdf")`. A leading dot is part of the stem, not an
     extension: `.gitignore` is a name, not an empty name with a suffix."""
@@ -116,8 +135,8 @@ def _sanitize_with_reasons(name: str) -> tuple[str, tuple[str, ...]]:
         reasons.append(REASON_TRAILING)
     stem = stripped
 
-    if stem.lower() in _RESERVED:
-        stem = f"{stem}_"
+    if is_reserved_device_name(stem):
+        stem = unreserve(stem)
         reasons.append(REASON_RESERVED)
     if len(stem) > MAX_STEM:
         stem = stem[:MAX_STEM].rstrip(". ")

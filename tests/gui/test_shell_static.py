@@ -405,7 +405,8 @@ def test_community_forums_are_named_and_selectable():
     assert "Forum · " in JS
     assert "forum.title" in JS
     assert "selectedCommunityComponents" in JS
-    assert 'value="" + component.kind + ":"' in JS or "component.kind + ':'" in JS
+    # `kind:id`; the kind is escaped like the id, since discovery supplies it.
+    assert "escapeHtml(component.kind) + ':'" in JS
 
 
 def test_author_filter_defaults_to_no_filter_and_me_is_explicit():
@@ -966,3 +967,28 @@ def test_export_can_choose_components_and_wiki_sections():
 
 def test_choosing_nothing_to_export_is_refused_rather_than_exporting_all():
     assert 'notify("Tick at least one component to export."' in JS
+
+
+def test_a_typed_deployment_address_is_chosen_through_a_post():
+    """Lookups sign in only to deployments the user chose, and only a POST
+    can choose one -- so the setup screen's typed address has to be posted,
+    or every lookup against it is refused."""
+    assert '"/api/choose-deployment"' in JS
+    assert "chooseDeployment(" in JS
+
+
+def test_the_update_screen_offers_to_choose_the_archives_host():
+    """An archive from a deployment not yet chosen must not dead-end: the
+    screen names the host and offers to use it."""
+    assert "data.untrusted_host" in JS
+    assert 'id="ledger-trust-host"' in JS
+
+
+def test_a_pdf_render_shows_its_progress_where_it_can_be_seen():
+    """Export PDF closes its menu, which hid the button's "Rendering…" for the
+    whole render: a busy machine and nothing on screen. The toolbar button
+    carries the progress and the time so far, and the end is announced."""
+    assert 'querySelector("#r-export-menu > summary")' in JS
+    assert '"⏳ Rendering PDF… "' in JS
+    assert "clearInterval(ticker)" in JS
+    assert '"PDF ready"' in JS

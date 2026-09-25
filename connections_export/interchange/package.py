@@ -13,7 +13,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from connections_export.archive.blobs import read_blob
+from connections_export.archive.blobs import read_blob, valid_digest
 from connections_export.archive.store import Archive
 from connections_export.derive.model import Interchange
 from connections_export.derive.traverse import iter_all_assets
@@ -39,11 +39,15 @@ SPEC_COPY_FILENAME = "INTERCHANGE.md"
 BLOBS_DIRNAME = "blobs"
 
 
-def _blob_filename(blob_hash: str) -> str:
+def _blob_filename(blob_hash: str) -> str | None:
     """`ResolvedAsset.blob_hash` carries the archive's own
     `"sha256:<hex>"` form; the package stores blobs under the bare hex
-    digest, mirroring the archive's own `blobs/<sha256hex>` layout."""
-    return blob_hash.split(":", 1)[-1]
+    digest, mirroring the archive's own `blobs/<sha256hex>` layout.
+
+    `None` for a hash that is not a digest. A model is loaded from someone
+    else's `interchange.json` as readily as derived here, and a hash of
+    `sha256:../../x` must never become a path to read or write."""
+    return valid_digest(blob_hash)
 
 
 def _copy_blobs(interchange: Interchange, archive: Archive, dest: Path) -> None:
@@ -70,6 +74,8 @@ def _copy_blobs(interchange: Interchange, archive: Archive, dest: Path) -> None:
     blobs_dir.mkdir(parents=True, exist_ok=True)
     for blob_hash in sorted(hashes):
         filename = _blob_filename(blob_hash)
+        if filename is None:
+            continue  # not a digest: nothing the archive can hold, nowhere to write it
         path = blobs_dir / filename
         if path.exists():  # dedup: a hash written once
             continue
@@ -151,10 +157,11 @@ def _write_files(interchange: Interchange, archive: Archive, dest: Path) -> dict
             }
 
             asset = derived.asset
-            if asset is not None and asset.present and asset.blob_hash:
+            digest = _blob_filename(asset.blob_hash) if asset is not None else None
+            if asset is not None and asset.present and digest is not None:
                 record["blob"] = asset.blob_hash
                 try:
-                    data = read_blob(archive.root, _blob_filename(asset.blob_hash))
+                    data = read_blob(archive.root, digest)
                 except (OSError, ValueError):
                     data = None
                 if data is not None:
@@ -245,6 +252,13 @@ def load_package(dest: Path | str) -> Interchange:
 def open_blob(dest: Path | str, blob_hash: str) -> bytes:
     """Read a blob's bytes out of a written package by the same
     `ResolvedAsset.blob_hash` value the model carries (`"sha256:<hex>"`
-    or the bare hex digest -- either form resolves)."""
+    or the bare hex digest -- either form resolves).
+
+    A hash that is not a digest raises `FileNotFoundError`, exactly as an
+    absent blob does: the package is someone else's, and its hashes are
+    names inside `blobs/`, never paths out of it."""
     dest = Path(dest)
-    return (dest / BLOBS_DIRNAME / _blob_filename(blob_hash)).read_bytes()
+    filename = _blob_filename(blob_hash)
+    if filename is None:
+        raise FileNotFoundError(f"not a blob digest: {blob_hash!r}")
+    return (dest / BLOBS_DIRNAME / filename).read_bytes()

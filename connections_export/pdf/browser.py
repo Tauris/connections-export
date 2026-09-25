@@ -20,6 +20,7 @@ probe never raises -- any failure just means "unavailable".
 from __future__ import annotations
 
 import os
+import re
 from collections.abc import Iterator, Mapping
 from typing import TYPE_CHECKING
 
@@ -32,12 +33,30 @@ if TYPE_CHECKING:  # pragma: no cover - annotations only
 #: Force a specific browser instead of the Edge -> Chrome -> bundled probe.
 ENV_BROWSER_CHANNEL = "CONNECTIONS_EXPORT_BROWSER_CHANNEL"
 ENV_BROWSER_PATH = "CONNECTIONS_EXPORT_BROWSER_PATH"
+#: Set to 1/true/yes to launch without Chromium's sandbox (see `_launch_args`).
+ENV_BROWSER_NO_SANDBOX = "CONNECTIONS_EXPORT_BROWSER_NO_SANDBOX"
+
+_UNSET = object()
 
 
-def _launch_args() -> list[str]:
+def _current_euid() -> int | None:
+    """The effective uid, or None where there is no such thing (Windows)."""
+    geteuid = getattr(os, "geteuid", None)
+    return geteuid() if geteuid is not None else None
+
+
+def _launch_args(env: Mapping[str, str] | None = None, euid: object = _UNSET) -> list[str]:
     """Flags every launch gets.
 
-    `--no-sandbox` is what lets the browser start in a container at all.
+    `--no-sandbox` only when the browser could not start otherwise. The
+    documents printed here are untrusted -- captured pages, possibly from an
+    archive someone else made -- and Chromium's sandbox is what contains a
+    renderer that such content has compromised, so it stays on by default.
+    It has to go in two cases: running as root (Chromium refuses to start its
+    sandbox as root, and containers usually run as root -- the case this flag
+    was originally added for), and a container that lacks the kernel support
+    the sandbox needs even as an ordinary user, which only the operator can
+    know: they set `CONNECTIONS_EXPORT_BROWSER_NO_SANDBOX=1`.
 
     The other two are about output. Edge prints component-loader errors as it
     starts -- "Edge LLM: Error getting component directory" and a matching
@@ -51,11 +70,72 @@ def _launch_args() -> list[str]:
     to fatal-only, which stops the rest of Chromium's chatter arriving as our
     output. Anything that actually kills the browser still reaches us.
     """
+    env = os.environ if env is None else env
+    euid = _current_euid() if euid is _UNSET else euid
+    override = env.get(ENV_BROWSER_NO_SANDBOX, "").strip().lower() in ("1", "true", "yes")
+    sandbox_off = ["--no-sandbox"] if override or euid == 0 else []
     return [
-        "--no-sandbox",
+        *sandbox_off,
         "--disable-features=OptimizationGuideOnDeviceModel",
         "--log-level=3",
     ]
+
+
+# --- the render's network ------------------------------------------------
+#
+# The document being printed is complete in itself: images are data URIs,
+# the polyfill is injected from the vendored file, and the CSS is inline. So
+# the print page has no reason to make a request, and every reason not to --
+# the content is untrusted, and a request it makes can reach an intranet host,
+# a cloud metadata address or this tool's own console, or carry the export
+# away. Sanitization removes what it recognises; this blocks what it misses.
+
+#: The only URLs the page may load: its own inline content.
+_RENDER_ALLOWED_PREFIXES = ("data:", "about:", "blob:")
+
+
+def render_request_allowed(url: str) -> bool:
+    """May the print page load `url`? Only content that is already in it."""
+    return url.lower().startswith(_RENDER_ALLOWED_PREFIXES)
+
+
+def block_network(page, blocked: list[str]) -> None:
+    """Answer every request the page makes for anything outside itself with
+    an empty response from here, recording each in `blocked`. Nothing is
+    forwarded. Installed BEFORE `set_content`, so not even the first parse
+    can fetch anything.
+
+    Answered empty rather than aborted: paged.js fetches a `<link>`ed
+    stylesheet itself and, when that fetch FAILS, never finishes paginating --
+    the export would sit until the render timeout. An empty stylesheet (or
+    image, or frame) is simply nothing, and the render carries on.
+
+    Blocked requests are recorded separately from real failures: they are the
+    guard working, not the export failing -- a captured page that references
+    an intranet stylesheet should still print."""
+
+    def handle(route) -> None:
+        request = route.request
+        url = request.url
+        if render_request_allowed(url):
+            route.continue_()
+            return
+        blocked.append(url)
+        if request.is_navigation_request() and request.frame == page.main_frame:
+            # Answering this one would REPLACE the document being printed
+            # with an empty one; refused, the document stays.
+            route.abort("blockedbyclient")
+            return
+        route.fulfill(status=200, content_type="text/plain", body="")
+
+    def handle_web_socket(web_socket) -> None:
+        # `page.route` never sees WebSockets. Not connecting to the server
+        # is what keeps this one inside the browser; closing it is courtesy.
+        blocked.append(web_socket.url)
+        web_socket.close()
+
+    page.route("**/*", handle)
+    page.route_web_socket(re.compile(".*"), handle_web_socket)
 
 
 def _launch_candidates(env: Mapping[str, str]) -> Iterator[dict]:
@@ -277,7 +357,12 @@ def html_to_pdf(html: str, *, outline: bool = False, marks: Marks | None = None)
     with sync_playwright() as playwright:
         browser = _launch(playwright)
         try:
-            page = browser.new_page()
+            # Nothing here needs script -- the header and footer are Chromium's
+            # own templates -- so the untrusted document gets none. A service
+            # worker would see requests before the route does.
+            page = browser.new_page(java_script_enabled=False, service_workers="block")
+            blocked: list[str] = []
+            block_network(page, blocked)
             page.set_content(html, wait_until="load")
             return page.pdf(**_pdf_kwargs(outline=outline, marks=marks))
         finally:

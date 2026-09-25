@@ -143,11 +143,14 @@ def _guess_content_type(href: str, data: bytes) -> str:
     return guessed or "application/octet-stream"
 
 
-def _blob_digest(blob_hash: str) -> str:
+def _blob_digest(blob_hash: str) -> str | None:
     """`ResolvedAsset.blob_hash` carries the archive's `"sha256:<hex>"`
-    form; `blob_bytes` is keyed by the bare hex digest (mirrors
-    `interchange/package.py`'s `_blob_filename`)."""
-    return blob_hash.split(":", 1)[-1]
+    form; `blob_bytes` is keyed by the bare hex digest. Anything that is not
+    a digest is `None` -- the archive's one rule (`archive.blobs.valid_digest`),
+    so a hash can never be a path here either."""
+    from connections_export.archive.blobs import valid_digest  # noqa: PLC0415
+
+    return valid_digest(blob_hash)
 
 
 def _data_uri(href: str, data: bytes) -> str:
@@ -159,18 +162,252 @@ def _data_uri(href: str, data: bytes) -> str:
 # --- body/comment sanitization ------------------------------------------
 
 
-def _strip_scripts_and_handlers(tree: lxml.html.HtmlElement) -> None:
-    """Remove every `<script>` and inline `on*=` handler (Author CSS preserved, scripts
-    neutralized) -- `<style>`, `style=`,
-    and classes are left untouched."""
-    for script in tree.xpath("//script"):
-        parent = script.getparent()
-        if parent is not None:
-            parent.remove(script)
-    for element in tree.iter():
+#
+# Captured bodies are untrusted: anyone who could edit a page wrote them, and
+# they are printed in a Chromium with JavaScript on (paged.js needs it) and the
+# whole export in the same document. So the cleanup is an allowlist in effect:
+# whatever makes a page LOOK like itself -- author `<style>`, classes, inline
+# styles, tables, embedded images, links -- stays; whatever executes, embeds
+# another document, redirects the render or loads from elsewhere goes. The
+# renderers also block the network outright (`pdf/browser.py`), so this is the
+# first of two layers, not the only one.
+
+#: Removed with everything inside them. None has anything to show on paper;
+#: each can run script, embed another document, redirect or restyle the whole
+#: render from elsewhere (`<base>`, `<meta refresh>`, `<link>`), or submit.
+_DROP_ELEMENTS = frozenset(
+    {
+        "script",
+        "iframe",
+        "frame",
+        "frameset",
+        "object",
+        "applet",
+        "meta",
+        "base",
+        "link",
+        "input",
+        "button",
+        "textarea",
+        "select",
+        "noscript",
+        "template",
+        "portal",
+    }
+)
+
+#: Removed, but whatever is inside kept. A form around ordinary paragraphs is
+#: structure, and removing it would take the paragraphs with it. The SVG
+#: animation elements can set an `href` to `javascript:` and animate nothing a
+#: printed page would show. None of the others has content of its own --
+#: `<embed>` is void, the SVG animation elements are usually written
+#: self-closing -- but the HTML parser knows neither, so it nests whatever
+#: FOLLOWS them inside them; removing them with their content would delete
+#: the rest of the page.
+_UNWRAP_ELEMENTS = frozenset(
+    {"form", "embed", "set", "animate", "animatemotion", "animatetransform"}
+)
+
+#: Attributes whose only job is to load (or submit to) something elsewhere.
+#: `srcset` matters most: Chromium prefers it to the rewritten data-URI `src`.
+_DROP_ATTRIBUTES = frozenset(
+    {
+        "srcset",
+        "imagesrcset",
+        "poster",
+        "background",
+        "formaction",
+        "action",
+        "ping",
+        "lowsrc",
+        "dynsrc",
+        "longdesc",
+        "srcdoc",
+        "codebase",
+        "archive",
+        "manifest",
+    }
+)
+
+#: Link targets on these elements are navigation, shown and clicked on
+#: paper; the same attribute anywhere else is a resource the browser loads.
+_NAVIGATION_ELEMENTS = frozenset({"a", "area"})
+_URL_ATTRIBUTES = frozenset({"href", "xlink:href", "src", "data", "cite"})
+
+#: Schemes that run code when followed. `data:` is judged separately: an
+#: image is fine, anything else (an HTML document) is not.
+_SCRIPT_SCHEMES = frozenset({"javascript", "vbscript", "livescript"})
+
+#: Browsers ignore tabs and newlines anywhere in a URL and leading control
+#: characters, so `java\tscript:` is `javascript:` to them.
+_URL_NOISE = re.compile(r"[\x00-\x20]")
+_URL_SCHEME = re.compile(r"^([a-z][a-z0-9+.\-]*):")
+
+
+def _url_scheme(value: str) -> str | None:
+    match = _URL_SCHEME.match(_URL_NOISE.sub("", value).lower())
+    return match.group(1) if match else None
+
+
+def _is_data_image(value: str) -> bool:
+    return _URL_NOISE.sub("", value).lower().startswith("data:image/")
+
+
+def _safe_navigation(value: str) -> bool:
+    """A link may go anywhere a reader might follow it, except to script."""
+    scheme = _url_scheme(value)
+    if scheme in _SCRIPT_SCHEMES:
+        return False
+    return scheme != "data" or _is_data_image(value)
+
+
+def _safe_resource(value: str) -> bool:
+    """A resource may only come from inside the document: an embedded image or
+    a same-document reference (`<use href="#icon">`). Anything else is a load
+    from elsewhere at render time."""
+    stripped = _URL_NOISE.sub("", value)
+    return stripped.startswith("#") or _is_data_image(value)
+
+
+# --- author CSS -------------------------------------------------------------
+#
+# Kept, because it is how the page looked -- but with every remote load taken
+# out. CSS can load through `@import`, `url(...)`/`src(...)` and the bare
+# strings of `image-set(...)`, and any of those names may be written with
+# escapes (`\75 rl(` is `url(`). Escapes that stand for a plain letter are
+# decoded first: a letter never needs escaping, so decoding changes nothing
+# about what the CSS means, and it makes the disguised forms visible.
+
+_CSS_LETTER_ESCAPE = re.compile(r"\\(?:([0-9a-fA-F]{1,6})[ \t\n\r\f]?|([g-zG-Z]))")
+_CSS_HEX_ESCAPE_AT_END = re.compile(r"\\[0-9a-fA-F]{1,6}$")
+_CSS_IMPORT = re.compile(
+    r"@import\b(?:\"(?:\\.|[^\"\\])*\"|'(?:\\.|[^'\\])*'|\((?:[^)])*\)|[^;\"'(}])*;?",
+    re.IGNORECASE,
+)
+_CSS_URL = re.compile(
+    r"\b(?:url|src)\(\s*(?:\"((?:\\.|[^\"\\])*)\"|'((?:\\.|[^'\\])*)'|([^)\"'\s]*))\s*\)",
+    re.IGNORECASE,
+)
+_CSS_IMAGE_SET = re.compile(r"(?:-webkit-)?image-set\(", re.IGNORECASE)
+_CSS_STRING = re.compile(r"\"((?:\\.|[^\"\\])*)\"|'((?:\\.|[^'\\])*)'")
+
+
+def _decode_letter_escapes(css: str) -> str:
+    out: list[str] = []
+    last = 0
+    for match in _CSS_LETTER_ESCAPE.finditer(css):
+        hex_digits, literal = match.groups()
+        char = literal or chr(min(int(hex_digits, 16), 0x10FFFF))
+        if not char.isascii() or not char.isalpha():
+            continue  # a digit, a symbol, a non-ASCII character: needed, leave it
+        out.append(css[last : match.start()])
+        # A hex digit straight after an unterminated hex escape would join it
+        # (`\31` + `a` reads as `\31a`), so terminate that escape first.
+        if char in "abcdefABCDEF" and _CSS_HEX_ESCAPE_AT_END.search("".join(out)):
+            out.append(" ")
+        out.append(char)
+        last = match.end()
+    out.append(css[last:])
+    return "".join(out)
+
+
+def _strip_image_sets(css: str) -> str:
+    """`image-set("a.png" 1x)` loads its bare strings like `url()`s. Any whose
+    candidates are not all embedded images becomes `none`."""
+    out: list[str] = []
+    i = 0
+    for match in _CSS_IMAGE_SET.finditer(css):
+        if match.start() < i:
+            continue
+        depth, j = 1, match.end()
+        while j < len(css) and depth:
+            if css[j] == "(":
+                depth += 1
+            elif css[j] == ")":
+                depth -= 1
+            j += 1
+        inner = css[match.end() : j - 1]
+        strings = [a if a is not None else b for a, b in _CSS_STRING.findall(inner)]
+        out.append(css[i : match.start()])
+        out.append(css[match.start() : j] if all(_is_data_image(s) for s in strings) else "none")
+        i = j
+    out.append(css[i:])
+    return "".join(out)
+
+
+def _sanitize_css(css: str) -> str:
+    """Author CSS with `@import`s removed and every non-embedded `url()` (or
+    `src()`, or `image-set()` candidate) replaced by `none`."""
+    css = _decode_letter_escapes(css)
+    css = _CSS_IMPORT.sub("", css)
+
+    def _url(match: re.Match) -> str:
+        target = next((g for g in match.groups() if g is not None), "")
+        return match.group(0) if _is_data_image(target) else "none"
+
+    css = _CSS_URL.sub(_url, css)
+    return _strip_image_sets(css)
+
+
+def _missing_image_marker(tree: lxml.html.HtmlElement, url: str | None):
+    marker = tree.makeelement("span", {"class": "hcl-missing-image"})
+    marker.text = f"[image not captured: {url}]" if url else NOT_CAPTURED_MARKER
+    return marker
+
+
+def _drop_active_elements(tree: lxml.html.HtmlElement) -> None:
+    """Remove `_DROP_ELEMENTS` (tag and content) and unwrap `_UNWRAP_ELEMENTS`.
+
+    Run BEFORE the image rewrite so an image inside, say, a `<noscript>` is
+    not given an external-image number for something that never prints."""
+    for element in list(tree.iter()):
+        tag = element.tag if isinstance(element.tag, str) else ""
+        name = tag.rsplit("}", 1)[-1].lower()
+        if element is tree:
+            continue
+        if name in _DROP_ELEMENTS:
+            # `drop_tree` keeps the element's tail -- the text after it,
+            # which belongs to the parent and must not go with it.
+            element.drop_tree()
+        elif name in _UNWRAP_ELEMENTS:
+            element.drop_tag()
+
+
+def _clean_attributes(tree: lxml.html.HtmlElement) -> None:
+    """Handlers, loading attributes, script URLs and remote CSS -- run AFTER
+    the image and link rewrites, so it also sees what they produced."""
+    for element in list(tree.iter()):
+        if not isinstance(element.tag, str):
+            continue
+        name = element.tag.rsplit("}", 1)[-1].lower()
+        original_src = element.get("src")
+        if name == "style" and element.text:
+            element.text = _sanitize_css(element.text)
         for attr in list(element.attrib):
-            if attr.lower().startswith("on"):
+            key = attr.lower()
+            value = element.attrib[attr]
+            if key.startswith("on") or key in _DROP_ATTRIBUTES:
                 del element.attrib[attr]
+            elif key == "style":
+                element.attrib[attr] = _sanitize_css(value)
+            elif key in _URL_ATTRIBUTES:
+                navigation = name in _NAVIGATION_ELEMENTS and key != "src"
+                if not (
+                    _safe_navigation(value)
+                    if navigation or key == "cite"
+                    else _safe_resource(value)
+                ):
+                    del element.attrib[attr]
+        # An image nobody rewrote (a comment has no asset list) would be
+        # fetched at render time; its address is kept as visible text instead.
+        if name == "img" and not _is_data_image(element.get("src") or ""):
+            _replace(element, _missing_image_marker(tree, original_src))
+
+
+def _strip_scripts_and_handlers(tree: lxml.html.HtmlElement) -> None:
+    """The whole cleanup for markup nothing else rewrites (comments)."""
+    _drop_active_elements(tree)
+    _clean_attributes(tree)
 
 
 def _asset_lookup(assets: list[ResolvedAsset]) -> dict[str, ResolvedAsset]:
@@ -191,7 +428,8 @@ def _rewrite_images(
         asset = lookup.get(src) if src is not None else None
         data = None
         if asset is not None and asset.present and asset.blob_hash:
-            data = blob_bytes(_blob_digest(asset.blob_hash))
+            digest = _blob_digest(asset.blob_hash)
+            data = blob_bytes(digest) if digest else None
         if data is not None:
             img.set("src", _data_uri(asset.original_href, data))
             continue
@@ -360,13 +598,16 @@ def _sanitize_html(
     """The sanitize+embed+rewrite core shared by pages, blog posts, and
     forum topics/replies (all of which carry their own `assets`/`links`):
     scripts/handlers stripped, present images embedded as data URIs, links
-    reclassified to internal anchors or kept-visible URLs."""
+    reclassified to internal anchors or kept-visible URLs -- and everything
+    that could execute or load from elsewhere removed (see the section note
+    above `_DROP_ELEMENTS`)."""
     tree = _parse_fragment(body_html)
     if tree is None:
         return ""
-    _strip_scripts_and_handlers(tree)
+    _drop_active_elements(tree)
     _rewrite_images(tree, assets, blob_bytes)
     _rewrite_links(tree, links)
+    _clean_attributes(tree)
     return lxml.html.tostring(tree, encoding="unicode")
 
 
@@ -376,9 +617,8 @@ def _sanitize_body(page: DerivedPage, blob_bytes: BlobBytes) -> str:
 
 def _sanitize_fragment(html_fragment: str | None) -> str:
     """Comments carry no asset/link lists of their own (`DerivedComment`
-    has neither), so only script/handler neutralization applies here --
-    the same "never execute authored content" discipline, scoped to
-    what's actually available.
+    has neither), so there is nothing to embed or reclassify -- only the
+    same cleanup as a body: nothing that executes or loads from elsewhere.
 
     Plain-text comment bodies (no block-level HTML, just bare `\\n`) have
     their newlines converted to `<br>` first so line breaks survive HTML
@@ -479,7 +719,8 @@ def _render_attachment(attachment: DerivedAttachment, blob_bytes: BlobBytes) -> 
     filename = _escape(attachment.filename or attachment.id)
     data = None
     if attachment.asset.present and attachment.asset.blob_hash:
-        data = blob_bytes(_blob_digest(attachment.asset.blob_hash))
+        digest = _blob_digest(attachment.asset.blob_hash)
+        data = blob_bytes(digest) if digest else None
     if data is not None:
         uri = _data_uri(attachment.asset.original_href, data)
         return f'<li><a href="{uri}" download="{filename}">{filename}</a></li>'

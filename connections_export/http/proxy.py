@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import ipaddress
 import os
+import re
 import sys
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -71,6 +72,14 @@ class ProxyDecision:
     source: str
     detail: str
 
+    def __repr__(self) -> str:
+        # Written out rather than generated so a decision that reaches a log
+        # or a traceback by way of repr() cannot carry the proxy's password.
+        return (
+            f"ProxyDecision(url={self.url!r}, server={redact_proxy(self.server)!r}, "
+            f"source={self.source!r}, detail={self.detail!r})"
+        )
+
     @property
     def direct(self) -> bool:
         return self.server is None
@@ -80,6 +89,32 @@ class ProxyDecision:
         """The route could not be determined -- the connection will be tried
         directly, but a failure may mean a proxy is required."""
         return self.source == "undetermined"
+
+
+#: `scheme://` (optional), then everything up to the LAST `@` before the
+#: path: the userinfo. Greedy on purpose, so a password containing an
+#: unescaped `@` is masked whole rather than half-printed.
+_USERINFO = re.compile(r"^(?P<scheme>[A-Za-z][A-Za-z0-9+.-]*://)?(?P<userinfo>[^/?#]*)@")
+
+
+def redact_proxy(server: str | None) -> str | None:
+    """`server` fit to print: `http://<user>:<password>@proxy:8080` ->
+    `http://<user>:***@proxy:8080`.
+
+    `HTTPS_PROXY` routinely carries credentials, and what a probe or a log
+    prints is exactly what gets pasted into a support request. The user name
+    stays, because "which account" is a useful thing to see; with no password
+    the lone name may itself be the token (`http://<token>@proxy`), so then it
+    is the part masked.
+    """
+    if not server:
+        return server
+    match = _USERINFO.match(server)
+    if not match:
+        return server
+    user, colon, _secret = match["userinfo"].partition(":")
+    masked = f"{user}:***" if colon else "***"
+    return f"{match['scheme'] or ''}{masked}@{server[match.end() :]}"
 
 
 def is_loopback(url: str) -> bool:
@@ -417,7 +452,7 @@ def _winhttp_proxy_for_unbounded(url: str):  # pragma: no cover - Windows only
         if info.dwAccessType == _WINHTTP_ACCESS_TYPE_NO_PROXY or not proxy_list:
             return None, f"{where} says DIRECT"
         server = _first_server(proxy_list)
-        return server, f"{where} names {server}"
+        return server, f"{where} names {redact_proxy(server)}"
     finally:
         for pointer in (info.lpszProxy, info.lpszProxyBypass):
             if pointer:
@@ -596,6 +631,6 @@ def requests_session_proxies(decision: ProxyDecision) -> dict | None:
 
 
 def explain(decision: ProxyDecision) -> str:
-    """One line for a probe or a log."""
-    via = "direct" if decision.direct else f"via {decision.server}"
+    """One line for a probe or a log -- with any proxy password masked."""
+    via = "direct" if decision.direct else f"via {redact_proxy(decision.server)}"
     return f"{decision.url}: {via} — {decision.detail} [{decision.source}]"

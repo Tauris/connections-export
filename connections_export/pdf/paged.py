@@ -23,20 +23,28 @@ headings that landed on each page) -> `page.pdf`.
 
 from __future__ import annotations
 
+import secrets
 from collections.abc import Mapping
 from pathlib import Path
 
 from connections_export.derive.model import Interchange
-from connections_export.pdf.browser import CHROMIUM_AVAILABLE, _launch
+from connections_export.pdf.browser import CHROMIUM_AVAILABLE, _launch, block_network
 from connections_export.pdf.html import DEFAULT_GENERATED_AT, BlobBytes, render_html
 
 
 class PdfRenderError(RuntimeError):
-    """A PDF failure with browser resources that could not load."""
+    """A PDF failure with browser resources that could not load.
 
-    def __init__(self, message: str, *, failures: list[str] | None = None) -> None:
+    `failures` are loads that went wrong; `blocked` are requests the render
+    refused on purpose (`browser.block_network`) -- listed apart, since they
+    are the guard working rather than the cause of anything."""
+
+    def __init__(
+        self, message: str, *, failures: list[str] | None = None, blocked: list[str] | None = None
+    ) -> None:
         super().__init__(message)
         self.failures = failures or []
+        self.blocked = blocked or []
 
 
 #: The vendored polyfill (MIT -- see the sibling `.LICENSE`). Injected into the
@@ -158,8 +166,16 @@ _STAMP_JS = r"""
   // Placeholders are substituted here rather than server-side because only the
   // paginated document knows the page count and which section each page fell
   // in. `{section}` is the reason this renderer's footer is worth having.
-  const fill = (tpl, ctx) =>
-    (tpl || '').replace(/\{([a-z]+)\}/g, (_, name) => (name in ctx ? ctx[name] : ''));
+  // `section` and `title` come from the captured content -- page titles
+  // anyone could write. Where the result becomes markup (a whole band, set
+  // with innerHTML) each substituted value is escaped; the band's own markup
+  // is the user's and stays markup. Slots are written as text, unescaped.
+  const esc = (value) => String(value).replace(/[&<>"']/g, (c) => (
+    { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const fill = (tpl, ctx, encode) =>
+    (tpl || '').replace(/\{([a-z]+)\}/g, (_, name) => (
+      Object.prototype.hasOwnProperty.call(ctx, name)
+        ? (encode ? encode(ctx[name]) : ctx[name]) : ''));
   const box = (pageEl, side) =>
     pageEl.querySelector('.pagedjs_margin-' + side + ' .pagedjs_margin-content')
       || pageEl.querySelector('.pagedjs_margin-' + side);
@@ -199,12 +215,13 @@ _STAMP_JS = r"""
       section: parts.join(' · '),
     };
     // A whole band of user HTML replaces its three slots. Margin boxes are
-    // real elements here, so the markup simply goes in -- and unlike the
-    // other renderer, images by URL load normally.
+    // real elements here, so the markup simply goes in. Images in it must be
+    // inline (`data:` or `<svg>`), as in the other renderer: the print page
+    // loads nothing by URL (`browser.block_network`).
     const band = (pageEl, side, htmlText) => {
       const el = box(pageEl, side + '-center');
       if (!el) return false;
-      el.innerHTML = fill(htmlText, ctx);
+      el.innerHTML = fill(htmlText, ctx, esc);
       el.style.fontSize = marks.mark_size;
       el.style.color = marks.mark_color;
       if (marks.mark_font) el.style.fontFamily = marks.mark_font;
@@ -233,11 +250,45 @@ _STAMP_JS = r"""
 """
 
 
-def _with_paged_assets(html: str) -> str:
-    """Inject the paged-media `<style>` into the document head. The polyfill
-    itself is added via Playwright at render time (so pagination timing is
+def _content_security_policy(nonce: str) -> str:
+    """Script from the polyfill only.
+
+    paged.js needs JavaScript on, and the document is untrusted: a script or
+    `on*=` handler that slipped past sanitization would run beside it with the
+    whole export in reach. The policy admits only a script carrying this
+    render's nonce -- the polyfill, inserted by us -- and no inline handler.
+    Loads are left to `browser.block_network`, which answers them without
+    touching the network; refusing them here instead would fail paged.js's own
+    stylesheet requests and stall pagination."""
+    return f"script-src 'nonce-{nonce}'; object-src 'none'; base-uri 'none'; form-action 'none'"
+
+
+def _with_paged_assets(html: str, nonce: str | None = None) -> str:
+    """Inject the paged-media `<style>` into the document head, and -- given
+    a nonce -- the content security policy as the head's FIRST element, so it
+    is in force before any of the document's own markup is parsed. The
+    polyfill itself is added at render time (so pagination timing is
     controllable), not embedded here."""
-    return html.replace("</head>", f"<style>{_PAGED_STYLE}</style></head>", 1)
+    html = html.replace("</head>", f"<style>{_PAGED_STYLE}</style></head>", 1)
+    if nonce is not None:
+        meta = (
+            '<meta http-equiv="Content-Security-Policy" '
+            f'content="{_content_security_policy(nonce)}">'
+        )
+        html = html.replace("<head>", f"<head>{meta}", 1)
+    return html
+
+
+#: Inserts the polyfill as a script carrying the render's nonce -- which is
+#: what the content security policy admits. (`add_script_tag` cannot set one.)
+_INSERT_POLYFILL_JS = """
+([source, nonce]) => {
+  const script = document.createElement('script');
+  script.setAttribute('nonce', nonce);
+  script.textContent = source;
+  document.head.appendChild(script);
+}
+"""
 
 
 def _stamp_args(marks, generated_at: str) -> dict:
@@ -277,13 +328,22 @@ def html_to_pdf_paged(
     `prefer_css_page_size` honours the `@page { size }` it laid out."""
     from playwright.sync_api import sync_playwright  # noqa: PLC0415
 
+    nonce = secrets.token_urlsafe(18)
+    failures: list[str] = []
+    blocked: list[str] = []
     with sync_playwright() as playwright:
         browser = _launch(playwright)
         try:
-            page = browser.new_page()
-            failures: list[str] = []
+            # A service worker would see requests before the route does.
+            page = browser.new_page(service_workers="block")
+            # Before `set_content`: the document is untrusted, and nothing in
+            # it may load from -- or report to -- anywhere. The polyfill is
+            # unaffected: it is inserted as text, never requested.
+            block_network(page, blocked)
 
             def request_failed(request) -> None:
+                if request.url in blocked:
+                    return
                 failures.append(f"{request.url} ({request.failure or 'request failed'})")
 
             def response_failed(response) -> None:
@@ -295,21 +355,26 @@ def html_to_pdf_paged(
             # The document can contain user-provided image/footer resources
             # that never complete a browser load event. DOM readiness is enough
             # here; paged.js is the actual completion gate below.
-            page.set_content(_with_paged_assets(html), wait_until="domcontentloaded")
+            page.set_content(_with_paged_assets(html, nonce), wait_until="domcontentloaded")
             # Signal completion via paged.js's own `after` hook (must be set
             # BEFORE the polyfill loads). Waiting on the first `.pagedjs_page`
             # instead is a race: pagination is async, so printing then yields a
-            # truncated PDF. `__pagedDone` flips only once the whole flow is laid
-            # out.
+            # truncated PDF. The marker attribute appears only once the whole
+            # flow is laid out. (An attribute and a selector wait, not a flag and
+            # `wait_for_function`: that evaluates a string in the page, which
+            # the content security policy -- rightly -- refuses.)
             page.evaluate(
-                "window.PagedConfig = { auto: true, after: () => { window.__pagedDone = true; } };"
+                "window.PagedConfig = { auto: true, after: () => {"
+                " document.documentElement.setAttribute('data-paged-done', ''); } };"
             )
-            page.add_script_tag(path=str(POLYFILL_PATH))
-            page.wait_for_function("window.__pagedDone === true", timeout=int(pdf_timeout * 1000))
+            page.evaluate(_INSERT_POLYFILL_JS, [POLYFILL_PATH.read_text(encoding="utf-8"), nonce])
+            page.wait_for_selector(
+                "html[data-paged-done]", state="attached", timeout=int(pdf_timeout * 1000)
+            )
             page.evaluate(_STAMP_JS, _stamp_args(marks, generated_at))
             return page.pdf(print_background=True, prefer_css_page_size=True)
         except Exception as exc:
-            raise PdfRenderError(str(exc), failures=failures) from exc
+            raise PdfRenderError(str(exc), failures=failures, blocked=blocked) from exc
         finally:
             browser.close()
 

@@ -232,6 +232,23 @@ def merge_pdf_parts(parts: list[bytes]) -> tuple[bytes, str | None]:
         )
 
 
+def navigable(url: str) -> bool:
+    """Whether the live-PDF browser may visit `url`: an http(s) address with
+    a host, nothing else.
+
+    The browser carries the user's session and can read the local disk, so
+    `file:`, `data:`, `javascript:`, `chrome:` and the like -- which an
+    archive's recorded `alternate_url` or a dropped URL could name -- would
+    print a local file or run script, not render a page of the deployment."""
+    from urllib.parse import urlparse  # noqa: PLC0415
+
+    try:
+        parsed = urlparse((url or "").strip())
+    except ValueError:
+        return False
+    return parsed.scheme.lower() in ("http", "https") and bool(parsed.hostname)
+
+
 def render_live_pdf(
     urls: Iterable[str],
     *,
@@ -250,13 +267,20 @@ def render_live_pdf(
     """
     from connections_export.pdf.browser import _launch  # noqa: PLC0415
 
-    url_list = list(urls)
-    if not url_list:
-        return LivePdfResult(pdf_bytes=b"")
-
     rendered: list[str] = []
     skipped: list[tuple[str, str]] = []
     pdf_parts: list[bytes] = []
+
+    # The URLs can come from an archive someone handed over; only a web page
+    # is something to render from the deployment (see `navigable`).
+    url_list = []
+    for url in urls:
+        if navigable(url):
+            url_list.append(url)
+        else:
+            skipped.append((url, "not an http(s) address; the live PDF only visits web pages"))
+    if not url_list:
+        return LivePdfResult(pdf_bytes=b"", skipped=skipped)
 
     try:
         from playwright.sync_api import sync_playwright  # noqa: PLC0415

@@ -97,7 +97,7 @@ def test_find_real_entity_by_live_node_covers_all_three_apps():
 def test_live_page_content_html_renders_a_blog_posts_body_and_comments():
     body = _function_body("livePageContentHtml")
     assert 'match.app === "blog"' in body
-    assert "sandboxedBodyMarkup(rendered)" in body
+    assert "sandboxedBodyMarkup(rendered, bodyFrameOptions())" in body
     assert "resolveBodyImages(post.content_html, post.assets)" in body
     assert "commentThreadHtml(post.comments" in body
 
@@ -116,7 +116,7 @@ def test_live_page_content_html_wiki_page_path_is_unchanged():
     # The drawer resolves the wiki body's images then sandboxes it (split via a
     # `rendered` local), unchanged.
     assert "resolveBodyImages(page.content_html" in body
-    assert "sandboxedBodyMarkup(rendered)" in body
+    assert "sandboxedBodyMarkup(rendered, bodyFrameOptions())" in body
     assert "renderAttachmentsReal(page)" in body
     assert "renderCommentsReal(page)" in body
 

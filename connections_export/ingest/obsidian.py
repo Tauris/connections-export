@@ -48,6 +48,14 @@ from connections_export.derive.model import (
     DerivedPage,
     Interchange,
 )
+from connections_export.ingest._markdown import (
+    BRACKET_TEXT,
+    code_span,
+    escape_inline,
+    html_to_text,
+    to_markdown,
+)
+from connections_export.interchange.filenames import MAX_STEM, unreserve
 
 #: `blob_hash -> bytes` (or None when a referenced blob isn't present).
 #: `interchange.open_blob`-backed in production; injectable for tests.
@@ -58,7 +66,13 @@ _LINK = "obsidian-link:"  # sentinel a href, rewritten to [[Title|text]]
 _MISSING = "obsidian-missing:"  # sentinel for a referenced-but-absent asset
 _FILELINK = "obsidian-file:"  # sentinel a href pointing at a library file, by file id
 
-_FORBIDDEN = re.compile(r'[/\\:*?"<>|#\^\[\]]')  # unsafe in a filename / an Obsidian link
+#: Unsafe in a filename or an Obsidian link. Control characters too: NUL is
+#: refused by every filesystem (and raised mid-export), and a newline in a
+#: wikilink ends it.
+_FORBIDDEN = re.compile(r'[/\\:*?"<>|#\^\[\]\x00-\x1f\x7f]')
+#: Well under the 255 bytes a filename may hold, leaving room for `.md` and
+#: the `-N` a colliding attachment gets.
+_MAX_NAME_BYTES = 200
 _CONTENT_EXT = {
     "image/png": ".png",
     "image/jpeg": ".jpg",
@@ -89,19 +103,26 @@ class VaultStats:
 
 
 def _md():
-    """`markdownify` lazily, with a clear message if it is somehow absent."""
-    try:
-        from markdownify import markdownify  # noqa: PLC0415
-    except ImportError as exc:  # pragma: no cover - a base dependency, normally present
-        raise RuntimeError(
-            "the Obsidian ingester needs `markdownify`, a base dependency of "
-            "connections-export — reinstall the package to restore it"
-        ) from exc
-    return markdownify
+    """The HTML -> Markdown converter: `markdownify`, with the text of a body
+    made inert (`ingest._markdown`). The body is its author's, and a vault
+    renders it."""
+    return to_markdown
 
 
 def _safe(name: str, fallback: str) -> str:
+    """`name` as a note, folder or attachment name any filesystem can hold.
+
+    Also the target of every wikilink to that note, so it must not be able to
+    close one. A title is whatever its author typed: a Windows device name
+    (`CON`, `lpt9.txt`) made a file Windows cannot open, NUL made the whole
+    export raise, `..` walked out of its folder, and a long title in a script
+    of four-byte characters passed the 255-byte limit.
+    """
     cleaned = _FORBIDDEN.sub("-", (name or "").strip()).strip(". ")
+    cleaned = cleaned[:MAX_STEM]
+    while len(cleaned.encode("utf-8")) > _MAX_NAME_BYTES:
+        cleaned = cleaned[:-1]
+    cleaned = unreserve(cleaned.rstrip(". "))
     return cleaned or fallback
 
 
@@ -193,8 +214,25 @@ class _AssetStore:
         return candidate
 
 
+#: YAML double-quoted escapes for what a scalar cannot hold literally. A raw
+#: newline in a title ended the front matter (`---`) and let the title write
+#: keys of its own; YAML also breaks lines at NEL, LS and PS, and refuses
+#: other control characters outright.
+_YAML_ESCAPES = {"\\": "\\\\", '"': '\\"', "\n": "\\n", "\r": "\\r", "\t": "\\t"}
+_YAML_UNSAFE = re.compile(r'[\\"\x00-\x1f\x7f-\x9f  \ud800-\udfff﻿]')
+
+
+def _yaml_escape(match: re.Match) -> str:
+    char = match.group()
+    if char in _YAML_ESCAPES:
+        return _YAML_ESCAPES[char]
+    code = ord(char)
+    return f"\\x{code:02x}" if code <= 0xFF else f"\\u{code:04x}"
+
+
 def _yaml_scalar(value: str) -> str:
-    return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
+    """`value` as a YAML double-quoted scalar, on one line whatever it holds."""
+    return '"' + _YAML_UNSAFE.sub(_yaml_escape, value) + '"'
 
 
 def _label(item: DerivedItem) -> str | None:
@@ -288,31 +326,37 @@ def _apply_sentinels(
     markdown: str, id_to_title: dict[str, str], file_targets: dict[str, str] | None = None
 ) -> str:
     # ![alt](obsidian-embed:NAME) -> ![[NAME]]
-    markdown = re.sub(r"!\[[^\]]*\]\(" + re.escape(_EMBED) + r"([^)]+)\)", r"![[\1]]", markdown)
+    markdown = re.sub(
+        r"!\[" + BRACKET_TEXT + r"\]\(" + re.escape(_EMBED) + r"([^)]+)\)", r"![[\2]]", markdown
+    )
     # ![alt](obsidian-missing:HREF) -> a visible, non-silent gap
     markdown = re.sub(
-        r"!\[[^\]]*\]\(" + re.escape(_MISSING) + r"([^)]+)\)",
-        r"`[image not captured: \1]`",
+        r"!\[" + BRACKET_TEXT + r"\]\(" + re.escape(_MISSING) + r"([^)]+)\)",
+        lambda match: code_span(f"[image not captured: {match.group(2)}]"),
         markdown,
     )
 
     def _link(match: re.Match) -> str:
         text, target = match.group(1), match.group(2)
-        title = id_to_title.get(target, target)
+        title = id_to_title.get(target) or _safe(target, "link")
         return f"[[{title}|{text}]]" if text and text != title else f"[[{title}]]"
 
     # [text](obsidian-link:ID) -> [[Title|text]]
-    markdown = re.sub(r"\[([^\]]*)\]\(" + re.escape(_LINK) + r"([^)]+)\)", _link, markdown)
+    markdown = re.sub(
+        r"\[" + BRACKET_TEXT + r"\]\(" + re.escape(_LINK) + r"([^)]+)\)", _link, markdown
+    )
 
     files = file_targets or {}
 
     def _file(match: re.Match) -> str:
         text, fid = match.group(1), match.group(2)
-        name = files.get(fid, fid)
+        name = files.get(fid) or _safe(fid, "file")
         return f"[[{name}|{text}]]" if text and text != name else f"[[{name}]]"
 
     # [text](obsidian-file:ID) -> [[stored-file|text]] (Obsidian links a file by name)
-    markdown = re.sub(r"\[([^\]]*)\]\(" + re.escape(_FILELINK) + r"([^)]+)\)", _file, markdown)
+    markdown = re.sub(
+        r"\[" + BRACKET_TEXT + r"\]\(" + re.escape(_FILELINK) + r"([^)]+)\)", _file, markdown
+    )
     return markdown
 
 
@@ -323,13 +367,15 @@ def _comments_md(page: DerivedItem) -> str:
     children: dict[str | None, list] = {}
     for comment in comments:
         children.setdefault(comment.parent_comment_id, []).append(comment)
-    strip = re.compile(r"<[^>]+>")
 
     def render(parent_id: str | None, depth: int, out: list[str]) -> None:
         for comment in children.get(parent_id, []):
-            who = comment.author or "Unknown"
-            when = f" · {comment.created}" if comment.created else ""
-            body = strip.sub("", comment.content_html or "").strip().replace("\n", " ")
+            # Every part is the commenter's text on one list line: parsed, not
+            # regex-stripped (which left an unclosed `<img ... onerror=`), and
+            # escaped so none of it becomes Markdown or HTML.
+            who = escape_inline(comment.author or "Unknown")
+            when = f" · {escape_inline(comment.created)}" if comment.created else ""
+            body = escape_inline(html_to_text(comment.content_html))
             out.append(f"{'    ' * depth}- **{who}**{when}: {body}")
             render(comment.id, depth + 1, out)
 
@@ -356,9 +402,10 @@ def _attachments_md(page: DerivedItem, store: _AssetStore) -> str:
                 preferred_name=att.filename or att.id,
                 content_type=att.content_type,
             )
-            rows.append(f"- [[{vault_name}]]" if vault_name else f"- `[not captured: {name}]`")
+            gap = f"- {code_span(f'[not captured: {name}]')}"
+            rows.append(f"- [[{vault_name}]]" if vault_name else gap)
         else:
-            rows.append(f"- `[not captured: {name}]`")
+            rows.append(f"- {code_span(f'[not captured: {name}]')}")
     return "\n## Attachments\n\n" + "\n".join(rows) + "\n" if rows else ""
 
 
@@ -395,8 +442,8 @@ def _replies_md(
         reply = topic.replies.get(reply_id)
         if reply is None:
             return
-        who = reply.author or "Unknown"
-        when = f" · {reply.created}" if reply.created else ""
+        who = escape_inline(reply.author or "Unknown")
+        when = f" · {escape_inline(reply.created)}" if reply.created else ""
         answer = " · *answer*" if "answer" in (reply.flags or []) else ""
         lines.append(f"{'#' * min(3 + depth, 6)} {who}{when}{answer}")
         lines.append("")
@@ -482,7 +529,7 @@ def _write_files_index(
     lines = ["# Files", ""]
     for library in interchange.file_libraries:
         stats.libraries += 1
-        lines.append(f"## {library.title or library.id}")
+        lines.append(f"## {escape_inline(library.title or library.id)}")
         ordered = [library.files[i] for i in library.file_ids if i in library.files]
         ordered += [f for i, f in library.files.items() if i not in library.file_ids]
         for derived in ordered:
@@ -490,9 +537,10 @@ def _write_files_index(
             label = derived.name or derived.title or derived.id
             stored = file_targets.get(derived.id)
             if stored:
-                lines.append(f"- [[{stored}]]" + (f" — {label}" if label != stored else ""))
+                shown = f" — {escape_inline(label)}" if label != stored else ""
+                lines.append(f"- [[{stored}]]{shown}")
             else:
-                lines.append(f"- `[not captured: {label}]`")
+                lines.append(f"- {code_span(f'[not captured: {label}]')}")
         lines.append("")
     (vault / "Files.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
@@ -512,17 +560,24 @@ def write_obsidian_vault(
     # one id->title map spans every container of every app: a post linking
     # to a wiki page resolves the same way a page linking to a page does (a
     # caveat when titles collide).
+    #
+    # The target is the note's own file name (`_safe`), which is both what
+    # Obsidian resolves and something a title cannot use to close the link.
     id_to_title = {
-        pid: (p.title or p.label or pid)
+        pid: _safe(p.title or p.label or pid, pid)
         for wiki in interchange.wikis
         for pid, p in wiki.pages.items()
     }
     id_to_title.update(
-        {pid: (post.title or pid) for blog in interchange.blogs for pid, post in blog.posts.items()}
+        {
+            pid: _safe(post.title or pid, pid)
+            for blog in interchange.blogs
+            for pid, post in blog.posts.items()
+        }
     )
     id_to_title.update(
         {
-            tid: (topic.title or tid)
+            tid: _safe(topic.title or tid, tid)
             for forum in interchange.forums
             for tid, topic in forum.topics.items()
         }
@@ -539,7 +594,7 @@ def write_obsidian_vault(
             note = _note_path(vault, wiki_dir, page, wiki.pages)
             note.parent.mkdir(parents=True, exist_ok=True)
             body = _rewrite_body(page, store, id_to_title, file_targets)
-            heading = f"# {page.title or page.label or page.id}\n\n"
+            heading = f"# {escape_inline(page.title or page.label or page.id)}\n\n"
             note.write_text(
                 _frontmatter(page)
                 + heading
@@ -562,7 +617,7 @@ def write_obsidian_vault(
         for post in ordered:
             note = blog_dir / (_safe(post.title or post.id, post.id) + ".md")
             body = _rewrite_body(post, store, id_to_title, file_targets)
-            heading = f"# {post.title or post.id}\n\n"
+            heading = f"# {escape_inline(post.title or post.id)}\n\n"
             note.write_text(
                 _frontmatter(post, kind="post") + heading + body + _comments_md(post),
                 encoding="utf-8",
@@ -578,7 +633,7 @@ def write_obsidian_vault(
         for topic in ordered_topics:
             note = forum_dir / (_safe(topic.title or topic.id, topic.id) + ".md")
             body = _rewrite_body(topic, store, id_to_title, file_targets)
-            heading = f"# {topic.title or topic.id}\n\n"
+            heading = f"# {escape_inline(topic.title or topic.id)}\n\n"
             note.write_text(
                 _frontmatter(topic, kind="topic")
                 + heading
@@ -599,7 +654,7 @@ def _write_readme(vault: Path, interchange: Interchange, stats: VaultStats) -> N
         "# HCL export → Obsidian vault",
         "",
         "Reconstructed from an interchange package"
-        + (f" of `{interchange.base_url}`" if interchange.base_url else "")
+        + (f" of {code_span(interchange.base_url)}" if interchange.base_url else "")
         + f": {stats.wikis} wiki(s), {stats.pages} page(s); "
         + f"{stats.blogs} blog(s), {stats.posts} post(s); "
         + f"{stats.forums} forum(s), {stats.topics} topic(s); "
@@ -610,29 +665,29 @@ def _write_readme(vault: Path, interchange: Interchange, stats: VaultStats) -> N
     if interchange.wikis:
         lines += ["## Wikis", ""]
         for wiki in interchange.wikis:
-            lines.append(f"### {wiki.title or wiki.label}")
+            lines.append(f"### {escape_inline(wiki.title or wiki.label)}")
             for root_id in wiki.root_page_ids:
                 page = wiki.pages.get(root_id)
                 if page:
-                    lines.append(f"- [[{page.title or page.label or root_id}]]")
+                    lines.append(f"- [[{_safe(page.title or page.label or root_id, root_id)}]]")
             lines.append("")
     if interchange.blogs:
         lines += ["## Blogs", ""]
         for blog in interchange.blogs:
-            lines.append(f"### {blog.title or blog.handle or blog.id}")
+            lines.append(f"### {escape_inline(blog.title or blog.handle or blog.id)}")
             for pid in blog.post_ids:
                 post = blog.posts.get(pid)
                 if post:
-                    lines.append(f"- [[{post.title or pid}]]")
+                    lines.append(f"- [[{_safe(post.title or pid, pid)}]]")
             lines.append("")
     if interchange.forums:
         lines += ["## Forums", ""]
         for forum in interchange.forums:
-            lines.append(f"### {forum.title or forum.id}")
+            lines.append(f"### {escape_inline(forum.title or forum.id)}")
             for tid in forum.topic_ids:
                 topic = forum.topics.get(tid)
                 if topic:
-                    lines.append(f"- [[{topic.title or tid}]]")
+                    lines.append(f"- [[{_safe(topic.title or tid, tid)}]]")
             lines.append("")
     if interchange.file_libraries:
         lines += ["## Files", "", "- [[Files]] — every library and its documents", ""]

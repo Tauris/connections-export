@@ -274,7 +274,10 @@ def test_community_of_is_graceful_without_input():
 
 
 def test_community_components_endpoint_is_exposed():
+    from connections_export.gui.routes._lookup import trust_deployment
+
     app = make_app(demo=True)
+    trust_deployment(app, "https://fake")  # as if a URL from it had been dropped
     response = _run(
         _get(app, "/api/community-components?community_uuid=community-1&base_url=https://fake")
     )

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import atexit
 import contextlib
 import json
 import os
@@ -43,12 +44,30 @@ from connections_export.gui.requests import (
 from connections_export.gui.routes._lookup import (
     _authed_lookup,
     _lookup_base_auth,
+    is_trusted_deployment,
 )
 from connections_export.gui.support import (
     BULK_DELETE_CONFIRMATION,
     _community_uuid_of,
     _demo_community_components,
 )
+
+
+class _UntrustedHost(Exception):
+    """The archive's recorded deployment is not one the user signs in to.
+
+    Raised inside the ledger's best-effort live lookup, whose handler turns
+    any exception into `live_error` -- so this message is what the screen
+    shows in place of the extend half."""
+
+    def __init__(self, base_url: str) -> None:
+        host = urlparse(base_url).hostname or base_url
+        super().__init__(
+            f"This archive was captured from {host}, which is not a deployment you "
+            "chose in this console, so its live state was not looked up: that would "
+            "send your sign-in to a host the archive named. Drop a URL from that "
+            "deployment on the setup screen (or configure it) to look it up."
+        )
 
 
 def _remove_archive(target: Path) -> None:
@@ -65,8 +84,57 @@ def _remove_archive(target: Path) -> None:
         target.unlink()
 
 
-def _fetch_url(url: str, *, timeout: float = 120.0) -> bytes:
-    """Download `url`.
+#: The most an uploaded or downloaded archive may be. Generous -- an archive
+#: is as big as the community it captured, and a large one with its files is
+#: gigabytes -- but finite: without it, a stuck or hostile sender fills the
+#: disk (an upload) and, before streaming, memory (a download).
+MAX_ARCHIVE_BYTES = 20 * 1024**3
+
+
+class _TooLarge(Exception):
+    """More bytes than `MAX_ARCHIVE_BYTES` arrived, or were announced."""
+
+
+def _too_large(what: str) -> JSONResponse:
+    return JSONResponse(
+        {
+            "status": "error",
+            "detail": (
+                f"{what} is larger than the {MAX_ARCHIVE_BYTES // 1024**3} GB an archive may "
+                "be opened at; open it from disk instead, by its path"
+            ),
+        },
+        status_code=413,
+    )
+
+
+#: Temporary copies (`hcl-dropped-*`, `hcl-fetched-*`) of archives that were
+#: opened and are, or were, being read. Removed when the reader moves on to
+#: another archive, and whatever is left when the process exits.
+_HOLDINGS: set[Path] = set()
+
+
+def _discard_holding(holding: Path | None) -> None:
+    if holding is None:
+        return
+    _HOLDINGS.discard(holding)
+    # ignore_errors: on Windows a file still open elsewhere cannot be removed;
+    # a leftover in the temp folder is not worth failing an open over.
+    shutil.rmtree(holding, ignore_errors=True)
+
+
+@atexit.register
+def _discard_all_holdings() -> None:
+    for holding in list(_HOLDINGS):
+        _discard_holding(holding)
+
+
+def _fetch_url(url: str, dest: Path, *, timeout: float = 120.0, limit: int | None = None) -> None:
+    """Download `url` into `dest`, streamed, refusing more than `limit` bytes.
+
+    Streamed to disk rather than read into memory: the answer is an archive,
+    which may be gigabytes. The cap is checked against what arrives, not only
+    against a Content-Length the server is free to leave out.
 
     At module level rather than inside `register` so a test can stand in for
     the network -- a closure is unreachable from outside, and the alternative
@@ -74,9 +142,19 @@ def _fetch_url(url: str, *, timeout: float = 120.0) -> bytes:
     """
     import httpx  # noqa: PLC0415
 
-    response = httpx.get(url, timeout=timeout, follow_redirects=True)
-    response.raise_for_status()
-    return response.content
+    limit = MAX_ARCHIVE_BYTES if limit is None else limit
+    with httpx.stream("GET", url, timeout=timeout, follow_redirects=True) as response:
+        response.raise_for_status()
+        announced = response.headers.get("Content-Length", "")
+        if announced.isdigit() and int(announced) > limit:
+            raise _TooLarge(url)
+        size = 0
+        with dest.open("wb") as handle:
+            for chunk in response.iter_bytes():
+                size += len(chunk)
+                if size > limit:
+                    raise _TooLarge(url)
+                handle.write(chunk)
 
 
 def _blog_comment_count(archive_dir) -> int | None:
@@ -413,6 +491,14 @@ def register(
         across two requests, the screen could render holdings alone -- "8
         items", with no way to tell whether that is current -- and a
         half-answer here reads exactly like a complete one.
+
+        The live half signs in to the archive's deployment only when the user
+        chose it (`is_trusted_deployment`: configured, live, or identified
+        through the console). The address is read from the archive itself,
+        which may be a file someone handed over, so on its own it cannot
+        choose where the user's credentials go -- and no GET parameter can
+        vouch for it either, since a captured page in the Reader can issue
+        GETs.
         """
         target = resolve_archive(support.ARCHIVES_BASE, name)
         if target is None:
@@ -438,6 +524,16 @@ def register(
                 # host, so the demo answers from its own synthesized data --
                 # and only for its own, which is why no flag is needed.
                 answer = _demo_community_components(community_uuid)
+                archive_base = (ledger.get("base_url") or "").strip()
+                if (
+                    answer is None
+                    and archive_base
+                    and not is_trusted_deployment(_app, archive_base)
+                ):
+                    # Named, so the screen can offer to choose it (a POST)
+                    # instead of leaving the extend half a dead end.
+                    ledger["untrusted_host"] = archive_base
+                    raise _UntrustedHost(archive_base)
                 if answer is None:
                     from connections_export.crawler.community import (  # noqa: PLC0415
                         discover_components,
@@ -570,11 +666,30 @@ def register(
         (directory / SUMMARY_FILENAME).write_text(json.dumps(summary, indent=2), encoding="utf-8")
         return JSONResponse({"status": "ok", "display_name": label or None})
 
-    def _attach(target: Path, *, label: str | None = None) -> JSONResponse:
+    def _now_reading(source, holding: Path | None = None) -> None:
+        """Make `source` the open archive, and let go of the temporary copy
+        the previous one was read from, if it was one.
+
+        This is the one moment a dropped or downloaded copy stops being
+        needed: nothing reads it once the reader has moved on, and nothing
+        else would ever remove it.
+        """
+        previous = getattr(app.state, "archive_holding", None)
+        app.state.model_source = source
+        app.state.archive_holding = holding
+        if holding is not None:
+            _HOLDINGS.add(holding)
+        if previous is not None and previous != holding:
+            _discard_holding(previous)
+
+    def _attach(
+        target: Path, *, label: str | None = None, holding: Path | None = None
+    ) -> JSONResponse:
         """Point the reader at `target`, or explain why not.
 
         Never clobbers what is already open on failure: an archive that will
-        not derive should leave you looking at the one that does.
+        not derive should leave you looking at the one that does. `holding` is
+        the temporary directory `target` was copied into, if it was.
         """
         try:
             source = ModelSource.from_archive(target)
@@ -586,7 +701,7 @@ def register(
                 },
                 status_code=400,
             )
-        app.state.model_source = source
+        _now_reading(source, holding)
         return JSONResponse({"status": "ok", "name": label or target.name})
 
     @app.post("/api/open-external")
@@ -647,7 +762,10 @@ def register(
         name = Path(unquote(urlparse(url).path)).name or "archive.zip"
         target = holding / name
         try:
-            target.write_bytes(_fetch_url(url))
+            _fetch_url(url, target)
+        except _TooLarge:
+            shutil.rmtree(holding, ignore_errors=True)
+            return _too_large(f"what {url} sends")
         except Exception as exc:  # noqa: BLE001 - any failure is the same answer
             shutil.rmtree(holding, ignore_errors=True)
             return JSONResponse(
@@ -666,7 +784,7 @@ def register(
                 },
                 status_code=400,
             )
-        response = _attach(target, label=name)
+        response = _attach(target, label=name, holding=holding)
         if response.status_code != 200:
             shutil.rmtree(holding, ignore_errors=True)
         return response
@@ -682,19 +800,29 @@ def register(
         """
         name = (request.headers.get("X-Archive-Name") or "uploaded.zip").strip()
         name = Path(name).name or "uploaded.zip"
+        # Refused before a byte is written when the size is announced; counted
+        # as it arrives either way, because a chunked body announces nothing.
+        announced = request.headers.get("Content-Length", "")
+        if announced.isdigit() and int(announced) > MAX_ARCHIVE_BYTES:
+            return _too_large(name)
         holding = Path(tempfile.mkdtemp(prefix="hcl-dropped-"))
         target = holding / name
         size = 0
         with target.open("wb") as handle:
             async for chunk in request.stream():
                 size += len(chunk)
+                if size > MAX_ARCHIVE_BYTES:
+                    break
                 handle.write(chunk)
+        if size > MAX_ARCHIVE_BYTES:
+            shutil.rmtree(holding, ignore_errors=True)
+            return _too_large(name)
         if not zipfile.is_zipfile(target):
             shutil.rmtree(holding, ignore_errors=True)
             return JSONResponse(
                 {"status": "error", "detail": f"{name} is not a zip file"}, status_code=400
             )
-        response = _attach(target, label=name)
+        response = _attach(target, label=name, holding=holding)
         if response.status_code != 200:
             # It never opened, so the copy is worth nothing; keeping it would
             # leave the user's disk holding failures they cannot see.
@@ -728,7 +856,7 @@ def register(
                 },
                 status_code=422,
             )
-        app.state.model_source = source
+        _now_reading(source)
         return JSONResponse({"opened": True, "name": body.name})
 
     @app.post("/api/delete-archive")

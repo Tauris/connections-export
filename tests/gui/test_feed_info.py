@@ -32,6 +32,7 @@ from connections_export.fakeserver.atom import blog_entries_feed
 from connections_export.fakeserver.prototype import build_prototype_wikiset
 from connections_export.gui.app import make_app
 from connections_export.gui.demo import demo_sample_urls, demo_synth_seed
+from connections_export.gui.routes._lookup import trust_deployment
 
 BASE = "https://example.corp"
 
@@ -62,6 +63,7 @@ def test_feed_info_returns_the_feed_title_for_a_blog(monkeypatch):
     monkeypatch.setattr(httpx, "get", _fake_get)
 
     app = make_app(demo=True)
+    trust_deployment(app, BASE)  # as if a URL from it had been dropped
     url = f"{BASE}/blogs/{blog.handle}/feed/entries/atom"
     response = _get(app, "/api/feed-info?url=" + url)
 
@@ -79,6 +81,7 @@ def test_feed_info_title_is_none_on_fetch_failure(monkeypatch):
     monkeypatch.setattr(httpx, "get", _fake_get)
 
     app = make_app(demo=True)
+    trust_deployment(app, BASE)  # as if a URL from it had been dropped
     response = _get(app, "/api/feed-info?url=" + f"{BASE}/blogs/team-blog/feed/entries/atom")
 
     assert response.status_code == 200

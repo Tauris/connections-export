@@ -1,6 +1,6 @@
 [project]
 name = "connections-export"
-version = "0.1.10"
+version = "0.1.11"
 description = "Lossless, archive-first export of HCL Connections content — wikis, blogs, and forums — to a portable, self-documenting package"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -92,7 +92,10 @@ dev = [
 ]
 
 [build-system]
-requires = ["hatchling"]
+# Bounded to the major the distributions are built with today (1.32): a
+# hatchling 2 with a changed default would otherwise reshape the wheel and the
+# sdist on the next release without any change here to show for it.
+requires = ["hatchling>=1.27,<2"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]

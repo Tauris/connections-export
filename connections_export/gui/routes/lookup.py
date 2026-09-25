@@ -27,10 +27,16 @@ from connections_export.gui.requests import (
     _IdentifyRequest,
 )
 from connections_export.gui.routes._lookup import (
+    UntrustedDeployment,
     _authed_lookup,
     _lookup_base_auth,
     _lookup_deployment,
     _lookup_session,
+    is_trusted_deployment,
+    live_cookie_jar,
+    require_trusted,
+    trust_deployment,
+    untrusted_response,
 )
 from connections_export.gui.support import (
     _DONE,
@@ -85,6 +91,14 @@ def register(
     #: The FastAPI app under a name no route parameter shadows -- `community_of`
     #: has a query parameter called `app` (the HCL app kind).
     _app = app
+
+    # Any route that resolves its deployment through `_lookup_deployment`
+    # refuses an unchosen host by raising; this turns that into the answer,
+    # app-wide, so no route can forget to.
+    async def _refuse_untrusted(request, exc: UntrustedDeployment):
+        return untrusted_response(exc)
+
+    app.add_exception_handler(UntrustedDeployment, _refuse_untrusted)
 
     @app.get("/api/search-preview")
     def search_preview(
@@ -484,6 +498,12 @@ def register(
         """
         import asyncio  # noqa: PLC0415
 
+        # Refused as a 403 up front, like the plain route, rather than as a
+        # `result` event once the stream is open. The demo's own community
+        # answers from its data whatever the address, as `_discover` does.
+        if _demo_community_components(community_uuid.strip()) is None:
+            require_trusted(_app, (base_url or "").strip())
+
         events: queue.Queue = queue.Queue()
 
         def work() -> None:
@@ -560,6 +580,23 @@ def register(
             return JSONResponse({"status": "not_found", "url": url}, status_code=404)
         return JSONResponse({"userid": user.userid, "name": user.name, "url": url})
 
+    @app.post("/api/choose-deployment")
+    def choose_deployment(body: _IdentifyRequest) -> JSONResponse:
+        """Mark a deployment the user typed (rather than dropped a URL from)
+        as one lookups may sign in to -- what `/api/identify` does for a
+        dropped URL. For the setup screen's base-URL field: a GET cannot do
+        this, so a captured page in the Reader cannot either."""
+        from connections_export.http.auth import origin_of  # noqa: PLC0415
+
+        scheme, host, _port = origin_of(body.url.strip())
+        if scheme not in ("http", "https") or not host:
+            return JSONResponse(
+                {"ok": False, "detail": "Give the deployment's http(s) address."},
+                status_code=400,
+            )
+        trust_deployment(_app, body.url.strip())
+        return JSONResponse({"ok": True})
+
     @app.post("/api/identify")
     def identify(body: _IdentifyRequest) -> JSONResponse:
         """Identify the HCL deployment and which app (wiki | blog | forum)
@@ -567,6 +604,11 @@ def register(
         has a single source of truth server-side and the setup screen just
         renders whatever comes back."""
         target = parse_url(body.url)
+        # Dropping a URL is the user choosing its deployment; the lookups
+        # that follow may sign in there. Parsing only -- nothing is fetched
+        # here. A POST, so a captured page in the Reader cannot make one.
+        if target.ok:
+            trust_deployment(_app, target.base_url)
         return JSONResponse(
             {
                 "ok": target.ok,
@@ -616,6 +658,10 @@ def register(
                 demo_result = _demo_feed_info(target)
                 if demo_result is not None:
                     return JSONResponse(demo_result)
+            elif not is_trusted_deployment(app, target.base_url):
+                # Before the cached client is even looked up: a client for
+                # this host must never have been built.
+                return untrusted_response(UntrustedDeployment(target.base_url))
 
             from connections_export.adapters.atom import (  # noqa: PLC0415
                 feed_title,
@@ -661,7 +707,9 @@ def register(
                     # Authentication unavailable / failed — fall back to session cookies.
                     import httpx as _httpx  # noqa: PLC0415
 
-                    cookies = {c["name"]: c["value"] for c in (app.state.live_cookies or [])}
+                    # Domain-bound: as a bare {name: value} mapping httpx
+                    # sent the session to whatever host `url` named.
+                    cookies = live_cookie_jar(app)
 
                     class _FallbackClient:  # noqa: N801
                         def get(self, u: str) -> _FallbackClient:
@@ -716,17 +764,8 @@ def register(
             else:
                 return JSONResponse({"total": None})
 
-            # Use the full authenticated client (SSPI/cookies) so the count
-            # works even before the first crawl populates live_cookies.
-            from connections_export.cli import _build_default_client  # noqa: PLC0415
-
-            _mode = _lookup_deployment(app, base)[1] or "sspi"
-            _cfg = Config(base_url=base, auth_mode=_mode, output_dir=Path("."))
-            try:
-                _client = _build_default_client(_cfg, env=os.environ)
-            except Exception:
-                _client = None
-
+            # The probe goes through `_http`, built above. A second client
+            # was built here and never used -- a second sign-in per count.
             probe_url = feed_url + ("?ps=1&page=1" if "?" not in feed_url else "&ps=1&page=1")
             try:
                 probe_resp = _get(probe_url)

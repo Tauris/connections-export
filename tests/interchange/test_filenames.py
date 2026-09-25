@@ -38,6 +38,17 @@ def test_windows_device_names_stay_openable():
     assert sanitize("console.txt") == "console.txt"  # not reserved
 
 
+def test_a_device_name_before_several_extensions_is_still_reserved():
+    """Windows reads the device name up to the FIRST dot, so `CON.tar.gz` is
+    `CON`; renaming only the last stem (`CON.tar_.gz`) left it unopenable."""
+    from connections_export.interchange.filenames import is_reserved_device_name
+
+    assert sanitize("CON.tar.gz") == "CON_.tar.gz"
+    assert is_reserved_device_name("nul.tar.gz")
+    assert is_reserved_device_name("COM1 .txt")  # Windows drops the space too
+    assert not is_reserved_device_name("console.txt")
+
+
 def test_trailing_dots_and_spaces_go():
     """Windows strips them silently, which would fabricate a collision between
     `foo.` and `foo` that Connections does not have."""

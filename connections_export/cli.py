@@ -207,13 +207,18 @@ def _resolve_auth_strategy(config: Config, env: Mapping[str, str] | None) -> Aut
         if credentials is None:
             return None
         username, password = credentials
-        return BasicAuth(username=username, password=password)
+        # Bound to the deployment: the password is never sent to another host.
+        return BasicAuth(username=username, password=password, base_url=config.base_url or "")
     if config.auth_mode == "paste_token":
         token = resolve_token(env)
-        return PasteTokenAuth(ltpa_token=token) if token else None
+        return PasteTokenAuth(ltpa_token=token, base_url=config.base_url or "") if token else None
+    # The deployment's other hosts may receive the sign-in when it is
+    # redirected there -- an organisation's login server on another domain.
+    sign_in_hosts = tuple(config.hcl_hosts)
     if config.auth_mode == "kerberos":
-        return KerberosAuth(base_url=config.require_base_url())
-    return SspiAuth(base_url=config.require_base_url())  # config.auth_mode == "sspi", the default
+        return KerberosAuth(base_url=config.require_base_url(), sign_in_hosts=sign_in_hosts)
+    # config.auth_mode == "sspi", the default
+    return SspiAuth(base_url=config.require_base_url(), sign_in_hosts=sign_in_hosts)
 
 
 def _build_default_client(
@@ -1262,6 +1267,7 @@ def serve_main(
         import uvicorn  # noqa: PLC0415
 
         run = uvicorn.run
+    _warn_if_exposed(host, port, "connections-export serve")
     if args.open_browser:
         # The port actually BOUND, not the one asked for: a busy 8000 moves us
         # elsewhere, and opening the requested one would point a browser at
@@ -1269,6 +1275,45 @@ def serve_main(
         _open_browser_when_listening(host, port)
     run(app, host=host, port=port, timeout_graceful_shutdown=1)
     return 0
+
+
+def _is_loopback_host(host: str) -> bool:
+    """Does binding `host` keep the console on this machine?
+
+    Only a loopback address or `localhost` does. A wildcard (`0.0.0.0`,
+    `::`, empty), a LAN address or any other name may be reachable from
+    elsewhere -- and link-local, which `http.proxy.is_loopback` treats as
+    this machine for routing, is very much on the network for listening.
+    """
+    import ipaddress  # noqa: PLC0415
+
+    name = host.strip().strip("[]").lower()
+    if name in ("localhost", "localhost.localdomain", "ip6-localhost"):
+        return True
+    try:
+        return ipaddress.ip_address(name).is_loopback
+    except ValueError:
+        return False
+
+
+def _warn_if_exposed(host: str, port: int, prog: str) -> None:
+    """Say it plainly when the console listens beyond this machine.
+
+    The console has no login. Its Host check stops a browser page from
+    elsewhere, not a client that sets the header itself, so whoever can reach
+    the port can do what the console does -- with the credentials of the
+    person who started it.
+    """
+    if _is_loopback_host(host):
+        return
+    print(
+        f"{prog}: WARNING -- listening on {host}:{port}, which is not this machine only.\n"
+        "  The console has NO authentication. Anyone on the network who can reach this port\n"
+        "  can use it: start a capture with YOUR credentials, read every archive it can see,\n"
+        "  and delete archive folders. Use --host 127.0.0.1 unless you mean this.",
+        file=sys.stderr,
+        flush=True,
+    )
 
 
 def _open_browser_when_listening(host: str, port: int) -> None:
@@ -1376,6 +1421,7 @@ def open_main(
         import uvicorn  # noqa: PLC0415
 
         run = uvicorn.run
+    _warn_if_exposed(host, port, "connections-export open")
     run(app, host=host, port=port, timeout_graceful_shutdown=1)
     return 0
 

@@ -28,7 +28,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from connections_export.adapters.atom import feed_next_link, feed_total_results
 from connections_export.adapters.errors import AdapterError
-from connections_export.archive.blobs import read_blob
+from connections_export.archive.blobs import read_blob, valid_digest
 from connections_export.archive.feeds import FeedPage
 from connections_export.archive.records import ManifestRecord, Outcome, RunMetadata
 from connections_export.archive.store import Archive
@@ -292,8 +292,12 @@ class Fetcher:
         cached = self.cached_records.get(url)
         if not self._may_use_cache(url, policy, item_date):
             cached = None
+        # A hash that is not a digest (a handed-over archive naming a path) is
+        # an entry we cannot read: fetch it again rather than stop the update.
+        digest = valid_digest(cached.body_hash) if cached is not None else None
+        if cached is not None and cached.body_hash and digest is None:
+            cached = None
         if cached is not None and cached.body_hash:
-            digest = cached.body_hash.split(":", 1)[-1]
             body = read_blob(self.archive.root, digest)
             safe_emit(
                 self.emit, events.Discovered(url=url, kind=kind, discovered_from=discovered_from)

@@ -11,6 +11,8 @@ Tests inject `run` so no real socket is ever bound.
 
 from __future__ import annotations
 
+import pytest
+
 from connections_export.cli import serve_main
 
 
@@ -129,3 +131,25 @@ def test_free_port_skips_a_busy_port():
         chosen = _free_port("127.0.0.1", busy)
     assert chosen != busy
     assert chosen > busy
+
+
+@pytest.mark.parametrize("host", ["0.0.0.0", "::", "192.168.1.20", "fe80::1", "console.lan"])
+def test_listening_beyond_this_machine_warns_that_there_is_no_login(
+    host, tmp_path, monkeypatch, capsys
+):
+    """The console has no authentication; bound to the network, whoever
+    reaches the port can capture with the starter's credentials. That must be
+    said where the person who typed `--host` will see it."""
+    captured = _served(["--host", host], tmp_path, monkeypatch)
+
+    assert captured["kwargs"]["host"] == host  # still does what it was told
+    err = capsys.readouterr().err
+    assert "WARNING" in err and "NO authentication" in err
+    assert "YOUR credentials" in err and "delete archive folders" in err
+
+
+@pytest.mark.parametrize("host", ["127.0.0.1", "localhost", "::1", "[::1]", "127.0.0.2"])
+def test_listening_on_this_machine_says_nothing_extra(host, tmp_path, monkeypatch, capsys):
+    _served(["--host", host], tmp_path, monkeypatch)
+
+    assert "WARNING" not in capsys.readouterr().err

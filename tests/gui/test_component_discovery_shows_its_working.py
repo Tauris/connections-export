@@ -28,6 +28,7 @@ from connections_export.gui import make_app
 from connections_export.gui import support as gui_support
 from connections_export.gui.routes import _lookup as lookup_support
 from connections_export.gui.routes import lookup as lookup_routes
+from connections_export.gui.routes._lookup import trust_deployment
 
 REAL_BASE = "https://connections.example.corp"
 UUID = "9f3a1b2c-0000-4d5e-8f01-abcdef123456"
@@ -41,7 +42,10 @@ EMPTY_FEED = (
 @pytest.fixture
 def client(tmp_path, monkeypatch):
     monkeypatch.setattr(gui_support, "ARCHIVES_BASE", tmp_path)
-    return TestClient(make_app(demo_delay=0), base_url="http://127.0.0.1")
+    app = make_app(demo_delay=0)
+    # As if a URL from it had been dropped: only a chosen deployment is asked.
+    trust_deployment(app, REAL_BASE)
+    return TestClient(app, base_url="http://127.0.0.1")
 
 
 # --- one session, unpaced -------------------------------------------------
@@ -87,6 +91,7 @@ def test_a_lookup_session_is_unpaced_and_patient(monkeypatch):
     monkeypatch.setattr(cli_module, "_build_default_client", capture)
     app = make_app()
     app.state.live_cookies = None
+    trust_deployment(app, REAL_BASE)
 
     lookup_support._lookup_session(app, REAL_BASE, "kerberos")
 
@@ -109,6 +114,7 @@ def test_one_shot_lookups_keep_their_shorter_patience(monkeypatch):
     monkeypatch.setattr(cli_module, "_build_default_client", capture)
     app = make_app()
     app.state.live_cookies = None
+    trust_deployment(app, REAL_BASE)
 
     lookup_support._authed_lookup(app, f"{REAL_BASE}/x", REAL_BASE, "kerberos")
 

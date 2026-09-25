@@ -20,12 +20,28 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol, runtime_checkable
 
-from connections_export.archive.blobs import BLOBS_DIRNAME
+from connections_export.archive.blobs import BLOBS_DIRNAME, valid_digest
 from connections_export.archive.store import MANIFEST_FILENAME
 
 #: `run-*.json`, the shape `derive/apps/_shared.py` documents.
 RUN_METADATA_PREFIX = "run-"
 RUN_METADATA_SUFFIX = ".json"
+
+#: The most a zip member is decompressed to. A zip may come from anyone, and a
+#: few kilobytes of deflated zeros expand to gigabytes that `ZipFile.read`
+#: would hold in memory before anything looked at them. The manifest and
+#: sidecars are text and grow with item count; half a gigabyte is far past
+#: any capture this tool has made. A blob is one response body -- a community
+#: file can be large, so its cap is higher, but still below what would take a
+#: desktop down. Over the cap is a corrupt member, not a crash.
+MAX_RECORDS_MEMBER_BYTES = 512 * 1024 * 1024
+MAX_BLOB_MEMBER_BYTES = 1024 * 1024 * 1024
+
+_CHUNK = 1024 * 1024
+
+
+class _OverLimit(Exception):
+    """A zip member larger than its cap."""
 
 
 class ArchiveSourceError(Exception):
@@ -101,7 +117,12 @@ class DirectorySource:
                 yield line.rstrip("\n")
 
     def read_blob(self, digest: str) -> bytes | None:
-        path = self._root / BLOBS_DIRNAME / digest
+        bare = valid_digest(digest)
+        if bare is None:
+            # A manifest line is the archive author's text; a "digest" of
+            # `../../.ssh/id_rsa` is not a blob this archive holds.
+            return None
+        path = self._root / BLOBS_DIRNAME / bare
         if not path.is_file():
             return None
         return path.read_bytes()
@@ -194,14 +215,49 @@ class ZipSource:
     def check(self) -> None:
         self._resolve_prefix()
 
-    def _read(self, name: str) -> bytes | None:
+    def _read_member(self, info: zipfile.ZipInfo, limit: int) -> bytes:
+        """`info`'s bytes, refusing past `limit`.
+
+        Checked twice: `file_size` is what the zip's own directory claims, and
+        whoever built the zip wrote that too, so the decompressed stream is
+        counted as it is read as well. A member whose bytes do not match its
+        directory entry (`BadZipFile`, a CRC failure) is as corrupt as one
+        that is too large.
+        """
+        if info.file_size > limit:
+            raise _OverLimit(info.filename)
+        chunks: list[bytes] = []
+        total = 0
         try:
-            return self._handle().read(self._resolve_prefix() + name)
+            with self._handle().open(info) as member:
+                while chunk := member.read(_CHUNK):
+                    total += len(chunk)
+                    if total > limit:
+                        raise _OverLimit(info.filename)
+                    chunks.append(chunk)
+        except zipfile.BadZipFile as exc:
+            raise _OverLimit(info.filename) from exc
+        return b"".join(chunks)
+
+    def _read(self, name: str, limit: int | None = None) -> bytes | None:
+        """`name`'s bytes; `None` if absent, `_OverLimit` if corrupt. The
+        records cap unless told otherwise."""
+        try:
+            info = self._handle().getinfo(self._resolve_prefix() + name)
         except KeyError:
             return None
+        return self._read_member(info, MAX_RECORDS_MEMBER_BYTES if limit is None else limit)
 
     def read_lines(self, name: str) -> Iterator[str]:
-        payload = self._read(name)
+        try:
+            payload = self._read(name)
+        except _OverLimit as exc:
+            # A stream cannot be half-read: derive would build from a
+            # truncated manifest and call it the archive. Refused in words.
+            raise ArchiveSourceError(
+                f"{name} in {self._path} is corrupt or larger than "
+                f"{MAX_RECORDS_MEMBER_BYTES // (1024 * 1024)} MB; refusing to read it"
+            ) from exc
         if payload is None:
             return
         # `splitlines` rather than a split on "\n": a file ending in a
@@ -210,10 +266,19 @@ class ZipSource:
         yield from payload.decode("utf-8").splitlines()
 
     def read_blob(self, digest: str) -> bytes | None:
-        return self._read(f"{BLOBS_DIRNAME}/{digest}")
+        bare = valid_digest(digest)
+        if bare is None:
+            return None
+        try:
+            return self._read(f"{BLOBS_DIRNAME}/{bare}", MAX_BLOB_MEMBER_BYTES)
+        except _OverLimit:
+            return None
 
     def read_json(self, name: str) -> dict | None:
-        payload = self._read(name)
+        try:
+            payload = self._read(name)
+        except _OverLimit:
+            return None
         if payload is None:
             return None
         try:
@@ -231,10 +296,14 @@ class ZipSource:
             and "/" not in info.filename[len(prefix) :]
         ]
         infos.sort(key=lambda info: (info.date_time, info.filename))
-        return [
-            RunEntry(name=info.filename[len(prefix) :], data=self._handle().read(info.filename))
-            for info in infos
-        ]
+        entries = []
+        for info in infos:
+            try:
+                data = self._read_member(info, MAX_RECORDS_MEMBER_BYTES)
+            except _OverLimit:
+                continue  # a corrupt run record is skipped like an unparseable one
+            entries.append(RunEntry(name=info.filename[len(prefix) :], data=data))
+        return entries
 
 
 def source_for(path: Path | str) -> ArchiveSource:

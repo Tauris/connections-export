@@ -47,7 +47,7 @@
     const parts = [];
     for (const kind of Object.keys(labels)) {
       const n = counts[kind] || 0;
-      if (n > 0) parts.push('<span class="tc"><b>' + n + "</b> " + labels[kind] + "</span>");
+      if (n > 0) parts.push('<span class="tc"><b>' + escapeHtml(n) + "</b> " + labels[kind] + "</span>");
     }
     if (!parts.length) return "";
     return '<span class="tc-lead">this archive holds</span>' + parts.join("");
@@ -212,7 +212,7 @@
   // in console.html; `currentColor` means it inherits the surrounding style.
   const icon = (name) => '<svg class="icon" aria-hidden="true"><use href="#i-' + name + '"/></svg>';
 
-  const escapeHtml = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;" }[c]));
+  const escapeHtml = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
 
   // ================= READER-PURE-BEGIN =================
   // Pure, DOM-free reader logic (Front-end reader
@@ -366,6 +366,178 @@
     });
   }
 
+  // The URL a browser would actually follow for `value`, or null. The HTML
+  // parser has already decoded entities by the time a value gets here, and URL
+  // parsing strips tabs and newlines anywhere, and spaces and control
+  // characters at the ends, BEFORE reading the scheme -- so a check on the raw
+  // string is beaten by `java\tscript:`. `new URL` applies exactly those rules.
+  // `base` resolves a relative value; without one, only absolute URLs parse.
+  function parsedUrl(value, base) {
+    if (value == null || value === "") return null;
+    try { return base ? new URL(String(value), base) : new URL(String(value)); } catch (_) { return null; }
+  }
+
+  // An absolute http(s) URL, or null -- for links that leave the console for
+  // the deployment ("Open original", search hits). Escaping is not enough on
+  // its own: `javascript:alert(1)` has nothing in it to escape.
+  function safeHttpUrl(value) {
+    const u = parsedUrl(value);
+    return u && (u.protocol === "http:" || u.protocol === "https:") ? u.href : null;
+  }
+
+  // ---- Keeping captured content off the console's own API ----
+  // A captured body renders in a same-origin srcdoc frame, where a relative
+  // URL resolves against the CONSOLE: `<img src="/api/resolve-user?...">` or a
+  // CSS `url(/api/...)` would be a request to the console's API, made by
+  // whoever wrote the page. Scripts stay dead in the frame, but a GET is
+  // enough to be a problem. The one console path content may name is the one
+  // the reader itself writes in: `/api/blob/<hash>`, a captured asset.
+  const BLOB_PATH_RE = /^\/api\/blob\/[0-9a-f]{64}$/;
+  const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]", "0.0.0.0"]);
+
+  // This machine, on any port: another console, or anything else listening
+  // locally, is no more the author's to address than this one is.
+  function isLocalHost(hostname) {
+    const h = String(hostname || "").toLowerCase();
+    return LOCAL_HOSTS.has(h) || h.endsWith(".localhost") || /^127\./.test(h);
+  }
+
+  // Whether loading or following `value` from a document at `consoleOrigin`
+  // would reach the console (or this machine) -- other than a captured blob.
+  // Resolved exactly as the browser would, so `/api/x`, `//127.0.0.1:8000/x`
+  // and `http://localhost:8000/x` are all caught. An unparseable value is
+  // never requested, and non-web schemes (data:, mailto:) make no request.
+  function reachesConsole(value, consoleOrigin) {
+    // A bare fragment stays inside the document it is in: no request at all.
+    if (/^\s*#/.test(String(value == null ? "" : value))) return false;
+    const u = parsedUrl(value, consoleOrigin + "/");
+    if (!u || (u.protocol !== "http:" && u.protocol !== "https:")) return false;
+    if (u.origin !== consoleOrigin && !isLocalHost(u.hostname)) return false;
+    return !(u.origin === consoleOrigin && BLOB_PATH_RE.test(u.pathname) && !u.search);
+  }
+
+  // CSS decodes escapes inside `url()` before fetching, so `\2f api` is `/api`.
+  function cssUnescape(text) {
+    return String(text)
+      .replace(/\\([0-9a-fA-F]{1,6})\s?/g, (_, hex) => {
+        const code = parseInt(hex, 16);
+        return code > 0 && code <= 0x10ffff ? String.fromCodePoint(code) : "\ufffd";
+      })
+      .replace(/\\([^\n])/g, "$1");
+  }
+
+  // Author CSS with every reference to the console neutralised: `url(...)`,
+  // `@import "..."`, and the bare strings of `image-set(...)`. The frame's CSP
+  // (`bodyFrameCsp`) is the backstop for any spelling this misses.
+  function confineCss(css, consoleOrigin) {
+    const hits = (target) => reachesConsole(cssUnescape(target).trim(), consoleOrigin);
+    return String(css == null ? "" : css)
+      .replace(/@import\s+(?:url\(\s*)?(["']?)([^"')\s;]*)\1\s*\)?[^;]*;?/gi,
+        (whole, _q, target) => (hits(target) ? "" : whole))
+      .replace(/url\(\s*(["']?)(.*?)\1\s*\)/gi,
+        (whole, _q, target) => (hits(target) ? "url(about:invalid)" : whole))
+      .replace(/image-set\(([^)]*)\)/gi, (whole) =>
+        whole.replace(/(["'])(.*?)\1/g, (str, _q, target) => (hits(target) ? '""' : str)));
+  }
+
+  // A `srcset` with the candidates that reach the console removed -- parsed
+  // the way the HTML spec does (a URL is a run of non-space; a comma ends a
+  // candidate only after it), so a `data:` URL's own commas survive.
+  function confineSrcset(srcset, consoleOrigin) {
+    const text = String(srcset || "");
+    const kept = [];
+    let i = 0;
+    while (i < text.length) {
+      while (i < text.length && /[\s,]/.test(text[i])) i++;
+      if (i >= text.length) break;
+      let j = i;
+      while (j < text.length && !/\s/.test(text[j])) j++;
+      let url = text.slice(i, j);
+      let descriptor = "";
+      if (url.endsWith(",")) {
+        url = url.replace(/,+$/, "");
+      } else {
+        let k = j;
+        while (k < text.length && text[k] !== ",") k++;
+        descriptor = text.slice(j, k).trim();
+        j = k;
+      }
+      if (url && !reachesConsole(url, consoleOrigin)) kept.push(descriptor ? url + " " + descriptor : url);
+      i = j;
+    }
+    return kept.join(", ");
+  }
+
+  // Every attribute through which an element fetches or navigates.
+  const URL_ATTRS = new Set([
+    "src", "href", "xlink:href", "poster", "background", "action", "formaction", "data",
+    "ping", "codebase", "lowsrc", "dynsrc", "manifest", "icon",
+  ]);
+
+  // The captured body with every console-addressing URL removed, for the
+  // sandboxed frame. Parsed with the browser's own parser (in an inert
+  // document) so what is checked is what the frame will load. DOM-free-safe:
+  // under Node there is no parser, and the frame's CSP still applies.
+  function confineToArchive(html, consoleOrigin) {
+    if (!html || !consoleOrigin || typeof DOMParser === "undefined") return html;
+    const doc = new DOMParser().parseFromString(String(html), "text/html");
+    doc.querySelectorAll("*").forEach((el) => {
+      const name = el.localName;
+      // A refresh navigates the frame to whatever it names; SVG animation can
+      // rewrite an href after this walk has looked at it.
+      if ((name === "meta" && /refresh/i.test(el.getAttribute("http-equiv") || ""))
+          || ((name === "set" || name === "animate")
+              && /^(xlink:)?href$|^src$/i.test(el.getAttribute("attributeName") || ""))) {
+        el.remove();
+        return;
+      }
+      if (name === "style") el.textContent = confineCss(el.textContent, consoleOrigin);
+      for (const attr of Array.from(el.attributes)) {
+        const attrName = attr.name.toLowerCase();
+        if (attrName === "style") {
+          el.setAttribute(attr.name, confineCss(attr.value, consoleOrigin));
+        } else if (attrName === "srcset" || attrName === "imagesrcset") {
+          const kept = confineSrcset(attr.value, consoleOrigin);
+          if (kept) el.setAttribute(attr.name, kept); else el.removeAttribute(attr.name);
+        } else if (URL_ATTRS.has(attrName) && reachesConsole(attr.value, consoleOrigin)) {
+          // A link's target is kept where nothing follows it: an in-export
+          // link is exactly such a relative href, and the parent still needs
+          // it to route the click through the reader (see the `load` handler).
+          if (attrName === "href" || attrName === "xlink:href") {
+            el.setAttribute("data-confined-" + attrName.replace(":", "-"), attr.value);
+          }
+          el.removeAttribute(attr.name);
+        }
+      }
+    });
+    return doc.documentElement.innerHTML;
+  }
+
+  // The frame's own CSP, the backstop for whatever `confineToArchive` misses
+  // (a CSS spelling it does not parse, say). The console is reachable only at
+  // `/api/blob/` -- a host-source with a path matches that prefix and nothing
+  // else. Web content stays allowed through the `https:` scheme-source; `http:`
+  // is NOT used, because the console itself is http and a scheme-source would
+  // readmit all of it. An http deployment is named by origin instead. If the
+  // console is ever served over https, `https:` would readmit it too, so it is
+  // dropped and only the blobs (and the deployment) stay reachable.
+  function bodyFrameCsp(consoleOrigin, deploymentOrigin) {
+    const web = /^https:/i.test(consoleOrigin) ? "" : " https:";
+    let deployment = "";
+    const d = parsedUrl(deploymentOrigin);
+    if (d && (d.protocol === "http:" || d.protocol === "https:")
+        && d.origin !== consoleOrigin && !isLocalHost(d.hostname)) {
+      deployment = " " + d.origin;
+    }
+    const blobs = " " + consoleOrigin + "/api/blob/";
+    return "default-src 'none'" +
+      "; img-src data: blob:" + web + blobs + deployment +
+      "; media-src" + web + blobs + deployment +
+      "; style-src 'unsafe-inline'" + web + deployment +
+      "; font-src data:" + web + deployment +
+      "; frame-src " + ((web + deployment).trim() || "'none'");
+  }
+
   function escapeAttr(s) {
     return String(s == null ? "" : s).replace(/[&<>"]/g, (c) => (
       { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]
@@ -382,7 +554,21 @@
   // still applies *inside* that sandboxed frame, so fidelity is kept
   // while the content is inert. This function must never be changed
   // to add sandbox tokens beyond what the design calls for.
-  function sandboxedBodyMarkup(bodyHtml) {
+  //
+  // The frame is same-origin with the console, so a relative URL in the body
+  // would address the console's API. `opts.consoleOrigin` (default: this
+  // page's origin, when there is one) turns on `confineToArchive` and the
+  // frame CSP; `opts.deploymentOrigin` lets an http deployment's own images
+  // through that CSP.
+  function sandboxedBodyMarkup(bodyHtml, opts) {
+    const consoleOrigin = (opts && opts.consoleOrigin)
+      || (typeof location !== "undefined" && /^https?:/.test(location.origin) ? location.origin : null);
+    const body = consoleOrigin ? confineToArchive(bodyHtml || "", consoleOrigin) : (bodyHtml || "");
+    // First in the document, so it governs everything the body loads.
+    const csp = consoleOrigin
+      ? '<meta http-equiv="Content-Security-Policy" content="' +
+        escapeAttr(bodyFrameCsp(consoleOrigin, opts && opts.deploymentOrigin)) + '">'
+      : "";
     // Inject color-scheme + background matching the outer theme so the iframe
     // body doesn't show white in dark mode. Reads the current effective theme
     // from the root data-theme attribute or prefers-color-scheme.
@@ -404,7 +590,7 @@
       '' +
       '</style>'
     );
-    const doc = '<!doctype html>' + themeStyle + '<body>' + (bodyHtml || "") + "</body>";
+    const doc = '<!doctype html>' + csp + themeStyle + '<body>' + body + "</body>";
     // `allow-same-origin` (and NOTHING else — crucially NO `allow-scripts`) so
     // author <script> stays inert while the *parent* can still read the frame's
     // scrollHeight to auto-size it (see the `load` handler after READER-PURE-END).
@@ -472,6 +658,119 @@
   }
   // ================= READER-PURE-END =================
 
+  // ================= HTML-SANITIZER-BEGIN =================
+  // Captured HTML that has to render OUTSIDE the sandboxed body frame -- comment
+  // and forum-reply bodies, where one iframe per reply is impractical -- goes
+  // through this first. It lands in the console's own document, on the
+  // console's origin, where script could call every local API (start a crawl,
+  // delete archives); and it was written by any user of the deployment, or
+  // handed over in someone else's archive. So: an allowlist, not a blocklist.
+  //
+  // Parsed by the browser's own parser into an inert DOMParser document (no
+  // script runs, nothing loads), then REBUILT from scratch -- fresh elements
+  // carrying only the attributes checked below -- rather than cleaned in place,
+  // so nothing the walk did not look at can survive into the output.
+  const SANITIZE_KEEP = new Set([
+    "p", "br", "b", "strong", "i", "em", "u", "s", "sub", "sup", "blockquote", "pre",
+    "code", "ul", "ol", "li", "a", "img", "span", "div", "h1", "h2", "h3", "h4", "h5",
+    "h6", "table", "thead", "tbody", "tr", "td", "th", "hr",
+  ]);
+  // Dropped WITH their content: executable, a document of their own, raw text
+  // that would read as source code, or a namespace (svg/math) whose parsing
+  // rules differ from HTML's -- the root of most sanitizer bypasses. Any other
+  // unknown element is unwrapped instead, so the words inside it are kept.
+  const SANITIZE_DROP = new Set([
+    "script", "style", "iframe", "frame", "frameset", "object", "embed", "applet", "svg",
+    "math", "template", "form", "meta", "link", "base", "noscript", "noembed", "noframes",
+    "textarea", "title", "xmp", "plaintext",
+  ]);
+  const XHTML_NS = "http://www.w3.org/1999/xhtml";
+
+  // The console's origin, or null when this page has none to speak of.
+  function pageOrigin() {
+    return /^https?:/.test(location.origin) ? location.origin : null;
+  }
+
+  // A web URL that points anywhere but at the console (or this machine) --
+  // the same rule as the body frame's `reachesConsole`, which is also what
+  // lets a captured blob through.
+  function leavesConsole(u, value) {
+    const origin = pageOrigin();
+    return origin ? !reachesConsole(value, origin) : !isLocalHost(u.hostname);
+  }
+
+  // http/https/mailto, resolved as a click on this page would resolve it.
+  // A relative link lands on the console, so it survives only if it names a
+  // captured blob. Returned as written.
+  function safeLinkHref(value) {
+    const origin = pageOrigin();
+    const u = parsedUrl(value, origin ? origin + "/" : undefined);
+    if (!u) return null;
+    if (u.protocol === "mailto:") return String(value);
+    return (u.protocol === "http:" || u.protocol === "https:") && leavesConsole(u, value)
+      ? String(value) : null;
+  }
+
+  // Web images, inline image data, and the archive's own blobs. Anything else
+  // relative would be fetched from the console's own API, so it is dropped.
+  function safeImageSrc(value) {
+    if (value == null) return null;
+    if (BLOB_PATH_RE.test(value)) return value;
+    const u = parsedUrl(value);
+    if (!u) return null;
+    if (u.protocol === "http:" || u.protocol === "https:") return leavesConsole(u, value) ? String(value) : null;
+    return u.protocol === "data:" && /^data:image\//i.test(u.href) ? String(value) : null;
+  }
+
+  function copySafeAttributes(src, el) {
+    const get = (name) => src.getAttribute(name);
+    const numeric = (name, re) => {
+      const v = get(name);
+      if (v != null && re.test(v.trim())) el.setAttribute(name, v.trim());
+    };
+    if (el.localName === "a") {
+      const href = safeLinkHref(get("href"));
+      if (href !== null) el.setAttribute("href", href);
+      if (get("title") != null) el.setAttribute("title", get("title"));
+      // Always a new tab with no opener: a comment link must never be able to
+      // navigate, or reach back into, the console tab that showed it.
+      el.setAttribute("rel", "noopener noreferrer");
+      el.setAttribute("target", "_blank");
+    } else if (el.localName === "img") {
+      const srcUrl = safeImageSrc(get("src"));
+      if (srcUrl !== null) el.setAttribute("src", srcUrl);
+      if (get("alt") != null) el.setAttribute("alt", get("alt"));
+      numeric("width", /^\d{1,5}%?$/);
+      numeric("height", /^\d{1,5}%?$/);
+    } else if (el.localName === "td" || el.localName === "th") {
+      numeric("colspan", /^\d{1,4}$/);
+      numeric("rowspan", /^\d{1,4}$/);
+    }
+  }
+
+  function appendSanitized(src, dst, doc) {
+    for (const node of Array.from(src.childNodes)) {
+      if (node.nodeType === 3) { dst.appendChild(doc.createTextNode(node.data)); continue; }
+      if (node.nodeType !== 1) continue;  // comments, processing instructions
+      const name = node.localName;
+      if (node.namespaceURI !== XHTML_NS || SANITIZE_DROP.has(name)) continue;
+      if (!SANITIZE_KEEP.has(name)) { appendSanitized(node, dst, doc); continue; }
+      const el = doc.createElement(name);
+      copySafeAttributes(node, el);
+      dst.appendChild(el);
+      appendSanitized(node, el, doc);
+    }
+  }
+
+  function sanitizeHtml(html) {
+    if (html == null || html === "") return "";
+    const doc = new DOMParser().parseFromString(String(html), "text/html");
+    const out = doc.createElement("div");
+    appendSanitized(doc.body, out, doc);
+    return out.innerHTML;
+  }
+  // ================= HTML-SANITIZER-END =================
+
   // Auto-size each sandboxed body-frame from its own content, measured by the
   // PARENT — there is no in-frame script (the frame has no `allow-scripts`). The
   // srcdoc frame is same-origin (`allow-same-origin`), so the parent can read its
@@ -502,7 +801,10 @@
         const d = f.contentDocument;
         if (d) {
           d.querySelectorAll("a").forEach((a) => {
-            const href = a.getAttribute("href") || a.getAttribute("xlink:href");
+            // `data-confined-*`: a relative href `confineToArchive` took out of
+            // the browser's reach, kept so an in-export link still routes here.
+            const href = a.getAttribute("href") || a.getAttribute("xlink:href")
+              || a.getAttribute("data-confined-href") || a.getAttribute("data-confined-xlink-href");
             const target = href && readerNavLinks.get(href);
             if (!target) return;
             a.style.cursor = "pointer";
@@ -599,8 +901,8 @@
     const kind = it.kindLabel || (it.kind === "feed" ? "feed" : (it.depth <= 1 ? "page" : "child"));
     row.innerHTML =
       '<span class="rail"><span class="sdot"></span></span>' +
-      '<span class="label"><span class="tt">' + escapeHtml(it.title) + '</span><span class="kind">' + kind + '</span></span>' +
-      '<span class="cmt">' + (it.comments ? ('<b>'+it.comments+'</b> cmt') : (it.kind==="feed" ? 'index' : '—')) + '<span class="open-i" aria-hidden="true">⤢</span></span>';
+      '<span class="label"><span class="tt">' + escapeHtml(it.title) + '</span><span class="kind">' + escapeHtml(kind) + '</span></span>' +
+      '<span class="cmt">' + (it.comments ? ('<b>'+escapeHtml(it.comments)+'</b> cmt') : (it.kind==="feed" ? 'index' : '—')) + '<span class="open-i" aria-hidden="true">⤢</span></span>';
     row.addEventListener("click", () => openDrawer(nodeKey));
     row.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openDrawer(nodeKey); } });
     // Under its own community's heading, not at the end of the tree.
@@ -643,10 +945,14 @@
   // URL next to "× 7" would claim that URL was fetched seven times. The
   // stamp stays the one the group started at, so the column remains ordered
   // newest-first -- re-anchoring, not restamping, is what keeps it honest.
+  //
+  // Every value is escaped: URLs, kinds and error text come from the event
+  // stream, i.e. from the deployment, and `shortLabel` percent-decodes paths --
+  // so `%3Cimg ...%3E` in a request URL would otherwise arrive here as a tag.
   function logMarkup(r, n) {
-    const label = n > 1 ? '<b>' + escapeHtml(r.key || "fetch") + '</b>' : r.url;
-    const right = n > 1 ? '<span class="xn">× ' + n + '</span>' : (r.extra || "");
-    return '<span class="t">'+r.t+'</span><span class="tag '+r.tagCls+'">'+r.tag+'</span>' +
+    const label = n > 1 ? '<b>' + escapeHtml(r.key || "fetch") + '</b>' : escapeHtml(r.url);
+    const right = n > 1 ? '<span class="xn">× ' + escapeHtml(n) + '</span>' : escapeHtml(r.extra || "");
+    return '<span class="t">'+escapeHtml(r.t)+'</span><span class="tag '+escapeHtml(r.tagCls)+'">'+escapeHtml(r.tag)+'</span>' +
       '<span class="u">'+label+'</span><span class="z">'+right+'</span>';
   }
   function resetLog() {
@@ -1504,6 +1810,13 @@
     return rows ? '<div class="r-attach inline-downloads"><div class="sh">Attachments</div><div class="files-list">' + rows + '</div></div>' : "";
   }
 
+  // What the body frame needs beyond the body: the deployment the archive came
+  // from, so an http deployment's own images get through the frame's CSP (the
+  // console origin defaults to this page's).
+  function bodyFrameOptions() {
+    return { deploymentOrigin: (REAL_MODEL && REAL_MODEL.base_url) || null };
+  }
+
   // Render an entity body for the reader: the sandboxed body frame, PLUS a
   // refresh of `readerNavLinks` so the frame's own in-export <a> links become
   // clickable reader navigation (wired by the frame `load` handler).
@@ -1515,7 +1828,7 @@
         readerNavLinks.set(link.original_href, r.targetPageId);
       }
     }
-    return sandboxedBodyMarkup(resolveBodyImages(bodyHtml, assets));
+    return sandboxedBodyMarkup(resolveBodyImages(bodyHtml, assets), bodyFrameOptions());
   }
 
   function renderLinksReal(page) {
@@ -1578,11 +1891,14 @@
   // blog comment from `published`, so either is shown. Comment text is
   // stripped to plain text -- a comment body is never a sandboxed render.
   // Render reply/comment body HTML inline (not sandboxed -- one iframe per
-  // reply in a thread is impractical). Content comes from our own archive so
-  // it's trusted; images are resolved to blob: URLs like the main body.
+  // reply in a thread is impractical). That puts it in the console's own
+  // document, and it is untrusted: any deployment user wrote it, and an
+  // archive may come from anyone. So it is sanitized to an allowlist, AFTER
+  // images are resolved to /api/blob/ URLs, so what is checked is exactly what
+  // renders.
   function inlineBody(html, assets) {
     if (!html) return '<em style="color:var(--muted)">no content</em>';
-    return '<div class="prose inline-body">' + resolveBodyImages(html, assets) + '</div>';
+    return '<div class="prose inline-body">' + sanitizeHtml(resolveBodyImages(html, assets)) + '</div>';
   }
 
   function commentThreadHtml(comments, emptyText) {
@@ -1687,9 +2003,12 @@
     });
   }
 
+  // Only an http(s) URL becomes a link: `alternate_url` is archive data, and a
+  // `javascript:` one would survive escaping untouched.
   function originalPageLink(url) {
-    if (!url) return "";
-    return '<a class="original-link" href="' + escapeHtml(url) +
+    const href = safeHttpUrl(url);
+    if (!href) return "";
+    return '<a class="original-link" href="' + escapeHtml(href) +
       '" target="_blank" rel="noopener noreferrer">Open original</a>';
   }
 
@@ -2172,6 +2491,22 @@
     const label = btn.textContent;
     btn.disabled = true;
     btn.textContent = "⏳ Rendering…";
+    // Clicking Export PDF closes the menu, so the button above is out of
+    // sight for the whole render -- a minute or more on a large archive, with
+    // nothing on screen but a busy machine. The menu's own toolbar button
+    // stays visible: it carries the progress, with the time so far.
+    const summary = document.querySelector("#r-export-menu > summary");
+    const summaryHtml = summary ? summary.innerHTML : "";
+    const started = Date.now();
+    const tick = () => {
+      if (!summary) return;
+      const secs = Math.floor((Date.now() - started) / 1000);
+      summary.textContent = "⏳ Rendering PDF… " + Math.floor(secs / 60) + ":" +
+        String(secs % 60).padStart(2, "0");
+    };
+    tick();
+    const ticker = setInterval(tick, 1000);
+    if (summary) summary.classList.add("busy");
     try {
       // Comments are always in the archive; the checkbox only omits them from
       // this export (?comments=0).
@@ -2232,9 +2567,15 @@
       a.click();
       a.remove();
       URL.revokeObjectURL(url);
+      notify("Saved as export.pdf in your browser's downloads.", "PDF ready");
     } catch (_) {
       notify("PDF export isn't reachable right now.");
     } finally {
+      clearInterval(ticker);
+      if (summary) {
+        summary.innerHTML = summaryHtml;
+        summary.classList.remove("busy");
+      }
       btn.disabled = false;
       btn.textContent = label;
     }
@@ -3222,7 +3563,8 @@
     const forKey = evt.ref ? keyByRawId.get(evt.ref) : null;
     const forId = forKey ? evt.ref : null;
     const dHtml = escapeHtml(evt.detail) + (evt.ref ? ' — <code>' + escapeHtml(evt.ref) + '</code>' : '');
-    raiseAlert(sev, WARNING_TITLE[evt.kind] || evt.kind, dHtml, forId);
+    // An unknown kind falls back to the event's own string, which is markup here.
+    raiseAlert(sev, WARNING_TITLE[evt.kind] || escapeHtml(evt.kind), dHtml, forId);
     if (forKey && openId === forKey) renderDrawer(byId.get(forKey));
   }
 
@@ -3236,7 +3578,7 @@
     raiseAlert(
       clean ? "note" : "warn",
       evt.used
-        ? "Search chose " + (evt.selected || 0) + " thread(s) to read"
+        ? "Search chose " + escapeHtml(evt.selected || 0) + " thread(s) to read"
         : "Reading the forums in full",
       escapeHtml(evt.detail || "") + (evt.ref ? ' — <code>' + escapeHtml(evt.ref) + "</code>" : ""),
       null
@@ -3407,7 +3749,7 @@
     const kept = authorKept, total = authorTotal;
     if (author && kept === 0) {
       raiseAlert("crit",
-        "Author filter “" + escapeHtml(author) + "” matched 0 of " + total + " items",
+        "Author filter “" + escapeHtml(author) + "” matched 0 of " + escapeHtml(total) + " items",
         "The value didn't match the stored author name or user id. Pick your exact name " +
           "from the authors below — one click re-imports only their content.",
         null);
@@ -3454,7 +3796,7 @@
     if (!identities.length) { box.hidden = true; box.innerHTML = ""; return; }
     const matchedNothing = !!currentAuthor && kept === 0;
     const head = currentAuthor
-      ? "Kept " + kept + " of " + total + " for \u201c" + escapeHtml(currentAuthor) +
+      ? "Kept " + escapeHtml(kept) + " of " + escapeHtml(total) + " for \u201c" + escapeHtml(currentAuthor) +
         "\u201d. Filter to a different author:"
       : "Authors in this import \u2014 click one to re-import only their content:";
 
@@ -3548,7 +3890,7 @@
       if (!post) return null;
       const rendered = resolveBodyImages(post.content_html, post.assets);
       const body = rendered
-        ? '<div class="prose">' + sandboxedBodyMarkup(rendered) + '</div>'
+        ? '<div class="prose">' + sandboxedBodyMarkup(rendered, bodyFrameOptions()) + '</div>'
         : '<div class="drawer-hint">Body not imported yet — it’ll appear here as it loads.</div>';
       return body + '<div class="r-comments"><h2>Comments · ' + threadComments(post.comments).length + '</h2>' +
         commentThreadHtml(post.comments, "No comments on this post.") + '</div>';
@@ -3559,7 +3901,7 @@
       if (!topic) return null;
       const rendered = resolveBodyImages(topic.content_html, topic.assets);
       const body = rendered
-        ? '<div class="prose">' + sandboxedBodyMarkup(rendered) + '</div>'
+        ? '<div class="prose">' + sandboxedBodyMarkup(rendered, bodyFrameOptions()) + '</div>'
         : '<div class="drawer-hint">Body not imported yet — it’ll appear here as it loads.</div>';
       return body + renderReplyThread(topic);
     }
@@ -3571,7 +3913,7 @@
       // Highlights carry no comments and no replies -- the body is the whole
       // of it, so there is nothing to append here.
       return rcRendered
-        ? '<div class="prose">' + sandboxedBodyMarkup(rcRendered) + '</div>'
+        ? '<div class="prose">' + sandboxedBodyMarkup(rcRendered, bodyFrameOptions()) + '</div>'
         : '<div class="drawer-hint">Body not imported yet — it’ll appear here as it loads.</div>';
     }
     if (match.app === "files") {
@@ -3598,7 +3940,7 @@
     if (!page) return null;
     const rendered = resolveBodyImages(page.content_html, page.assets);
     const body = rendered
-      ? '<div class="prose">' + sandboxedBodyMarkup(rendered) + '</div>'
+      ? '<div class="prose">' + sandboxedBodyMarkup(rendered, bodyFrameOptions()) + '</div>'
       : '<div class="drawer-hint">Body not imported yet — it’ll appear here as it loads.</div>';
     return body + renderAttachmentsReal(page) + renderCommentsReal(page);
   }
@@ -3673,7 +4015,8 @@
 
     if (it.pageCounts) {
       html += section("Page", '<div class="metagrid">' +
-        m("Comments", it.pageCounts.comments) + m("Versions", it.pageCounts.versions) + m("Attachments", it.pageCounts.attachments) + '</div>');
+        m("Comments", escapeHtml(it.pageCounts.comments)) + m("Versions", escapeHtml(it.pageCounts.versions)) +
+        m("Attachments", escapeHtml(it.pageCounts.attachments)) + '</div>');
     }
     if ((it.kind === "page" || it.kind === "post" || it.kind === "topic") && (it.author || it.published || it.modified)) {
       html += section(it.kind === "page" ? "Page" : it.kind === "post" ? "Post" : "Topic", '<div class="metagrid">' +
@@ -4290,6 +4633,19 @@
     return out;
   }
 
+  //: Mark a deployment as one this console may sign in to. Lookups refuse any
+  //: other host, and only a POST can choose one -- a captured page shown in
+  //: the Reader can fire GETs at the console, never this.
+  function chooseDeployment(url) {
+    const value = String(url || "").trim();
+    if (!/^https?:\/\//i.test(value)) return Promise.resolve(false);
+    return fetch("/api/choose-deployment", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url: value }),
+    }).then((response) => response.ok).catch(() => false);
+  }
+
   //: Enter archive mode: the subject is an existing archive plus the live
   //: system, rather than a URL. Fetches the ledger and swaps the tailor zone.
   function openArchiveForUpdate(name) {
@@ -4353,6 +4709,30 @@
         if (guide) guide.hidden = true;
         renderLedger();
         setStartLabel();
+        // An archive from a deployment not chosen in this console: its live
+        // state is not looked up until the user chooses it. Say which host, and let the
+        // user choose it -- the address came from the archive, so it is the
+        // user's call, not the archive's.
+        if (data.untrusted_host && note) {
+          let host = data.untrusted_host;
+          try { host = new URL(data.untrusted_host).host; } catch (_) {}
+          note.hidden = false;
+          note.innerHTML =
+            "This archive was captured from <b>" + escapeHtml(host) + "</b>, which you have not " +
+            "used in this console yet, so its live state was not looked up. " +
+            '<button type="button" class="btn" id="ledger-trust-host">Use ' + escapeHtml(host) +
+            " \u2014 it is my Connections server</button>";
+          const trust = $("ledger-trust-host");
+          if (trust) {
+            trust.addEventListener("click", () => {
+              trust.disabled = true;
+              chooseDeployment(data.untrusted_host).then((ok) => {
+                if (ok) openArchiveForUpdate(name);
+                else { trust.disabled = false; notify("Could not use that address."); }
+              });
+            });
+          }
+        }
       })
       .catch(() => {
         if (opening) opening.hidden = true;
@@ -4405,7 +4785,7 @@
     // The card leads with the component's own name; the kind lives in the
     // description line ("Wiki pages and hierarchy"), and the count sits in a
     // mono column -- it is half of the decision.
-    item.innerHTML = '<input type="checkbox" value="' + component.kind + ':' + escapeHtml(component.id) + '">' +
+    item.innerHTML = '<input type="checkbox" value="' + escapeHtml(component.kind) + ':' + escapeHtml(component.id) + '">' +
       '<span class="co-main"><b>' + escapeHtml(component.title) +
       '</b><small>' + escapeHtml(detail) + '</small></span>' +
       (Number.isFinite(component.count)
@@ -5599,13 +5979,16 @@
       (errorDetail ? '<div class="fv-row" style="border-left-color:var(--crit)"><b>' + escapeHtml(errorDetail) + "</b></div>" : "") +
       (queriedUrl ? '<div class="fv-row"><span class="rr-k">queried</span> <code style="word-break:break-all">' + escapeHtml(queriedUrl) + "</code></div>" : "");
     $("sp-list").innerHTML = header + (results.length
-      ? results.map((r) =>
-          '<div class="fv-row"><div class="fv-url">' + escapeHtml(r.title || "(untitled)") + '</div>' +
+      ? results.map((r) => {
+          // A hit's URL is the deployment's; only http(s) becomes a link.
+          const hitUrl = safeHttpUrl(r.url);
+          return '<div class="fv-row"><div class="fv-url">' + escapeHtml(r.title || "(untitled)") + '</div>' +
           '<div class="fv-meta"><span class="rloc">' + escapeHtml(r.component || "?") + '</span>' +
           '<span class="fv-err">' + escapeHtml((r.author || "") + (r.author_userid ? " · " + r.author_userid : "")) + '</span></div>' +
-          (r.url ? '<div class="fv-meta"><a href="' + escapeHtml(r.url) + '" target="_blank" rel="noopener noreferrer">open on HCL ↗</a></div>' : "") +
+          (hitUrl ? '<div class="fv-meta"><a href="' + escapeHtml(hitUrl) + '" target="_blank" rel="noopener noreferrer">open on HCL ↗</a></div>' : "") +
           (r.via ? '<div class="fv-meta"><code style="word-break:break-all">via: ' + escapeHtml(r.via) + "</code></div>" : "") +
-          '</div>')
+          '</div>';
+        })
         .join("")
       : '<div class="fv-row">Search returned nothing for that user id. Resolve your email to a user id (button above), or use the id from the authors picker after an import.</div>');
     ov.style.display = "flex";
@@ -6037,6 +6420,11 @@
       if (el) el.addEventListener("input", updateCliEcho);
       if (el) el.addEventListener("change", updateCliEcho);
     }
+    // A typed deployment address is the user choosing that deployment, as a
+    // dropped URL is; lookups against it are refused until it is posted.
+    // `change` fires on blur, before the click that starts a lookup.
+    const baseField = $("field-base-url");
+    if (baseField) baseField.addEventListener("change", () => chooseDeployment(baseField.value));
     for (const id of ["size-all", "size-preview"]) {
       const el = $(id);
       if (el) el.addEventListener("click", () => setTimeout(updateCliEcho, 0));
@@ -6826,7 +7214,7 @@
             title: "Delete this archive?",
             bodyHtml: "<p>" + escapeHtml(a.display_name || a.name) + "</p>"
               + "<p class=\"mono\">" + escapeHtml(a.name) + "</p>"
-              + "<p>" + (a.item_count || 0) + " captured items. This cannot be undone.</p>",
+              + "<p>" + escapeHtml(a.item_count || 0) + " captured items. This cannot be undone.</p>",
             confirmLabel: "Delete archive",
           });
           if (!ok) return;

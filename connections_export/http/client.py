@@ -106,8 +106,18 @@ class HttpClient:
 
     @property
     def headers(self) -> httpx.Headers:
-        """Default headers sent with every request (e.g. Authorization)."""
+        """Default headers sent with every request, to every host -- so never
+        a credential; those go through `auth`, bound to one origin."""
         return self._client.headers
+
+    @property
+    def auth(self) -> httpx.Auth | None:
+        """The httpx auth flow applied to each request (see `http.auth`)."""
+        return self._client.auth
+
+    @auth.setter
+    def auth(self, value: httpx.Auth | None) -> None:
+        self._client.auth = value
 
     @property
     def min_interval(self) -> float:

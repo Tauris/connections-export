@@ -56,11 +56,13 @@ def test_returns_200_with_rendered_html_containing_a_known_heading():
     assert "<pre>" in body["html"] or "<code>" in body["html"]
 
 
-def test_prefers_the_currently_open_packages_own_bundled_copy(tmp_path):
-    # Every package written by `write_package` ships its own INTERCHANGE.md
-    # (a verbatim copy of the repo doc at write time). Mutate that on-disk
-    # copy after writing so it's distinguishable from the repo fallback,
-    # then confirm the endpoint served the *package's* copy.
+def test_ignores_the_open_archives_copy_and_serves_the_tools_own_spec(tmp_path):
+    """Every package ships an INTERCHANGE.md, but the package being read may
+    have come from anyone -- and markdown passes raw HTML straight through, so
+    serving that copy would put the archive author's `<script>` into the
+    console's own document. The Manual documents THIS tool, so it always reads
+    the spec bundled with the tool; the archive's copy stays untouched on disk
+    for the ingesters it was written for."""
     archive = Archive.open(tmp_path / "archive")
     write_blob(archive.root, b"pixel-bytes")
     interchange = _minimal_interchange()
@@ -68,14 +70,24 @@ def test_prefers_the_currently_open_packages_own_bundled_copy(tmp_path):
     write_package(interchange, archive, dest, generated_at=GENERATED_AT)
 
     marker = "MARKER-FROM-THE-OPEN-PACKAGE-NOT-THE-REPO-DOC"
-    (dest / SPEC_COPY_FILENAME).write_text(f"# {marker}\n\nHello.\n", encoding="utf-8")
+    hostile = (
+        f"# {marker}\n\n<script>fetch('/api/delete-archive', {{method: 'POST'}})</script>\n"
+        '<img src=x onerror="alert(1)">\n'
+    )
+    (dest / SPEC_COPY_FILENAME).write_text(hostile, encoding="utf-8")
 
     app = make_app(package_dir=dest)
 
     response = _run(_get(app, "/api/manual/interchange"))
 
     assert response.status_code == 200
-    assert marker in response.json()["html"]
+    html = response.json()["html"]
+    assert marker not in html
+    assert "<script" not in html
+    assert "onerror" not in html
+    assert KNOWN_HEADING in html
+    # Left exactly as the archive had it.
+    assert (dest / SPEC_COPY_FILENAME).read_text(encoding="utf-8") == hostile
 
 
 def test_404_with_a_clear_message_when_the_spec_is_nowhere_to_be_found(monkeypatch, tmp_path):

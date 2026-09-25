@@ -60,7 +60,7 @@ def test_the_live_drawer_renders_a_pages_real_content_inline():
     # The inline body still goes through the sandbox + image resolver (the
     # drawer resolves images into `rendered`, then sandboxes it).
     assert "resolveBodyImages(page.content_html" in JS
-    assert "sandboxedBodyMarkup(rendered)" in JS
+    assert "sandboxedBodyMarkup(rendered, bodyFrameOptions())" in JS
     assert "renderCommentsReal(page)" in JS
     assert "renderAttachmentsReal(page)" in JS
 

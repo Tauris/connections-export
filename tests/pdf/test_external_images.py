@@ -205,11 +205,16 @@ def test_browser_fidelity_marks_and_lists_them_too():
     assert f'src="{LOGO}"' not in html
 
 
-def test_the_default_fetch_gets_an_image_and_sends_no_credentials():
+def test_the_default_fetch_gets_an_image_and_sends_no_credentials(monkeypatch):
     import threading
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+    from connections_export.pdf import external
     from connections_export.pdf.external import _default_get
+
+    # The server below is on loopback, which the real fetch refuses
+    # (`test_external_ssrf.py`); here it stands in for a public host.
+    monkeypatch.setattr(external, "address_is_public", lambda _address: True)
 
     requests: list[dict] = []
 

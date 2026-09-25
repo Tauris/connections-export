@@ -5,6 +5,53 @@ Notable changes to `connections-export`, newest first. Versions follow
 the archive format may still change between minor versions — the format's own
 version is recorded inside every archive.
 
+## 0.1.11 — 2026-09-25
+
+### Security fixes — please upgrade
+
+A security review found ways for captured content, or an archive someone
+hands you, to act against the person using the tool. All versions up to
+0.1.10 are affected. Nothing here needs any action beyond upgrading.
+
+- **The console no longer runs code from captured content.** Comments, forum
+  replies, the activity log and the manual page could carry markup that ran
+  as the console itself, which can start captures, change settings and
+  delete archive folders. Comment and reply HTML is now sanitised, every
+  value the console shows is escaped, page bodies can no longer address the
+  console, and attachments are served so that they cannot run (non-image
+  attachments now download rather than open in a tab).
+- **Your sign-in stays with your deployment.** Console lookups could be made
+  to sign in to a host named by a web page or by an archive — sending a
+  password, a session cookie or a Windows sign-in handshake there. Lookups
+  now go only to deployments you chose (configured, signed in to, or dropped
+  into the setup screen), other websites cannot trigger them, cookies and the
+  Basic password are bound to the deployment's own address, and sign-in
+  follows a redirect to another host only within the deployment's own domain
+  or to a host listed in `hcl_hosts`. An archive from a deployment you have
+  not used yet offers to use it rather than signing in on its own.
+- **PDF export is isolated.** Captured pages could run script and reach the
+  network while the PDF was printed. The PDF is now cleaned with an
+  allowlist and rendered with no network access and no page script, and the
+  browser's sandbox is back on except where it cannot start without it
+  (running as root). Author CSS that loaded web fonts or backgrounds from the
+  internet no longer does so in the PDF. The external-image fetcher refuses
+  internal, loopback and link-local addresses, checked on every redirect.
+- **A handed-over archive cannot read your files.** Its references are
+  accepted only as content hashes, so none can point outside the archive;
+  an update skips such an entry and fetches it again. Oversized entries in a
+  `.zip` are refused rather than read into memory.
+- **Obsidian and Jekyll exports are inert.** Text that looked like HTML,
+  Markdown or Jekyll template commands is escaped, `javascript:` links are
+  dropped, front matter escapes line breaks, and file names handle Windows
+  device names such as `CON` and `NUL`.
+- **PDF export shows that it is working.** The menu closes when an export
+  starts, which hid its progress; the Export button now shows "Rendering
+  PDF…" with the time so far, and "PDF ready" when the download starts.
+- **Smaller hardening.** A console exposed on the network (`--host 0.0.0.0`)
+  prints a warning; proxy passwords are masked in diagnostic output; uploads
+  and downloaded archives are capped at 20 GB; the release workflows pin
+  every action to an exact commit and install from the lock file.
+
 ## 0.1.10 — 2026-09-24
 
 ### Username/password sign-in works from the console

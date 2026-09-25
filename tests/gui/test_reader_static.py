@@ -57,7 +57,7 @@ def test_no_allow_scripts_anywhere_in_the_served_console_code():
 
 
 def test_sandboxed_body_markup_never_enables_scripts():
-    match = re.search(r"function sandboxedBodyMarkup\(bodyHtml\)\s*\{(.*?)\n  \}", JS, re.S)
+    match = re.search(r"function sandboxedBodyMarkup\(bodyHtml, opts\)\s*\{(.*?)\n  \}", JS, re.S)
     assert match, "could not locate sandboxedBodyMarkup's body"
     body = _strip_js_comments(match.group(1))
     assert "sandbox" in body

@@ -30,6 +30,9 @@ from connections_export.pdf.html import DEFAULT_GENERATED_AT, render_html
 # content-type sniffer to recognize "image/png", not a full valid image.
 PNG_BYTES = b"\x89PNG\r\n\x1a\n" + b"\x00" * 12
 
+# Real-length digests: the renderer accepts nothing else as a blob hash.
+DIGEST_A, DIGEST_B, DIGEST_C = "a" * 64, "b" * 64, "c" * 64
+
 
 def _no_blobs(_digest: str) -> bytes | None:
     return None
@@ -211,7 +214,7 @@ def test_present_image_becomes_data_uri_from_injected_blob_bytes():
             ResolvedAsset(
                 original_href="cid:present.png",
                 resolved_url="https://fake/present.png",
-                blob_hash="sha256:aaaa",
+                blob_hash=f"sha256:{DIGEST_A}",
                 present=True,
                 scope="same",
             )
@@ -220,7 +223,7 @@ def test_present_image_becomes_data_uri_from_injected_blob_bytes():
     wiki = _wiki({"p1": page}, root_page_ids=["p1"])
     interchange = Interchange(wikis=[wiki])
 
-    html = render_html(interchange, blob_bytes={"aaaa": PNG_BYTES}.get)
+    html = render_html(interchange, blob_bytes={DIGEST_A: PNG_BYTES}.get)
 
     expected_uri = f"data:image/png;base64,{base64.b64encode(PNG_BYTES).decode('ascii')}"
     assert expected_uri in html
@@ -418,7 +421,7 @@ def test_document_is_self_contained_except_deployment_and_external_links():
     present_asset = ResolvedAsset(
         original_href="cid:present.png",
         resolved_url="https://fake/present.png",
-        blob_hash="sha256:bbbb",
+        blob_hash=f"sha256:{DIGEST_B}",
         present=True,
         scope="same",
     )
@@ -453,7 +456,7 @@ def test_document_is_self_contained_except_deployment_and_external_links():
     wiki = _wiki({"p1": page}, root_page_ids=["p1"])
     interchange = Interchange(wikis=[wiki])
 
-    html = render_html(interchange, blob_bytes={"bbbb": PNG_BYTES}.get)
+    html = render_html(interchange, blob_bytes={DIGEST_B: PNG_BYTES}.get)
 
     found = set(re.findall(r'(?:src|href)="(https?://[^"]*)"', html))
     allowed = {
@@ -498,7 +501,7 @@ def test_attachments_present_and_not_present_are_both_shown():
                 asset=ResolvedAsset(
                     original_href="att1.pdf",
                     resolved_url="https://fake/att1.pdf",
-                    blob_hash="sha256:cccc",
+                    blob_hash=f"sha256:{DIGEST_C}",
                     present=True,
                     scope="same",
                 ),
@@ -520,7 +523,7 @@ def test_attachments_present_and_not_present_are_both_shown():
     wiki = _wiki({"p1": page}, root_page_ids=["p1"])
     interchange = Interchange(wikis=[wiki])
 
-    html = render_html(interchange, blob_bytes={"cccc": b"%PDF-1.4 fake"}.get)
+    html = render_html(interchange, blob_bytes={DIGEST_C: b"%PDF-1.4 fake"}.get)
 
     assert "present.pdf" in html
     assert "missing.pdf" in html

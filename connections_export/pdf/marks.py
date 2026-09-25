@@ -5,10 +5,11 @@ Chromium's own `header_template`/`footer_template` -- HTML rendered outside the
 document, where the page's CSS does not reach. The portable PDF uses paged.js
 margin boxes, filled in by script after pagination.
 
-Both accept markup. What differs is what markup can REACH: the Live PDF's template is
-fetched outside the document, so an image by URL does not load there and an
-icon has to be an inline `<svg>` or a `data:` URI. The portable PDF has no such
-limit.
+Both accept markup, and in both an image has to be inline -- an `<svg>` or a
+`data:` URI. The Live PDF's template is rendered outside the document, where
+an image by URL does not load; the portable PDF prints untrusted captured
+content, so its page is cut off from the network altogether
+(`browser.block_network`) and an image by URL does not load there either.
 
 The everyday surface is therefore a set of short strings with placeholders,
 which both renderers position identically, and `header_html`/`footer_html` take
@@ -67,11 +68,9 @@ DEFAULT_MARKS: dict[str, str] = {
     #: every page, two lines of text. Placeholders work inside it exactly as
     #: they do in a slot.
     #:
-    #: Both renderers honour it, by different routes (see the module note), so
-    #: the caveats differ and are worth knowing before reaching for it:
-    #: external images do not load in the Live PDF -- its template is fetched
-    #: outside the document -- so an icon must be an inline `<svg>` or a
-    #: `data:` URI. The portable PDF has no such limit.
+    #: Both renderers honour it, by different routes (see the module note).
+    #: In neither does an image by URL load, so an icon must be an inline
+    #: `<svg>` or a `data:` URI.
     "header_html": "",
     "footer_html": "",
     #: How big `{logo}` is drawn. Community logos are 155x155 natively, so

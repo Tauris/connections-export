@@ -31,6 +31,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from connections_export import paging
 from connections_export.adapters.atom import feed_next_link, feed_total_results
 from connections_export.adapters.errors import AdapterError
+from connections_export.archive.blobs import valid_digest
 from connections_export.archive.feeds import FEEDS_FILENAME, FeedPage
 from connections_export.archive.records import ManifestRecord, Outcome
 from connections_export.archive.source import ArchiveSource, ArchiveSourceError
@@ -150,6 +151,12 @@ class ArchiveIndex:
         #: existed; delete with the fallback in `paginate` once no such archive
         #: is in use.
         self._update_windows: dict[tuple, dict[str, list[str]]] = {}
+        #: `ok` records whose `body_hash` is not a digest at all. Archives are
+        #: handed on, and a hash like `sha256:../../.ssh/id_rsa` would read a
+        #: file off this machine into a page body. Such a record is corrupt:
+        #: it is left out -- its URL reads as never archived -- and named here
+        #: rather than failing the whole archive over one line.
+        self._corrupt: list[str] = []
         self._load()
 
     @classmethod
@@ -208,6 +215,9 @@ class ArchiveIndex:
                 continue
             record = ManifestRecord.model_validate_json(line)
             if record.outcome == Outcome.ok:
+                if record.body_hash and valid_digest(record.body_hash) is None:
+                    self._corrupt.append(record.url)
+                    continue
                 self._ok[record.url] = record  # last one wins: the latest ok
                 if "since=" in record.url:
                     window = dict(parse_qsl(urlsplit(record.url).query)).get("since", "")
@@ -250,7 +260,7 @@ class ArchiveIndex:
             return None
         content = b""
         if record.body_hash:
-            digest = record.body_hash.split(":", 1)[-1]
+            digest = valid_digest(record.body_hash)  # checked at load: never None here
             payload = self.source.read_blob(digest)
             if payload is None:
                 # A manifest entry whose body is absent is a corrupt archive.
@@ -267,6 +277,12 @@ class ArchiveIndex:
             body_hash=record.body_hash,
             discovered_from=record.discovered_from,
         )
+
+    @property
+    def corrupt_urls(self) -> list[str]:
+        """URLs whose `ok` record carried a `body_hash` that is not a digest,
+        in manifest order. Left out of the index rather than read."""
+        return list(self._corrupt)
 
     def failure(self, url: str) -> ManifestRecord | None:
         """The latest non-`ok` record for `url` (an explicit failure,

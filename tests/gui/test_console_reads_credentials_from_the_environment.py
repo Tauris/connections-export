@@ -74,6 +74,11 @@ def test_feed_info_uses_the_environment_and_the_configured_auth_mode(tmp_path, m
     async def _do():
         transport = httpx.ASGITransport(app=app)
         async with httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1") as client:
+            # The console's flow: the URL is dropped (identified) first.
+            await client.post(
+                "/api/identify",
+                json={"url": "https://connections.example.corp/wikis/home/wiki/eng-handbook"},
+            )
             await client.get(
                 "/api/feed-info",
                 params={"url": "https://connections.example.corp/wikis/home/wiki/eng-handbook"},

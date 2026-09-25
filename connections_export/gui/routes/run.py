@@ -49,7 +49,9 @@ from connections_export.gui.requests import (
 )
 from connections_export.gui.routes._lookup import (
     _authed_lookup,
+    _configured_hcl_hosts,
     _lookup_base_auth,
+    trust_deployment,
 )
 from connections_export.gui.support import (
     _DONE,
@@ -57,6 +59,7 @@ from connections_export.gui.support import (
     _new_run_archive_dir,
 )
 from connections_export.gui.wiki_url import parse_url
+from connections_export.http import AuthError
 
 
 def selection_map(components: list[str]) -> dict[str, list[str]]:
@@ -344,6 +347,9 @@ def register(
             # raises anything below its floor, so the clamp lives in one place
             # rather than here as well.
             min_interval=min_interval,
+            # The deployment's other hosts, as configured: among them any
+            # sign-in server on another domain the handshake is redirected to.
+            hcl_hosts=_configured_hcl_hosts(),
         )
         try:
             # Use the serve process environment so Basic Auth can resolve
@@ -364,9 +370,16 @@ def register(
                 crawler_events.Failed(
                     url=base_url,
                     kind="transport",
+                    # An `AuthError` is written to be read -- which sign-in
+                    # host was refused and how to allow it -- so it is shown
+                    # as it is, not behind a guess at the cause.
                     error=(
-                        f"auth mode {config.auth_mode!r} could not prepare a session "
-                        f"(a real handshake isn't wired up yet): {exc}"
+                        str(exc)
+                        if isinstance(exc, AuthError)
+                        else (
+                            f"auth mode {config.auth_mode!r} could not prepare a session "
+                            f"(a real handshake isn't wired up yet): {exc}"
+                        )
                     ),
                 ),
             )
@@ -709,6 +722,12 @@ def register(
                     "offered there to see how a capture works."
                 )
             return JSONResponse({"status": "error", "detail": detail}, status_code=409)
+
+        # Starting a run against a deployment is choosing it, so the lookups
+        # the run and the console make for it may sign in there. A POST, so
+        # only the console's own script can make this choice.
+        if not use_demo:
+            trust_deployment(_app, effective_base_url)
 
         # ...and never INTO an archive that came from somewhere real. Getting
         # this wrong costs the one thing an archive is for, so it is refused

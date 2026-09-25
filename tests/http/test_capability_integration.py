@@ -36,7 +36,7 @@ def test_authenticated_client_retries_and_throttles_then_writes_into_archive(
         sleep=recording_sleep,
         clock=fake_clock,
     )
-    PasteTokenAuth(ltpa_token="session-token-xyz").prepare(client)
+    PasteTokenAuth(ltpa_token="session-token-xyz", base_url="https://example.com").prepare(client)
 
     # A first, unrelated call establishes the throttle baseline.
     client.get("https://example.com/warmup")

@@ -56,8 +56,11 @@ def test_the_configuration_is_read_even_when_a_base_url_is_given(configured):
 
 
 def test_an_explicit_base_url_still_wins_over_the_configured_one(configured):
-    """Dropping a URL from a second deployment must read that one."""
+    """Dropping a URL from a second deployment must read that one. Dropping
+    it is what makes it a deployment the user chose (see
+    `test_lookups_only_reach_deployments_the_user_chose.py`)."""
     app = make_app()
+    lookup_support.trust_deployment(app, "https://other.example.corp")
 
     base, _mode, _root = lookup_support._lookup_deployment(app, "https://other.example.corp")
 

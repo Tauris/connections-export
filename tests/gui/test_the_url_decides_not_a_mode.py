@@ -25,6 +25,7 @@ from fastapi.testclient import TestClient
 from connections_export.gui import make_app
 from connections_export.gui import support as gui_support
 from connections_export.gui.demo import DEMO_SAMPLE_BASE_URL
+from connections_export.gui.routes._lookup import trust_deployment
 
 #: A community from a real deployment: not in the demo's data, ever.
 REAL_UUID = "9f3a1b2c-0000-4d5e-8f01-abcdef123456"
@@ -35,7 +36,10 @@ REAL_BASE = "https://connections.example.corp"
 def client(request, tmp_path, monkeypatch):
     """Both ways of starting the server, because neither may decide anything."""
     monkeypatch.setattr(gui_support, "ARCHIVES_BASE", tmp_path)
-    return TestClient(make_app(demo=request.param, demo_delay=0), base_url="http://127.0.0.1")
+    app = make_app(demo=request.param, demo_delay=0)
+    # As if a URL from it had been dropped: only a chosen deployment is asked.
+    trust_deployment(app, REAL_BASE)
+    return TestClient(app, base_url="http://127.0.0.1")
 
 
 def _demo_community_uuid() -> str:

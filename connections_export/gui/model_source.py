@@ -247,10 +247,9 @@ class ModelSource:
         """The directory backing the current model, if any: a written
         package directory (`from_package`), a raw archive directory
         (`from_archive`/a stashed run), or `None` before anything is
-        loaded. Used by the Manual's interchange-spec endpoint to
-        prefer whatever package is currently open's own bundled
-        `INTERCHANGE.md` copy (every package written by
-        `interchange.write_package` ships one) over the repo doc."""
+        loaded. Deliberately NOT consulted for the Manual's interchange
+        spec: the package's own `INTERCHANGE.md` is archive content, and
+        archive content is untrusted (see `_resolve_interchange_spec_path`)."""
         with self._lock:
             return self._blob_root
 

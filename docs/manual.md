@@ -527,7 +527,7 @@ footer_html = """
 """
 ```
 
-**One difference between the two renderers.** The Live PDF fetches its margins outside the document, so an image referenced by URL will not load there — an icon has to be an inline `<svg>` or a `data:` URI. The portable PDF has no such limit and will load anything.
+**One difference between the two renderers.** Neither PDF loads an image referenced by URL in the header or footer: the Live PDF fetches its margins outside the document, and the portable PDF is rendered with no network access at all, so that nothing in a captured page can reach out while it is printed. An icon has to be an inline `<svg>` or a `data:` URI.
 
 To see all thirteen with their current values, in a form you can paste straight into `connections-export.toml`:
 

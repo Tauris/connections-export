@@ -245,6 +245,62 @@ def test_explain_reads_as_one_line():
     assert DEPLOYMENT in line and "via http://proxy.example.com:8080" in line and "[pac]" in line
 
 
+# --- credentials never printed ----------------------------------------------------
+
+#: Joined onto the userinfo rather than written out, so the repository's
+#: hygiene scan does not read the user name before `:secret@host` as a
+#: host name.
+HTTP = "http://"
+
+
+@pytest.mark.parametrize(
+    ("server", "shown"),
+    [
+        ("http://proxy.example.com:8080", "http://proxy.example.com:8080"),
+        (f"{HTTP}user:s3cret@proxy.example.com:8080", f"{HTTP}user:***@proxy.example.com:8080"),
+        # An unescaped `@` in the password: masked whole, not half-printed.
+        (f"{HTTP}user:p@ss@proxy.example.com:8080", f"{HTTP}user:***@proxy.example.com:8080"),
+        # A lone name may be the token itself.
+        ("http://tok3n@proxy.example.com:8080/", "http://***@proxy.example.com:8080/"),
+        ("user:s3cret@proxy.example.com:8080", "user:***@proxy.example.com:8080"),
+        (None, None),
+    ],
+)
+def test_a_proxy_password_is_masked(server, shown):
+    assert px.redact_proxy(server) == shown
+
+
+def test_explain_and_repr_never_carry_the_proxy_password():
+    """`HTTPS_PROXY=http://<user>:<password>@proxy:8080` is common, and the probe's
+    output is what gets pasted into a support request."""
+    decision = px.resolve_proxy(
+        DEPLOYMENT,
+        resolvers=[
+            (
+                "environment",
+                px.environment_resolver({"HTTPS_PROXY": f"{HTTP}joe:s3cret@proxy:8080"}),
+            )
+        ],
+    )
+    assert decision.server == f"{HTTP}joe:s3cret@proxy:8080"  # still USED as given
+    assert "s3cret" not in px.explain(decision)
+    assert f"via {HTTP}joe:***@proxy:8080" in px.explain(decision)
+    assert "s3cret" not in repr(decision)
+
+
+def test_probe_proxy_masks_the_proxy_password(capsys):
+    from connections_export import cli
+
+    code = cli.probe_main(
+        ["proxy", "--base-url", DEPLOYMENT, "--proxy", f"{HTTP}joe:s3cret@proxy.example.com:8080"]
+    )
+
+    out = capsys.readouterr().out
+    assert code == 0
+    assert "s3cret" not in out
+    assert "joe:***@proxy.example.com:8080" in out
+
+
 # --- the probe --------------------------------------------------------------------
 
 

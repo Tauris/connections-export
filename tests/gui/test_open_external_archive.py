@@ -161,7 +161,9 @@ def test_a_zip_url_is_fetched_and_opened(client, archive_zip, monkeypatch):
         assert url == "https://share.example/exports/handed.zip"
         return httpx.Response(200, content=archive_zip.read_bytes())
 
-    monkeypatch.setattr(routes, "_fetch_url", lambda url, **_k: fake_get(url).content)
+    monkeypatch.setattr(
+        routes, "_fetch_url", lambda url, dest, **_k: dest.write_bytes(fake_get(url).content)
+    )
 
     response = client.post(
         "/api/open-external",
@@ -179,7 +181,9 @@ def test_a_link_that_needs_a_login_says_so_rather_than_saving_the_login_page(cli
 
     monkeypatch_target = "<!doctype html><title>Sign in</title>"
     monkeypatch = pytest.MonkeyPatch()
-    monkeypatch.setattr(routes, "_fetch_url", lambda url, **_k: monkeypatch_target.encode())
+    monkeypatch.setattr(
+        routes, "_fetch_url", lambda url, dest, **_k: dest.write_bytes(monkeypatch_target.encode())
+    )
     try:
         response = client.post(
             "/api/open-external",
@@ -201,3 +205,111 @@ def test_a_url_that_is_not_a_zip_is_not_fetched_at_all(client):
     )
     assert response.status_code == 400
     assert "zip" in response.json()["detail"].lower()
+
+
+# --- size caps and temporary copies -------------------------------------------------
+
+
+@pytest.fixture
+def temp_root(tmp_path, monkeypatch):
+    """Where `hcl-dropped-*` / `hcl-fetched-*` copies land, so a test can see
+    what is left behind."""
+    import tempfile
+
+    root = tmp_path / "temp"
+    root.mkdir()
+    monkeypatch.setattr(tempfile, "tempdir", str(root))
+    return root
+
+
+def test_an_upload_announced_as_too_large_is_refused_before_it_is_written(
+    client, temp_root, monkeypatch
+):
+    import connections_export.gui.routes.archives as routes
+
+    monkeypatch.setattr(routes, "MAX_ARCHIVE_BYTES", 100)
+    response = client.post(
+        "/api/upload-archive",
+        content=b"x" * 1000,
+        headers={**HOST, "Content-Type": "application/zip", "X-Archive-Name": "huge.zip"},
+    )
+    assert response.status_code == 413
+    assert "larger than" in response.json()["detail"]
+    assert list(temp_root.iterdir()) == []
+
+
+def test_an_upload_that_grows_past_the_cap_unannounced_is_refused_and_removed(
+    client, temp_root, monkeypatch
+):
+    """A chunked body carries no Content-Length; the cap is on what arrives."""
+    import connections_export.gui.routes.archives as routes
+
+    monkeypatch.setattr(routes, "MAX_ARCHIVE_BYTES", 100)
+    response = client.post(
+        "/api/upload-archive",
+        content=iter([b"x" * 60, b"x" * 60, b"x" * 60]),
+        headers={**HOST, "Content-Type": "application/zip", "X-Archive-Name": "huge.zip"},
+    )
+    assert response.status_code == 413
+    assert list(temp_root.iterdir()) == []
+
+
+@pytest.mark.parametrize("announce", [True, False])
+def test_a_download_is_streamed_to_disk_and_capped(tmp_path, monkeypatch, announce):
+    import connections_export.gui.routes.archives as routes
+
+    body = b"x" * 1000
+
+    def handler(request):
+        if announce:
+            return httpx.Response(200, content=body)
+        return httpx.Response(200, content=iter([body[:500], body[500:]]))
+
+    mock = httpx.Client(transport=httpx.MockTransport(handler))
+    monkeypatch.setattr(httpx, "stream", lambda method, url, **_k: mock.stream(method, url))
+
+    dest = tmp_path / "fits.zip"
+    routes._fetch_url("https://share.example/a.zip", dest, limit=1000)
+    assert dest.read_bytes() == body
+
+    with pytest.raises(routes._TooLarge):
+        routes._fetch_url("https://share.example/a.zip", tmp_path / "big.zip", limit=999)
+
+
+def test_a_download_over_the_cap_answers_413_and_leaves_nothing(client, temp_root, monkeypatch):
+    import connections_export.gui.routes.archives as routes
+
+    def too_big(url, dest, **_k):
+        raise routes._TooLarge(url)
+
+    monkeypatch.setattr(routes, "_fetch_url", too_big)
+    response = client.post(
+        "/api/open-external", json={"path": "https://share.example/huge.zip"}, headers=HOST
+    )
+    assert response.status_code == 413
+    assert list(temp_root.iterdir()) == []
+
+
+def test_a_dropped_copy_is_removed_once_another_archive_is_opened(
+    client, archive_zip, archive_dir, temp_root
+):
+    """Nothing reads the temporary copy after the reader moves on, and nothing
+    else would ever delete it."""
+
+    def drop():
+        response = client.post(
+            "/api/upload-archive",
+            content=archive_zip.read_bytes(),
+            headers={**HOST, "Content-Type": "application/zip", "X-Archive-Name": "a.zip"},
+        )
+        assert response.status_code == 200, response.text
+        (holding,) = temp_root.glob("hcl-dropped-*")
+        return holding
+
+    first = drop()
+    second = drop()
+    assert first != second and not first.exists() and second.exists()
+
+    response = client.post("/api/open-external", json={"path": str(archive_dir)}, headers=HOST)
+    assert response.status_code == 200
+    assert not second.exists()

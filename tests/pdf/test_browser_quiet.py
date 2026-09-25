@@ -30,7 +30,9 @@ def test_the_feature_that_produces_the_noise_is_switched_off():
     assert any("OptimizationGuideOnDeviceModel" in arg for arg in _launch_args())
 
 
-def test_the_sandbox_flag_is_kept():
-    """It is what lets the browser start at all in a container, and losing it
-    while tidying the noise would trade a cosmetic problem for a real one."""
-    assert "--no-sandbox" in _launch_args()
+def test_the_sandbox_flag_is_kept_where_a_container_needs_it():
+    """It is what lets the browser start at all in a container running as
+    root, and losing it while tidying the noise would trade a cosmetic problem
+    for a real one. (Everywhere else the sandbox stays on --
+    `test_render_isolation.py`.)"""
+    assert "--no-sandbox" in _launch_args(env={}, euid=0)

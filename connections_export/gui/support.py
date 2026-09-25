@@ -22,8 +22,7 @@ from connections_export.gui.archives import (
 from connections_export.gui.demo import (
     demo_synth_seed,
 )
-from connections_export.gui.model_source import ModelSource
-from connections_export.interchange.package import SPEC_COPY_FILENAME, SPEC_DOC_PATH
+from connections_export.interchange.package import SPEC_DOC_PATH
 
 
 def _resolve_archives_base(env: Mapping[str, str], cwd: Path) -> Path:
@@ -137,21 +136,17 @@ def _new_run_archive_dir(*, demo: bool, label: str | None = None) -> Path:
     return Path(tempfile.mkdtemp(prefix=f"{head}-", dir=ARCHIVES_BASE))
 
 
-def _resolve_interchange_spec_path(model_source: ModelSource) -> Path | None:
+def _resolve_interchange_spec_path() -> Path | None:
     """Where to read the interchange-format spec from for the Manual's
-    "Full interchange format specification" section: try the
-    **packaged/bundled** copy first -- whatever package or archive
-    `model_source` currently has open may itself carry an
-    `INTERCHANGE.md` (every package written by
-    `connections_export.interchange.package.write_package` ships one,
-    verbatim, at its root) -- then fall back to the repo's own
-    `docs/reference/interchange-format.md` (dev checkouts, or demo mode
-    with nothing package-shaped open yet). `None` if neither exists."""
-    package_root = model_source.package_root()
-    if package_root is not None:
-        candidate = Path(package_root) / SPEC_COPY_FILENAME
-        if candidate.is_file():
-            return candidate
+    "Full interchange format specification" section: the copy shipped with
+    this tool (`SPEC_DOC_PATH` -- next to the module in a wheel, under
+    `docs/reference/` in a checkout). `None` if it is missing.
+
+    Never the open archive's own `INTERCHANGE.md` (`SPEC_COPY_FILENAME`),
+    although every package carries one: an archive may have come from anyone,
+    and markdown passes raw HTML through, so its copy would put the archive
+    author's markup into the console's own document. The Manual documents
+    this tool, so this tool's copy is the right one anyway."""
     if SPEC_DOC_PATH.is_file():
         return SPEC_DOC_PATH
     return None

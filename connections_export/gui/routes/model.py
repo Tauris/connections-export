@@ -10,6 +10,38 @@ from connections_export.gui.support import (
     _resolve_interchange_spec_path,
 )
 
+#: Types a browser can only ever decode as pixels. Everything else a blob can
+#: be -- HTML, SVG, XML, PDF, or whatever an archive claims -- is a document
+#: that could run script with the console's origin if opened as a page.
+_INLINE_BLOB_TYPES = frozenset({"image/png", "image/jpeg", "image/gif", "image/webp", "image/bmp"})
+
+#: A blob opened as a document gets a unique opaque origin and no script
+#: (`sandbox` without `allow-scripts`), so it can reach none of the console's
+#: APIs. Images and inline styles still work, so an HTML attachment someone
+#: does open reads as itself rather than as a blank page.
+_BLOB_CSP = "sandbox; default-src 'none'; img-src data:; style-src 'unsafe-inline'"
+
+
+def _blob_headers(content_type: str) -> dict[str, str]:
+    """Headers that keep archive bytes inert on the console's origin.
+
+    Both the bytes and the declared type come from the archive, which is
+    untrusted. `nosniff` stops a browser from deciding octet-stream "looks
+    like" HTML. Anything but a raster image is an attachment: SVG included,
+    since the reader only ever shows it through `<img>` (where scripts never
+    run and the disposition is ignored), so a download costs the reader
+    nothing and removes direct navigation as a way in. The CSP is the second
+    wall for a browser that renders one anyway.
+
+    No `filename`: it would override the `download="..."` name the reader puts
+    on its file links, and the URL already ends in the hash as a fallback.
+    """
+    headers = {"X-Content-Type-Options": "nosniff", "Content-Security-Policy": _BLOB_CSP}
+    essence = content_type.split(";", 1)[0].strip().lower()
+    if essence not in _INLINE_BLOB_TYPES:
+        headers["Content-Disposition"] = "attachment"
+    return headers
+
 
 def register(
     app,
@@ -74,7 +106,7 @@ def register(
         if result is None:
             return Response(status_code=404)
         data, content_type = result
-        return Response(content=data, media_type=content_type)
+        return Response(content=data, media_type=content_type, headers=_blob_headers(content_type))
 
     @app.get("/api/current-archive")
     def current_archive() -> JSONResponse:
@@ -105,16 +137,13 @@ def register(
         """Rendered HTML of the interchange-format spec, for the
         Manual's "Full interchange format specification" section
         -- lazy-loaded by the console so it isn't shipped inline in
-        `console.html`. This is our own trusted document (no untrusted
-        content ever reaches it), so rendering it straight to HTML and
-        injecting it is fine -- unlike a page body, which stays inside
-        the sandboxed reader iframe.
-
-        `_resolve_interchange_spec_path` prefers a currently-open
-        package's own bundled copy over the repo doc; `404` with a
-        clear message if neither is found (e.g. an installed package
-        with no docs/ tree and nothing package-shaped open yet)."""
-        path = _resolve_interchange_spec_path(app.state.model_source)
+        `console.html`. Rendered straight to HTML and injected, which is
+        only fine because the source is the spec shipped WITH this tool --
+        never the open archive's INTERCHANGE.md, which anyone could have
+        written and markdown would pass through as live HTML (see
+        `_resolve_interchange_spec_path`). `404` with a clear message if
+        the shipped copy is missing."""
+        path = _resolve_interchange_spec_path()
         if path is None:
             return JSONResponse(
                 {
