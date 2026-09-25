@@ -198,7 +198,7 @@ def _frozen_distributions(source: Path, bundled: set[str], interpreter: str) -> 
         "import json,sys\n"
         "from importlib.metadata import packages_distributions\n"
         "from connections_export import sbom\n"
-        "doc = json.loads((sbom.bundled_dir() / sbom.SBOM_FILENAME).read_text())\n"
+        'doc = json.loads((sbom.bundled_dir() / sbom.SBOM_FILENAME).read_text(encoding="utf-8"))\n'
         "named = {c['name'].lower().replace('_','-') for c in doc['components']}\n"
         "named.add(doc['metadata']['component']['name'].lower())\n"
         "top = packages_distributions()\n"

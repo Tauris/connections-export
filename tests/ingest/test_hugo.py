@@ -289,7 +289,7 @@ def test_blog_posts_and_topics_are_leaf_bundles(content):
 
 
 def test_replies_are_threaded_beneath_the_topic(content):
-    text = (content[0] / "forums" / "help" / "login-fails" / "index.md").read_text()
+    text = (content[0] / "forums" / "help" / "login-fails" / "index.md").read_text(encoding="utf-8")
 
     assert "## Replies" in text
     assert "### L. Haddad · *answer*" in text
@@ -299,7 +299,9 @@ def test_replies_are_threaded_beneath_the_topic(content):
 
 
 def test_comments_come_after_the_body(content):
-    text = (content[0] / "wikis" / "handbook" / "getting-started" / "_index.md").read_text()
+    text = (content[0] / "wikis" / "handbook" / "getting-started" / "_index.md").read_text(
+        encoding="utf-8"
+    )
 
     assert text.index("Read [the deep page]") < text.index("## Comments")
     assert "- **R. Delgado**: Nice." in text
@@ -387,7 +389,9 @@ def test_a_date_hugo_cannot_read_is_left_out(tmp_path):
 
 def test_links_between_pages_are_relrefs_across_components(content):
     root, _ = content
-    start = (root / "wikis" / "handbook" / "getting-started" / "_index.md").read_text()
+    start = (root / "wikis" / "handbook" / "getting-started" / "_index.md").read_text(
+        encoding="utf-8"
+    )
     deep = root / "wikis" / "handbook" / "getting-started" / "second" / "deep-page" / "index.md"
     post = root / "blogs" / "team-news" / "launch-day" / "index.md"
 
@@ -396,8 +400,8 @@ def test_links_between_pages_are_relrefs_across_components(content):
     assert '[the post]({{< relref "/blogs/team-news/launch-day/index.md" >}})' in start
     assert '[plan]({{< relref "/files/platform-team/_index.md" >}}q3-plan.pdf)' in start
     back = '({{< relref "/wikis/handbook/getting-started/_index.md" >}})'
-    assert back in deep.read_text()
-    assert back in post.read_text()
+    assert back in deep.read_text(encoding="utf-8")
+    assert back in post.read_text(encoding="utf-8")
 
 
 def test_every_relref_names_a_page_that_was_written(tmp_path):
@@ -406,7 +410,9 @@ def test_every_relref_names_a_page_that_was_written(tmp_path):
         out = tmp_path / mode
         write_hugo_content(_model(), _blobs, out, html_mode=mode)
         for path in (out / "content").rglob("*.md"):
-            for target in re.findall(r'\{\{< relref "([^"]+)" >\}\}', path.read_text()):
+            for target in re.findall(
+                r'\{\{< relref "([^"]+)" >\}\}', path.read_text(encoding="utf-8")
+            ):
                 assert (out / "content" / target.lstrip("/")).is_file(), (mode, target)
 
 
