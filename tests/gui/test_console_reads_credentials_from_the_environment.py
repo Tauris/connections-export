@@ -61,6 +61,27 @@ def test_a_console_run_sees_the_credentials_in_the_environment(tmp_path, monkeyp
     assert seen["env"].get("CONNECTIONS_EXPORT_PASSWORD") == "secret"
 
 
+def test_feed_info_uses_the_saved_ui_auth_mode(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("CONNECTIONS_EXPORT_USER", "reader")
+    seen = _capture(monkeypatch)
+    app = make_app()
+
+    async def _do():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1") as client:
+            await client.put("/api/settings", json={"auth_mode": "basic"})
+            await client.get(
+                "/api/feed-info",
+                params={"url": "https://connections.example.corp/wikis/home/wiki/eng-handbook"},
+            )
+
+    asyncio.run(_do())
+
+    assert seen["auth_mode"] == "basic"
+    assert seen["env"].get("CONNECTIONS_EXPORT_USER") == "reader"
+
+
 def test_feed_info_uses_the_environment_and_the_configured_auth_mode(tmp_path, monkeypatch):
     """It asked with Windows sign-in, whatever was configured, and with no
     environment -- so on a username/password deployment it could not count."""
