@@ -48,10 +48,15 @@ PURE = re.search(
 
 
 def _run_node(script: str) -> object:
+    # Through stdin, in UTF-8 both ways: on Windows a script passed as an
+    # argument, and output read in the console's code page, garble the
+    # non-ASCII characters the log uses ("×").
     result = subprocess.run(
-        [NODE, "--input-type=commonjs", "-e", script],
+        [NODE, "--input-type=commonjs"],
+        input=script,
         capture_output=True,
         text=True,
+        encoding="utf-8",
         timeout=180,
     )
     assert result.returncode == 0, f"node failed: {result.stderr}"
