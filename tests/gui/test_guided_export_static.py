@@ -90,7 +90,7 @@ def test_the_footer_is_outside_the_scrolling_body():
         assert dialog.index(f'id="{button}"') > footer, button
     css = served_console_css()
     assert re.search(r"\.devx-body \{[^}]*overflow-y: auto", css)
-    assert re.search(r"\.modal\.devx \{[^}]*height: min\(640px, calc\(100vh", css)
+    assert re.search(r"\.modal\.devx \{[^}]*height: min\(700px, calc\(100vh", css)
 
 
 def test_the_dry_run_is_called_check_not_preview():
