@@ -151,6 +151,16 @@ def test_the_manual_puts_hugo_beside_obsidian_and_jekyll():
     assert "Export Hugo content" in MANUAL
 
 
+def test_the_manual_explains_the_community_first_hugo_layout():
+    """An export of several communities has a different folder layout; a
+    reader copying `content/` into a site, or exporting into the same folder
+    again, has to know when and why."""
+    assert "Several communities, community first." in MANUAL
+    assert "<code>content/&lt;community&gt;/</code>" in MANUAL
+    assert "<code>content/other/</code>" in MANUAL
+    assert "use a fresh folder" in MANUAL
+
+
 def test_the_manual_explains_combining_several_archives():
     """What combining does to overlap and to links, and how to do it from both
     front ends -- the three things someone combining archives has to know."""
@@ -184,6 +194,17 @@ def test_the_manual_explains_the_hugo_starter_site_and_its_preview():
     assert "<strong>Preview with Hugo.</strong>" in MANUAL
     assert "runs <em>your own</em> Hugo" in MANUAL
     assert "never through the console" in MANUAL
+
+
+def test_the_manual_explains_the_starter_sites_front_page_layout():
+    """List by default, cards on request, and switched later in `hugo.toml`
+    without exporting again."""
+    assert "<strong>The front page: a list or cards.</strong>" in MANUAL
+    assert "<strong>List</strong>, the default" in MANUAL
+    assert "<code>--starter-layout cards</code>" in MANUAL
+    assert "<strong>Front page as</strong>" in MANUAL
+    assert '<code>homeLayout = "list"</code>' in MANUAL
+    assert "there is no need to export again" in MANUAL
 
 
 def test_the_manual_says_where_hugo_is_looked_for_and_when_to_restart():

@@ -1,14 +1,52 @@
 {{/*
-  The front page: every top-level section this export holds, each with its
-  containers (wikis, blogs, forums, libraries, Highlights areas) and how much
-  each one holds. Sections come in the exporter's order, set by `weight`.
+  The front page, drawn one of two ways -- `homeLayout` under `[params]` in
+  `hugo.toml`: "cards", or anything else for the plain list.
+
+  The list. An export of one community: every top-level section (Wikis,
+  Blogs, ...), each with its containers beneath it and how much each holds.
+  An export of several communities is written community first, and the
+  front page follows: under "Communities", each community -- and the content
+  in no community, last -- with how much it holds; its own page lists the
+  rest.
+
+  The cards. One community: a card per section, with its containers. Several:
+  a card per community with everything in it, each container marked with
+  what it is. A Highlights area is titled after its community, which on the
+  community's own card would only repeat the card's title: there it is
+  "Highlights".
+
+  Both come in the exporter's order, set by `weight`.
 */}}
 {{ define "main" }}
   <header class="page-header">
     <h1>{{ site.Title }}</h1>
     <p class="lead">Content exported from HCL Connections.</p>
   </header>
+  {{- $communities := where site.Sections "Params.kind" "in" (slice "community" "no_community") }}
+  {{- if eq site.Params.homeLayout "cards" }}
+  {{- $what := dict
+      "wiki" "Wiki" "blog" "Blog" "ideation_blog" "Ideation blog" "forum" "Forum"
+      "file_library" "Library" }}
   <div class="cards">
+    {{- if $communities }}
+    {{- range $communities.ByWeight }}
+    <section class="card">
+      <h2><a href="{{ .RelPermalink }}">{{ .Title }}</a></h2>
+      <p class="count">{{ partial "count.html" . }}</p>
+      <ul>
+        {{- range .Sections.ByWeight }}
+        {{- range .Sections.ByWeight }}
+        {{- $kind := .Params.kind | default "" }}
+        <li>
+          <a href="{{ .RelPermalink }}">{{ if eq $kind "highlights" }}Highlights{{ else }}{{ .LinkTitle }}{{ end }}</a>
+          <span class="count">{{ with index $what $kind }}{{ . }} · {{ end }}{{ partial "count.html" . }}</span>
+        </li>
+        {{- end }}
+        {{- end }}
+      </ul>
+    </section>
+    {{- end }}
+    {{- else }}
     {{- range site.Sections.ByWeight }}
     <section class="card">
       <h2><a href="{{ .RelPermalink }}">{{ .Title }}</a></h2>
@@ -22,5 +60,16 @@
       </ul>
     </section>
     {{- end }}
+    {{- end }}
   </div>
+  {{- else if $communities }}
+  <h2 class="overview-title">Communities</h2>
+  <ul class="overview">
+    {{- range $communities.ByWeight }}
+    <li><a href="{{ .RelPermalink }}">{{ .Title }}</a> <span class="count">— {{ partial "count.html" . }}</span></li>
+    {{- end }}
+  </ul>
+  {{- else }}
+  {{- partial "overview.html" . }}
+  {{- end }}
 {{ end }}

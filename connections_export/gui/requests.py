@@ -155,13 +155,16 @@ class _IngestRequest(BaseModel):
     open one -- several are combined into one export (`derive.combine`).
     `dry_run` reports what the export would hold and where it would go, and
     writes nothing. `starter_site` (Hugo only) adds the starter site beside
-    `content/`, so the export can be viewed with `hugo server`."""
+    `content/`, so the export can be viewed with `hugo server`, and
+    `starter_layout` draws its front page as `list` (the default) or
+    `cards`."""
 
     format: str
     html_mode: str | None = None
     archives: list[str] | None = None
     dry_run: bool = False
     starter_site: bool = False
+    starter_layout: str | None = None
 
 
 class _HugoPreviewRequest(BaseModel):

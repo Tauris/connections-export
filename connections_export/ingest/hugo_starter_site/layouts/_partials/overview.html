@@ -1,0 +1,24 @@
+{{/*
+  What a page holds, as plain nested lists: the front page of an export of
+  one community, and a community's own page, when `site.Params.homeLayout`
+  is "list" (the default; "cards" draws the same as cards instead).
+
+  Called with the page whose sections are listed. Each section (Wikis,
+  Blogs, ...) is an item, and its containers a list beneath it, each with
+  how much it holds. A name wraps onto as many lines as it needs: a long
+  title is shown whole, never cut short.
+*/}}
+<ul class="overview">
+  {{- range .Sections.ByWeight }}
+  <li>
+    <a href="{{ .RelPermalink }}">{{ .Title }}</a>
+    {{- with .Sections }}
+    <ul>
+      {{- range .ByWeight }}
+      <li><a href="{{ .RelPermalink }}">{{ .LinkTitle }}</a> <span class="count">— {{ partial "count.html" . }}</span></li>
+      {{- end }}
+    </ul>
+    {{- end }}
+  </li>
+  {{- end }}
+</ul>

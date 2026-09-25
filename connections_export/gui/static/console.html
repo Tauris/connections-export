@@ -590,6 +590,12 @@
             <label class="devx-format"><input type="radio" name="devx-format" value="hugo" checked /> <b>Hugo content</b> <span>Hugo is a static-site generator; this is the <code>content/</code> folder to drop into a Hugo site — with a starter site beside it, if you want one, to view it on its own.</span></label>
             <div class="devx-hugo-only" id="devx-starter-row">
               <label class="devx-starter"><input type="checkbox" id="devx-starter" checked /> Add a starter site (templates to view it with <code>hugo server</code>)</label>
+              <label class="devx-starter-layout" id="devx-starter-layout-row" for="devx-starter-layout">Front page as
+                <select id="devx-starter-layout">
+                  <option value="list" selected>List (default)</option>
+                  <option value="cards">Cards</option>
+                </select>
+              </label>
               <p class="devx-hugo-status" id="devx-hugo-status" aria-live="polite"></p>
             </div>
             <label class="devx-format"><input type="radio" name="devx-format" value="jekyll" /> <b>Jekyll site</b> <span>Jekyll builds a static website from Markdown you can publish anywhere; this is dated posts and their assets.</span></label>

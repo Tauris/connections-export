@@ -5,7 +5,8 @@
   (`params.page_count`, `post_count`, `topic_count`, `file_count`), so it is
   the count of what was captured -- a wiki page with sub-pages is a section
   to Hugo, not a regular page, and counting Hugo's pages would miss it. A
-  Highlights area carries no count and is counted from its pages.
+  Highlights area carries no count and is counted from its pages. A
+  community's overview counts everything in it (`params.item_count`).
 */}}
 {{- $kind := .Params.kind }}
 {{- $n := 0 }}
@@ -14,6 +15,7 @@
 {{- else if in (slice "blog" "ideation_blog") $kind }}{{ $n = .Params.post_count }}{{ $noun = "post" }}
 {{- else if eq $kind "forum" }}{{ $n = .Params.topic_count }}{{ $noun = "topic" }}
 {{- else if eq $kind "file_library" }}{{ $n = .Params.file_count }}{{ $noun = "file" }}
+{{- else if in (slice "community" "no_community") $kind }}{{ $n = .Params.item_count }}{{ $noun = "item" }}
 {{- else }}{{ $n = len .RegularPages }}{{ $noun = "page" }}
 {{- end }}
 {{- $n = int (or $n 0) }}

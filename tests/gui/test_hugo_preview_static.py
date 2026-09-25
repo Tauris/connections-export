@@ -71,7 +71,10 @@ def test_the_starter_site_is_sent_for_hugo_only():
     assert 'row.hidden = devxFormat() !== "hugo"' in starter
     wire = _function("wireDevExport")
     assert "devxRenderStarter()" in wire
-    assert '$("devx-starter")?.addEventListener("change", () => devxInvalidate())' in wire
+    assert (
+        '$("devx-starter")?.addEventListener("change", () => { devxRenderStarter(); '
+        "devxInvalidate(); })"
+    ) in wire
 
 
 def test_the_dialog_has_a_preview_and_a_stop_control():

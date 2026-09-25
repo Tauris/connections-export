@@ -70,7 +70,8 @@ a:hover { text-decoration-thickness: 2px; }
 main.wrap { flex: 1; padding-top: 32px; padding-bottom: 56px; }
 
 .site-footer { border-top: 1px solid var(--line); color: var(--ink-soft); font-size: 0.875rem; }
-.site-footer p { margin: 18px 0; }
+.site-footer p { margin: 18px 0; overflow-wrap: break-word; }
+.site-footer .credits { margin-top: -10px; }
 
 /* --- page furniture --------------------------------------------------------- */
 
@@ -145,10 +146,26 @@ pre code { background: none; padding: 0; }
 .containers, .entries { list-style: none; margin: 0; padding: 0; max-width: var(--measure); }
 .containers li, .entries li { padding: 14px 0; border-top: 1px solid var(--line); }
 .containers h2, .entries h3 { margin: 0; font-size: 1.15rem; }
+/* A community's card on the front page says how much it holds, under its name. */
+.card > .count { margin: -4px 0 10px; }
 .summary { margin: 6px 0 0; color: var(--ink-soft); }
 /* In a list the whole line is plainly a link; underline only on hover. */
 .card a, .containers a, .entries a { text-decoration: none; }
 .card a:hover, .containers a:hover, .entries a:hover { text-decoration: underline; }
+
+/* The list layout (`homeLayout` in hugo.toml): the front page and each
+   community's page as plain nested lists, a name and then, muted, how much
+   it holds. A long name wraps like any text and is shown whole -- which is
+   why nothing here sets `nowrap` or an ellipsis on the names. */
+.overview-title { font-size: 1.2rem; margin: 0 0 10px; }
+.overview { max-width: var(--measure); margin: 0; padding-left: 1.3em; overflow-wrap: break-word; }
+.overview > li { margin: 0 0 14px; }
+.overview > li > a { font-weight: 600; }
+.overview ul { margin: 4px 0 0; padding-left: 1.3em; }
+.overview ul li { margin: 3px 0; }
+.overview li::marker { color: var(--ink-soft); }
+.overview a { text-decoration: none; }
+.overview a:hover { text-decoration: underline; }
 
 .tag-cloud { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 8px; }
 .tag-cloud li { border: 1px solid var(--line); border-radius: 999px; padding: 2px 12px; }

@@ -2,8 +2,10 @@
 {{/*
   The frame every page is drawn in: a header naming the site and linking to
   each top-level section (Wikis, Blogs, Forums, Files, Highlights -- only the
-  ones this export holds), the page's own "main" block, and a footer saying
-  where the content came from.
+  ones this export holds; in an export of several communities, each
+  community), the page's own "main" block, and a footer saying where the
+  content came from -- the Connections deployment, when the export knows it
+  -- and what made the site.
 
   Every value from the content passes through Go's html/template, which
   escapes it for where it lands -- text, attribute or URL. `.Content` is the
@@ -24,8 +26,21 @@
       <nav aria-label="Sections">
         <ul>
           {{- $here := .Section }}
+          {{- $communities := where site.Sections "Params.kind" "in" (slice "community" "no_community") }}
+          {{- if $communities }}
+          {{- /* Several communities: the header leads to the front page's list
+               and names the community you are in, rather than listing every
+               one -- a deployment has dozens, many with long names. */}}
+          <li><a href="{{ "" | relURL }}"{{ if .IsHome }} aria-current="true"{{ end }}>Communities</a></li>
+          {{- range $communities }}
+          {{- if eq .Section $here }}
+          <li><a href="{{ .RelPermalink }}" aria-current="true">{{ .Title }}</a></li>
+          {{- end }}
+          {{- end }}
+          {{- else }}
           {{- range site.Sections.ByWeight }}
           <li><a href="{{ .RelPermalink }}"{{ if eq .Section $here }} aria-current="true"{{ end }}>{{ .Title }}</a></li>
+          {{- end }}
           {{- end }}
           {{- with site.GetPage "/tags" }}
           {{- if .Data.Terms }}
@@ -41,7 +56,18 @@
   </main>
   <footer class="site-footer">
     <div class="wrap">
-      <p>Content exported from HCL Connections with connections-export. Each page links to its original where the address is known.</p>
+      {{- /* The deployments are `connectionsSites` in hugo.toml, each already
+             reduced by the exporter to an http(s) address of a host; they
+             still go through html/template like any other value. */}}
+      {{- $sites := site.Params.connectionsSites }}
+      <p>Content exported from HCL Connections
+        {{- with $sites }} at
+        {{- $last := sub (len .) 1 }}
+        {{- range $i, $site := . }}
+        {{- if and (gt $i 0) (lt $i $last) }},{{ else if gt $i 0 }} and{{ end }} <a href="{{ $site.url }}" rel="noopener noreferrer">{{ $site.name }}</a>
+        {{- end }}
+        {{- end }}. Each page links to its original where the address is known.</p>
+      <p class="credits">Made with <a href="https://github.com/Tauris/connections-export">connections-export</a> · built with <a href="https://gohugo.io/">Hugo</a></p>
     </div>
   </footer>
 </body>

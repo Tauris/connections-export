@@ -1169,6 +1169,10 @@ details.advanced > summary::-webkit-details-marker { display: none; }
 .devx-hugo-only[hidden] { display: none; }
 .devx-starter { display: flex; gap: var(--sp-2); align-items: baseline;
   font-size: var(--fs-helper); color: var(--ink); }
+/* Belongs to the starter site: indented under its checkbox, gone without it. */
+.devx-starter-layout { display: flex; gap: var(--sp-2); align-items: baseline; padding-left: 1.6em;
+  font-size: var(--fs-helper); color: var(--ink-dim); }
+.devx-starter-layout[hidden] { display: none; }
 .devx-hugo-status { margin: 0; font-size: var(--fs-helper); color: var(--ink-dim); line-height: 1.45; }
 .devx-hugo-status[hidden] { display: none; }
 .devx-hugo-status.is-found { color: var(--ink); }

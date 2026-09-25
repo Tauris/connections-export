@@ -185,7 +185,27 @@ def register(
             return JSONResponse(
                 {"error": "the starter site is for Hugo exports only"}, status_code=422
             )
-        from connections_export.ingest import HTML_MODES, html_mode_for  # noqa: PLC0415
+        from connections_export.ingest import (  # noqa: PLC0415
+            HTML_MODES,
+            STARTER_LAYOUTS,
+            html_mode_for,
+        )
+
+        # The layout draws the starter site's front page, so it means nothing
+        # without one; refused like an unknown value rather than ignored, so a
+        # caller never believes it chose something that was not written.
+        if body.starter_layout is not None and (
+            not body.starter_site or body.starter_layout not in STARTER_LAYOUTS
+        ):
+            return JSONResponse(
+                {
+                    "error": "starter_layout must be one of "
+                    + ", ".join(STARTER_LAYOUTS)
+                    + ", with the starter site"
+                },
+                status_code=422,
+            )
+        starter_layout = (body.starter_layout or STARTER_LAYOUTS[0]) if body.starter_site else None
 
         try:
             html_mode = html_mode_for(fmt, body.html_mode)
@@ -280,6 +300,7 @@ def register(
                     "exists": out_dir.exists(),
                     "html_mode": html_mode,
                     "starter_site": body.starter_site,
+                    "starter_layout": starter_layout,
                     "archives": listed,
                     "counts": _counts(model),
                     "combine": combine,
@@ -290,7 +311,12 @@ def register(
 
         try:
             stats = from_source_for_format(
-                source, out_dir, fmt, html_mode=html_mode, starter_site=body.starter_site
+                source,
+                out_dir,
+                fmt,
+                html_mode=html_mode,
+                starter_site=body.starter_site,
+                starter_layout=starter_layout,
             )
         except (ValueError, DeriveError) as error:
             return JSONResponse({"error": str(error)}, status_code=422)
@@ -326,6 +352,7 @@ def register(
                 "markdown_blocks": stats.markdown_blocks,
                 "html_blocks": stats.html_blocks,
                 "starter_site": bool(getattr(stats, "starter_site", False)),
+                "starter_layout": getattr(stats, "starter_layout", None),
                 "archives": listed,
                 "combine": combine,
             }

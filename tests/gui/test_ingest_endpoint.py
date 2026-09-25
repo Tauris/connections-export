@@ -120,7 +120,8 @@ def test_ingest_writes_hugo_content_beside_the_archive(tmp_path):
     body = response.json()
     content = archive_dir.parent / "archive-hugo-content"
     assert body["path"] == str(content)
-    assert (content / "content" / "wikis" / "_index.md").is_file()
+    # The demo holds two communities, so the export is community first.
+    assert (content / "content" / "platform-engineering" / "wikis" / "_index.md").is_file()
     assert body["html_mode"] == "mixed"
     assert "kept as HTML" in body["summary"]
     assert body["markdown_blocks"] > 0
@@ -198,3 +199,36 @@ def test_the_console_offers_hugo_and_the_page_content_choice():
     assert "Obsidian, Jekyll and Hugo are independent, third-party applications" in html
     assert "html_mode: mode || null" in script
     assert 'data-devx-format="hugo"' in html and "openDevExportForReader" in script
+
+
+def test_the_starter_sites_front_page_layout_is_written_and_reported(tmp_path):
+    """List unless asked otherwise, in the check and the export alike."""
+    archive_dir = tmp_path / "archive"
+    run_demo((lambda _e: None), archive_dir=archive_dir, delay=0, app_filter="wiki")
+    app = make_app(demo=True, archive_dir=archive_dir)
+    folder = archive_dir.parent / "archive-hugo-content"
+
+    body = {"format": "hugo", "starter_site": True}
+    assert _post(app, {**body, "dry_run": True}).json()["starter_layout"] == "list"
+    written = _post(app, {**body, "starter_layout": "cards"}).json()
+
+    assert written["ok"] and written["starter_layout"] == "cards"
+    assert 'homeLayout = "cards"' in (folder / "hugo.toml").read_text(encoding="utf-8")
+
+
+def test_an_unknown_layout_or_one_without_the_starter_site_is_rejected(tmp_path):
+    archive_dir = tmp_path / "archive"
+    run_demo((lambda _e: None), archive_dir=archive_dir, delay=0, app_filter="wiki")
+    app = make_app(demo=True, archive_dir=archive_dir)
+
+    for body in (
+        {"format": "hugo", "starter_site": True, "starter_layout": "grid"},
+        {"format": "hugo", "starter_site": True, "starter_layout": "<script>"},
+        {"format": "hugo", "starter_layout": "cards"},
+        {"format": "jekyll", "starter_layout": "list"},
+    ):
+        response = _post(app, body)
+        assert response.status_code == 422, body
+        assert "list, cards" in response.json()["error"]
+    assert not (archive_dir.parent / "archive-hugo-content").exists()
+    assert not (archive_dir.parent / "archive-jekyll-site").exists()

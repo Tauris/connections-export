@@ -202,3 +202,29 @@ def test_the_check_escapes_archive_names_and_titles():
 
     assert "<img" not in html
     assert "&lt;img src=x onerror=&quot;alert(1)&quot;&gt;" in html
+
+
+def test_the_starter_site_offers_its_front_page_layout_right_under_it():
+    """A small choice, list by default, directly beneath the checkbox it
+    belongs to -- and shown only while that is ticked."""
+    pane = _panes()["2"]
+    checkbox = pane.index('id="devx-starter"')
+    select = pane.index('<select id="devx-starter-layout">')
+    assert checkbox < select < pane.index('id="devx-hugo-status"')
+    between = pane[checkbox:select]
+    assert "Front page as" in between and "<label" in between
+    options = re.findall(r'<option value="(\w+)"( selected)?>([^<]+)</option>', pane[select:])[:2]
+    assert options == [("list", " selected", "List (default)"), ("cards", "", "Cards")]
+    render = _function("devxRenderStarter")
+    assert 'layout.hidden = !($("devx-starter") && $("devx-starter").checked)' in render
+    wire = _function("wireDevExport")
+    assert '$("devx-starter-layout")?.addEventListener("change", () => devxInvalidate())' in wire
+    assert "devxRenderStarter(); devxInvalidate();" in wire
+
+
+def test_the_layout_is_sent_only_with_the_starter_site():
+    """The server refuses a layout without the starter site, so the dialog
+    sends none then."""
+    body = _function("devxBody")
+    assert 'starter ? (($("devx-starter-layout")' in body and ": null" in body
+    assert "starter_layout: layout" in body

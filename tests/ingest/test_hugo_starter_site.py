@@ -28,6 +28,9 @@ from connections_export.ingest.hugo_starter import STARTER_FILES
 from tests.ingest.test_hugo import _blobs, _hostile_model, _model
 
 HUGO = shutil.which("hugo")
+#: The demo's handbook wiki, in its community's folder (the demo export is
+#: community first).
+_HANDBOOK = Path("platform-engineering", "wikis", "engineering-handbook")
 needs_hugo = pytest.mark.skipif(HUGO is None, reason="no hugo binary on PATH")
 
 
@@ -69,7 +72,9 @@ def test_the_starter_site_is_written_beside_content_never_inside_it(tmp_path):
 
 def test_the_stylesheet_loads_nothing_from_anywhere_else(tmp_path):
     """No web fonts, no CDN: the site must render offline, and a reader's
-    browser must not be sent to a third party to see their own content."""
+    browser must not be sent to a third party to see their own content.
+    The templates' only addresses elsewhere are the footer's two links,
+    which a reader follows or not -- nothing is fetched from them."""
     write_hugo_content(_model(), _blobs, tmp_path, starter_site=True)
 
     css = (tmp_path / "static" / "css" / "site.css").read_text(encoding="utf-8")
@@ -78,7 +83,12 @@ def test_the_stylesheet_loads_nothing_from_anywhere_else(tmp_path):
     templates = "".join(
         p.read_text(encoding="utf-8") for p in (tmp_path / "layouts").rglob("*.html")
     )
-    assert "http://" not in templates and "https://" not in templates
+    assert "http://" not in templates
+    assert sorted(re.findall(r'[a-z]+="https://[^"]*"', templates)) == [
+        'href="https://github.com/Tauris/connections-export"',
+        'href="https://gohugo.io/"',
+    ]
+    assert templates.count("https://") == 2
     assert "<script" not in templates
 
 
@@ -220,15 +230,26 @@ def _parse(path: Path) -> _Page:
     return page
 
 
-def _demo_export(tmp_path: Path, mode: str = "mixed") -> Path:
+def _demo_export(
+    tmp_path: Path,
+    mode: str = "mixed",
+    app_filter: str | None = None,
+    layout: str | None = None,
+) -> Path:
+    """The demo exported with the starter site, its front page drawn as
+    `layout`. The whole demo holds two communities and content in none, so
+    it is written community first; the wiki demo alone holds one community,
+    and keeps the plain layout."""
     from connections_export.cli import _content_source
     from connections_export.gui.demo import run_demo
 
     archive = tmp_path / "archive"
-    run_demo(lambda _event: None, archive_dir=archive, delay=0)
+    run_demo(lambda _event: None, archive_dir=archive, delay=0, app_filter=app_filter)
     source, _kind = _content_source(str(archive), author=None)
     out = tmp_path / "export"
-    from_source_for_format(source, out, "hugo", html_mode=mode, starter_site=True)
+    from_source_for_format(
+        source, out, "hugo", html_mode=mode, starter_site=True, starter_layout=layout
+    )
     return out
 
 
@@ -276,8 +297,9 @@ def test_every_content_page_is_rendered_and_not_empty(built_demo):
         parsed = _parse(built)
         assert len(" ".join(parsed.main_text)) > 20, f"{built} is empty"
     home = _parse(public / "index.html")
-    for section in ("Wikis", "Blogs", "Forums", "Files", "Highlights"):
-        assert section in home.main_text
+    for community in ("Platform Engineering", "Platform Engineering — Tooling"):
+        assert community in home.main_text
+    assert "Not in a community" in home.main_text
 
 
 @needs_hugo
@@ -285,7 +307,7 @@ def test_the_wiki_tree_follows_the_wiki_order_not_the_alphabet(built_demo):
     """`dev-environment` comes before `coding-standards` in the wiki, so a
     tree sorted by title would get it wrong; `weight` gets it right."""
     site, _ = built_demo
-    content = site / "content" / "wikis" / "engineering-handbook" / "onboarding"
+    content = site / "content" / _HANDBOOK / "onboarding"
     children = []
     for folder in content.iterdir():
         if folder.is_dir():
@@ -295,7 +317,7 @@ def test_the_wiki_tree_follows_the_wiki_order_not_the_alphabet(built_demo):
     expected = [name for _, name in sorted(children)]
     assert expected != sorted(expected), "the fixture must not already be alphabetical"
 
-    wiki = _parse(site / "public" / "wikis" / "engineering-handbook" / "index.html")
+    wiki = _parse(site / "public" / _HANDBOOK / "index.html")
     shown = [
         href.rstrip("/").rsplit("/", 1)[-1]
         for href in wiki.tree_links
@@ -307,13 +329,93 @@ def test_the_wiki_tree_follows_the_wiki_order_not_the_alphabet(built_demo):
 @needs_hugo
 def test_a_wiki_page_shows_its_tree_and_breadcrumb(built_demo):
     site, _ = built_demo
-    path = site / "public" / "wikis" / "engineering-handbook" / "onboarding" / "index.html"
+    path = site / "public" / _HANDBOOK / "onboarding" / "index.html"
     html = path.read_text(encoding="utf-8")
 
     assert 'aria-current="page"' in html
+    # One level deeper than in a one-community export, the tree still
+    # reaches the wiki's deepest pages.
+    tree = _parse(path).tree_links
+    assert any(
+        href.rstrip("/").endswith("onboarding/release-process/hotfix-runbook") for href in tree
+    )
     assert 'class="crumbs"' in html and "Engineering Handbook" in html
     assert "View in Connections" in html
     assert "Sub-pages" in html
+
+
+@needs_hugo
+def test_the_front_page_lists_each_community_with_what_it_holds(built_demo):
+    """The default front page; the cards are `test_hugo_starter_layout`'s."""
+    site, _ = built_demo
+    home = _parse(site / "public" / "index.html")
+    text = " ".join(home.main_text)
+
+    assert "35 items" in text and "20 items" in text
+    assert "Communities" in home.main_text
+    assert any(href.rstrip("/").endswith("platform-engineering") for href in home.hrefs)
+
+
+def _nav(page: Path) -> str:
+    html = page.read_text(encoding="utf-8")
+    return html[html.index('<nav aria-label="Sections">') : html.index("</nav>")]
+
+
+@needs_hugo
+def test_the_header_leads_to_the_communities_not_every_one_of_them(built_demo):
+    """A deployment has dozens of communities, many with long names; listing
+    them all in the header made it a wall of text. The header offers
+    Communities (the front page's list) and Tags; inside a community it also
+    names that one."""
+    site, _ = built_demo
+    home = _nav(site / "public" / "index.html")
+    assert ">Communities<" in home and ">Tags<" in home
+    assert "Platform Engineering" not in home and "Not in a community" not in home
+
+    community = _nav(site / "public" / "platform-engineering" / "index.html")
+    assert ">Communities<" in community
+    assert 'aria-current="true">Platform Engineering<' in community
+    assert "Not in a community" not in community
+
+    deep = next((site / "public" / "platform-engineering" / "wikis").rglob("index.html"))
+    assert ">Platform Engineering<" in _nav(deep)
+
+
+@needs_hugo
+def test_a_community_page_lists_its_sections_and_their_containers(built_demo):
+    site, _ = built_demo
+    page = _parse(site / "public" / "platform-engineering" / "index.html")
+
+    for section in ("Wikis", "Blogs", "Forums", "Files", "Highlights"):
+        assert section in page.main_text
+    assert "Engineering Handbook" in page.main_text and "— 8 pages" in page.main_text
+    assert "35 items" in page.main_text
+    assert any(href.rstrip("/").endswith("platform-engineering/wikis") for href in page.hrefs)
+
+
+@needs_hugo
+def test_breadcrumbs_start_with_the_community(built_demo):
+    site, _ = built_demo
+    html = (site / "public" / _HANDBOOK / "onboarding" / "index.html").read_text(encoding="utf-8")
+    crumbs = html[html.index('class="crumbs"') :]
+    crumbs = crumbs[: crumbs.index("</nav>")]
+
+    names = re.findall(r">([^<>]+)</a>", crumbs)
+    assert names == ["Home", "Platform Engineering", "Wikis", "Engineering Handbook"]
+
+
+@needs_hugo
+def test_one_community_keeps_the_section_front_page(tmp_path):
+    """The wiki demo alone is one community (and wikis in none): the plain
+    layout, and the front page lists its sections, not communities."""
+    site = _demo_export(tmp_path, app_filter="wiki")
+    result = _build(site)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert (site / "content" / "wikis" / "engineering-handbook").is_dir()
+    home = _parse(site / "public" / "index.html")
+    assert "Wikis" in home.main_text and "Engineering Handbook" in home.main_text
+    assert not any("items" in text for text in home.main_text)
 
 
 @needs_hugo

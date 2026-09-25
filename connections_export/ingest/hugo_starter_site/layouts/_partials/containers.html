@@ -1,0 +1,22 @@
+{{/*
+  The containers in one section -- its wikis, blogs, forums, libraries or
+  Highlights areas -- each with its community, how much it holds and, in a
+  combined export, the archive it came from.
+
+  Called with the section page. A section beneath a community already names
+  the community (`params.community`), so a container repeats it only when it
+  differs.
+*/}}
+{{- $community := .Params.community }}
+<ul class="containers">
+  {{- range .Sections.ByWeight }}
+  <li>
+    <h2><a href="{{ .RelPermalink }}">{{ .LinkTitle }}</a></h2>
+    <p class="byline">
+      {{- with .Params.community }}{{ if ne . $community }}<span>{{ . }}</span>{{ end }}{{ end }}
+      <span>{{ partial "count.html" . }}</span>
+      {{- with .Params.source_archive }}<span>from {{ . }}</span>{{ end }}
+    </p>
+  </li>
+  {{- end }}
+</ul>

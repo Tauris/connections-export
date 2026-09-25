@@ -7032,16 +7032,25 @@
     const mode = $("devx-html-mode") ? $("devx-html-mode").value : "";
     // The starter site is Hugo's alone; for another format it is not sent.
     const starter = devxFormat() === "hugo" && !!($("devx-starter") && $("devx-starter").checked);
+    // The front page's layout only means something with the starter site;
+    // without one it is not sent, as the server refuses it alone.
+    const layout = starter ? (($("devx-starter-layout") && $("devx-starter-layout").value) || "list") : null;
     // No `archives` at all means the archive open in the Reader.
     const archives = devxOpenSource ? undefined : devxNames.slice();
-    return { format: devxFormat(), html_mode: mode || null, archives, dry_run: dryRun, starter_site: starter };
+    return {
+      format: devxFormat(), html_mode: mode || null, archives, dry_run: dryRun,
+      starter_site: starter, starter_layout: layout,
+    };
   }
 
   // The starter site, and whether Hugo is here to preview it, belong to
-  // Hugo: shown only while Hugo is chosen.
+  // Hugo: shown only while Hugo is chosen. The front page's layout belongs
+  // to the starter site: shown only while it is ticked.
   function devxRenderStarter() {
     const row = $("devx-starter-row");
     if (row) row.hidden = devxFormat() !== "hugo";
+    const layout = $("devx-starter-layout-row");
+    if (layout) layout.hidden = !($("devx-starter") && $("devx-starter").checked);
   }
 
   function devxArchive(name) {
@@ -7548,7 +7557,8 @@
         devxInvalidate();
         if (devxFormat() === "hugo") devxRefreshHugo();
       }));
-    $("devx-starter")?.addEventListener("change", () => devxInvalidate());
+    $("devx-starter")?.addEventListener("change", () => { devxRenderStarter(); devxInvalidate(); });
+    $("devx-starter-layout")?.addEventListener("change", () => devxInvalidate());
     $("devx-hugo-preview")?.addEventListener("click", devxHugoStart);
     $("devx-hugo-stop")?.addEventListener("click", devxHugoStop);
     $("devx-html-mode")?.addEventListener("change", () => { devxRenderModeNote(); devxInvalidate(); });

@@ -12,6 +12,11 @@ from connections_export.ingest.hugo import (
 from connections_export.ingest.hugo import (
     from_source as from_hugo_source,
 )
+from connections_export.ingest.hugo_starter import (
+    DEFAULT_STARTER_LAYOUT,
+    STARTER_LAYOUTS,
+    check_layout,
+)
 from connections_export.ingest.jekyll import (
     JekyllStats,
     write_jekyll_site,
@@ -37,26 +42,37 @@ def from_source_for_format(
     html_mode: str | None = None,
     *,
     starter_site: bool = False,
+    starter_layout: str | None = None,
 ):
     """Write `source` in `format_name`, its bodies in `html_mode` (the
     format's own default when `None`). `starter_site` adds Hugo's starter
-    site (`hugo_starter`) and is refused for any other format."""
+    site (`hugo_starter`), its front page drawn as `starter_layout` (`list`
+    when `None`); both are refused for any other format, and the layout
+    without the starter site."""
     if format_name not in FORMATS:
         raise ValueError(f"unsupported ingest format: {format_name}")
     if starter_site and format_name != "hugo":
         raise ValueError("the starter site is for Hugo exports only")
+    if starter_layout is not None and not starter_site:
+        raise ValueError("the front-page layout is for the starter site: ask for it too")
+    if starter_site:
+        check_layout(starter_layout)
     mode = html_mode_for(format_name, html_mode)
     if format_name == "obsidian":
         return from_source(source, out_dir, html_mode=mode)
     if format_name == "jekyll":
         return from_jekyll_source(source, out_dir, html_mode=mode)
-    return from_hugo_source(source, out_dir, html_mode=mode, starter_site=starter_site)
+    return from_hugo_source(
+        source, out_dir, html_mode=mode, starter_site=starter_site, starter_layout=starter_layout
+    )
 
 
 __all__ = [
     "DEFAULT_HTML_MODE",
+    "DEFAULT_STARTER_LAYOUT",
     "FORMATS",
     "HTML_MODES",
+    "STARTER_LAYOUTS",
     "HugoStats",
     "JekyllStats",
     "VaultStats",

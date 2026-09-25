@@ -461,9 +461,14 @@ def test_a_real_preview_serves_the_export_on_its_own_port():
         assert url.startswith("http://127.0.0.1:")
         home = httpx.get(url, timeout=30)
         assert home.status_code == 200
-        assert "Engineering Handbook" in home.text and "Wikis" in home.text
-        wiki = httpx.get(url + "wikis/engineering-handbook/onboarding/", timeout=30)
+        # The demo holds two communities: the front page lists them, and the
+        # wiki is in its community's folder.
+        assert "Platform Engineering" in home.text
+        wiki = httpx.get(
+            url + "platform-engineering/wikis/engineering-handbook/onboarding/", timeout=30
+        )
         assert wiki.status_code == 200 and "Onboarding" in wiki.text
+        assert "Engineering Handbook" in wiki.text
         assert not (folder / "public").exists(), "the preview renders to memory"
     finally:
         stopped = _call(app, "POST", "/api/hugo-preview/stop").json()

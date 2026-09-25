@@ -5,6 +5,35 @@ Notable changes to `connections-export`, newest first. Versions follow
 the archive format may still change between minor versions — the format's own
 version is recorded inside every archive.
 
+## 0.1.13 — 2026-09-25
+
+### Added
+- **Hugo: several communities, community first.** A Hugo export that holds
+  more than one community — archives of different communities combined, or a
+  capture that took in a sub-community — gives each community a folder of its
+  own, `content/<community>/`, with an overview page (`kind: community`)
+  listing its sections and how much each holds, and the wikis, blogs, forums,
+  files and Highlights beneath it. Content in no community goes into
+  `content/other/`, and two communities with the same title get distinct,
+  stable folders. Links between pages, across communities and across combined
+  archives, still resolve. The starter site follows: its front page and
+  header list the communities, a community's page lists its sections, and
+  breadcrumbs start with the community. An export of one community, or none,
+  is unchanged. The idea is from Christoph Stoettner (pull request #5).
+- **Hugo starter site: a list by default, cards on request.** The front page
+  lists the communities with how many items each holds, and a community's
+  page lists each section with its wikis, blogs, forums, libraries and
+  Highlights beneath it; long names wrap and are shown in full. The list
+  design follows Christoph Stoettner's proposal in pull request #5. The card
+  design is still there: `--starter-layout cards`, "Front page as" in the
+  export dialog, or `homeLayout` under `[params]` in the export's
+  `hugo.toml` — switchable at any time without a new export. With several
+  communities the header leads to the list and names the community you are
+  in, instead of listing every one.
+- **Hugo starter site footer** links the Connections server the content came
+  from (reduced to its host, and left out when unknown) and credits
+  connections-export and Hugo.
+
 ## 0.1.12 — 2026-09-25
 
 ### Added

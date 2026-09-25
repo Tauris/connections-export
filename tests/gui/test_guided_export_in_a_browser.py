@@ -199,6 +199,14 @@ def test_a_combined_hugo_export_is_previewed_in_a_new_tab(console):
         assert page.is_hidden("#devx-starter-row"), "the starter site is Hugo's alone"
         page.check('input[name="devx-format"][value="hugo"]')
         assert page.is_visible("#devx-starter-row") and page.is_checked("#devx-starter")
+        # The front page's layout sits under the starter site, list by
+        # default, and goes with it.
+        assert page.is_visible("#devx-starter-layout")
+        assert page.input_value("#devx-starter-layout") == "list"
+        page.uncheck("#devx-starter")
+        assert page.is_hidden("#devx-starter-layout")
+        page.check("#devx-starter")
+        assert page.is_visible("#devx-starter-layout")
         page.wait_for_function(
             "document.querySelector('#devx-hugo-status').textContent.includes(' found')"
         )

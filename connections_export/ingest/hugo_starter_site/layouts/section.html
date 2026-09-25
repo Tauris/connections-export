@@ -2,7 +2,12 @@
   Every page that has pages beneath it, told apart by `params.kind`, which
   the exporter writes on each one:
 
-  - no kind: a top-level section (Wikis, Blogs, ...), listing its containers;
+  - `community`, `no_community`: in an export of several communities, a
+    community's overview (or the content in none), drawn as the front page
+    is (`homeLayout` in `hugo.toml`): each section with the containers in it,
+    as a plain list -- or, with "cards", a card per section;
+  - no kind: a section (Wikis, Blogs, ...), listing its containers -- at the
+    top of the site, or beneath a community;
   - `wiki`: the wiki's page tree, in the wiki's own order (`weight`);
   - `wiki_page`: a wiki page that has sub-pages -- a page first, so it is
     drawn exactly like one without;
@@ -14,6 +19,7 @@
 */}}
 {{ define "main" }}
 {{- $kind := .Params.kind }}
+{{- $community := in (slice "community" "no_community") $kind }}
 {{- if eq $kind "wiki_page" }}
   {{- partial "article.html" . }}
 {{- else }}
@@ -22,23 +28,34 @@
     <h1>{{ .Title }}</h1>
     {{- if $kind }}
     <p class="lead">{{ partial "count.html" . }}</p>
-    {{- partial "facts.html" . }}
+    {{- if not $community }}{{ partial "facts.html" . }}{{ end }}
+    {{- else }}
+    {{- with .Params.community }}<p class="lead">{{ . }}</p>{{ end }}
     {{- end }}
   </header>
 
-  {{- if not $kind }}
-  <ul class="containers">
+  {{- if and $community (ne site.Params.homeLayout "cards") }}
+  {{- partial "overview.html" . }}
+
+  {{- else if $community }}
+  <div class="cards">
     {{- range .Sections.ByWeight }}
-    <li>
-      <h2><a href="{{ .RelPermalink }}">{{ .LinkTitle }}</a></h2>
-      <p class="byline">
-        {{- with .Params.community }}<span>{{ . }}</span>{{ end }}
-        <span>{{ partial "count.html" . }}</span>
-        {{- with .Params.source_archive }}<span>from {{ . }}</span>{{ end }}
-      </p>
-    </li>
+    <section class="card">
+      <h2><a href="{{ .RelPermalink }}">{{ .Title }}</a></h2>
+      <ul>
+        {{- range .Sections.ByWeight }}
+        <li>
+          <a href="{{ .RelPermalink }}">{{ .LinkTitle }}</a>
+          <span class="count">{{ partial "count.html" . }}</span>
+        </li>
+        {{- end }}
+      </ul>
+    </section>
     {{- end }}
-  </ul>
+  </div>
+
+  {{- else if not $kind }}
+  {{- partial "containers.html" . }}
 
   {{- else if eq $kind "wiki" }}
   <nav class="tree wiki-index" aria-label="Pages in this wiki">

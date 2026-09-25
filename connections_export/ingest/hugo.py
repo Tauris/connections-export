@@ -8,7 +8,9 @@ itself reads content in:
 
 * a section per container -- ``content/wikis/<wiki>/``, ``content/blogs/
   <blog>/``, ``content/forums/<forum>/``, ``content/files/<library>/`` and
-  ``content/highlights/<community>/`` -- each with an ``_index.md``;
+  ``content/highlights/<community>/`` -- each with an ``_index.md``; with
+  more than one community in the export, the same one level deeper, in a
+  folder per community (``_plan_communities``);
 * a wiki's page tree as nested bundles: a page with children is a branch
   bundle (``<slug>/_index.md``), a page without a leaf bundle
   (``<slug>/index.md``), ``weight`` keeping sibling order;
@@ -80,7 +82,12 @@ from connections_export.ingest._markdown import (
     readable_time,
     to_markdown,
 )
-from connections_export.ingest.hugo_starter import readme_section, write_starter_site
+from connections_export.ingest.hugo_starter import (
+    check_layout,
+    readme_section,
+    site_of,
+    write_starter_site,
+)
 from connections_export.ingest.obsidian import (
     BlobReader,
     _ext_for,
@@ -88,7 +95,7 @@ from connections_export.ingest.obsidian import (
     _sniff,
     _yaml_scalar,
 )
-from connections_export.interchange.filenames import unreserve
+from connections_export.interchange.filenames import disambiguator, unreserve
 
 _ASSET = "hugo-asset:"  # an image copied into the bundle, by position
 _LINK = "hugo-link:"  # a link to another exported item, by id
@@ -134,6 +141,24 @@ _SECTIONS = {
     "highlights": "Highlights",
 }
 
+#: In a community-first export (`_plan_communities`), the folder and title of
+#: the content that belongs to no community -- a wiki captured on its own.
+_NO_COMMUNITY = "other"
+_NO_COMMUNITY_TITLE = "Not in a community"
+#: Folder names at the root of `content/` no community may take: the one
+#: above, and `tags`, where Hugo publishes the tag pages -- a community of
+#: that name would be merged into them.
+_RESERVED_ROOT = frozenset({_NO_COMMUNITY, "tags"})
+
+#: Each section's container and item nouns, for a community's overview.
+_NOUNS = {
+    "wikis": ("wiki", "page"),
+    "blogs": ("blog", "post"),
+    "forums": ("forum", "topic"),
+    "files": ("library", "file"),
+    "highlights": (None, "page"),
+}
+
 
 @dataclass
 class HugoStats:
@@ -150,13 +175,18 @@ class HugoStats:
     highlight_pages: int = 0
     assets_written: int = 0
     assets_missing: int = 0
+    #: Community folders written in a community-first export (the folder for
+    #: content in no community included); 0 in the plain layout.
+    communities: int = 0
     #: How bodies were written (`_bodies.HTML_MODES`), and how many of their
     #: blocks went out as Markdown and as HTML.
     html_mode: str = "mixed"
     markdown_blocks: int = 0
     html_blocks: int = 0
-    #: Whether the starter site (`hugo_starter`) was written beside `content/`.
+    #: Whether the starter site (`hugo_starter`) was written beside `content/`,
+    #: and how its front page is drawn (`hugo_starter.STARTER_LAYOUTS`).
     starter_site: bool = False
+    starter_layout: str | None = None
     notes: list[str] = field(default_factory=list)
 
     @property
@@ -644,6 +674,80 @@ def _ordered(ids: list[str], items: dict) -> list:
     return result
 
 
+def _containers(interchange: Interchange) -> list:
+    return [
+        *interchange.wikis,
+        *interchange.blogs,
+        *interchange.forums,
+        *interchange.file_libraries,
+        *interchange.rich_content,
+    ]
+
+
+@dataclass
+class _Community:
+    """One folder of a community-first export: a community, or everything
+    in none (`key` None)."""
+
+    key: str | None
+    title: str
+    directory: Path
+    weight: int
+
+
+def _plan_communities(interchange: Interchange, content: Path) -> dict[str | None, _Community]:
+    """Each community's folder, by community id -- or nothing, when the
+    export holds one community or none.
+
+    One community's wikis, blogs and forums side by side is how a reader
+    thinks of that community; several communities' side by side would mix
+    them. So with more than one, each gets a folder, and whatever belongs to
+    no community gets one of its own after them. A community is counted by
+    its id, not its title: two communities can share a title.
+
+    Communities come in the order the model first names them. A folder name
+    already taken -- by an earlier community of the same title, or a name the
+    layout needs (`_RESERVED_ROOT`) -- is tagged with `filenames.disambiguator`
+    of the community's id, as the other exporters tag a colliding name: the
+    tag depends on which community it is, so the same export writes the same
+    names every time.
+    """
+    containers = _containers(interchange)
+    keys = list(dict.fromkeys(c.community_uuid for c in containers if c.community_uuid))
+    if len(keys) < 2:
+        return {}
+    titles: dict[str, str] = {}
+    for container in containers:
+        if container.community_uuid and container.community_title:
+            titles.setdefault(container.community_uuid, container.community_title)
+    for community in interchange.communities:
+        if community.title:
+            titles.setdefault(community.id, community.title)
+    used = set(_RESERVED_ROOT)
+    planned: dict[str | None, _Community] = {}
+    for weight, key in enumerate(keys, start=1):
+        title = titles.get(key) or key
+        name = candidate = _slug(title, key)
+        seed = key
+        while candidate in used:
+            candidate = f"{name}-{disambiguator(seed)}"
+            # A tagged name itself taken is settled as `filenames.plan`
+            # settles it: a tag of the id, salted.
+            seed += "!"
+        used.add(candidate)
+        planned[key] = _Community(key, title, content / candidate, weight)
+    if any(not c.community_uuid for c in containers):
+        planned[None] = _Community(
+            None, _NO_COMMUNITY_TITLE, content / _NO_COMMUNITY, len(keys) + 1
+        )
+    return planned
+
+
+def _counted(count: int, noun: str) -> str:
+    plural = "libraries" if noun == "library" else noun + "s"
+    return f"{count} {noun if count == 1 else plural}"
+
+
 def write_hugo_content(
     interchange: Interchange,
     blob_reader: BlobReader,
@@ -652,6 +756,7 @@ def write_hugo_content(
     html_mode: str = "mixed",
     combined: CombineReport | None = None,
     starter_site: bool = False,
+    starter_layout: str | None = None,
 ) -> HugoStats:
     """Write `interchange` as Hugo content under `out_dir`: a `content/`
     tree and a `README.md` beside it describing the fields. `html_mode` is how
@@ -659,9 +764,16 @@ def write_hugo_content(
     combining several archives into `interchange` (`derive.combine`): every
     page then names the archive it came from, and the README lists them.
     `starter_site` also writes a `hugo.toml`, templates and a stylesheet
-    beside `content/`, so the export can be viewed with `hugo server`."""
+    beside `content/`, so the export can be viewed with `hugo server`;
+    `starter_layout` is how its front page is drawn (`list`, the default, or
+    `cards`), and needs the starter site."""
     mode = html_mode_for("hugo", html_mode)
     combined = several(combined)
+    # Checked before anything is written, so a mistyped layout leaves no
+    # half-written export behind.
+    if starter_layout is not None and not starter_site:
+        raise ValueError("the front-page layout is for the starter site: ask for it too")
+    layout = check_layout(starter_layout) if starter_site else None
 
     def origin(entity_id: str) -> dict:
         # Only when several archives went in, so a single archive's content
@@ -670,18 +782,34 @@ def write_hugo_content(
 
     root = Path(out_dir)
     content = root / "content"
-    stats = HugoStats(html_mode=mode, starter_site=starter_site)
+    stats = HugoStats(html_mode=mode, starter_site=starter_site, starter_layout=layout)
     counts = BlockCounts()
     site = _Site(page_files={}, file_targets={}, mode=mode, counts=counts)
 
     def page_file(directory: Path, name: str) -> str:
         return "/" + (directory / name).relative_to(content).as_posix()
 
+    # With more than one community, each has a folder its sections go in
+    # (`_plan_communities`); otherwise the sections are at the top.
+    communities = _plan_communities(interchange, content)
+
+    def home(container) -> Path:
+        """The folder a container's section is in."""
+        if not communities:
+            return content
+        return communities[container.community_uuid or None].directory
+
     # Plan every path first, so a link can point at a page written later.
     wikis: list[tuple[DerivedWiki, Path, list[_Planned]]] = []
-    used_wikis: set[str] = set()
+    used_wikis: dict[Path, set[str]] = {}
     for wiki in interchange.wikis:
-        wiki_dir = content / "wikis" / _unique(_slug(wiki.title or wiki.label, wiki.id), used_wikis)
+        wiki_dir = (
+            home(wiki)
+            / "wikis"
+            / _unique(
+                _slug(wiki.title or wiki.label, wiki.id), used_wikis.setdefault(home(wiki), set())
+            )
+        )
         planned: dict[str, _Planned] = {}
         used_in: dict[Path, set[str]] = {}
         order = _wiki_order(wiki)
@@ -705,9 +833,16 @@ def write_hugo_content(
 
     def plan_leaves(section: str, containers, children_of, title_of):
         planned_containers = []
-        used: set[str] = set()
+        used: dict[Path, set[str]] = {}
         for container in containers:
-            directory = content / section / _unique(_slug(title_of(container), container.id), used)
+            directory = (
+                home(container)
+                / section
+                / _unique(
+                    _slug(title_of(container), container.id),
+                    used.setdefault(home(container), set()),
+                )
+            )
             used_items: set[str] = set()
             leaves = []
             for item in children_of(container):
@@ -738,12 +873,15 @@ def write_hugo_content(
 
     # Library files next, so a body link to one resolves to the copied file.
     libraries = []
-    used_libraries: set[str] = set()
+    used_libraries: dict[Path, set[str]] = {}
     for library in interchange.file_libraries:
         directory = (
-            content
+            home(library)
             / "files"
-            / _unique(_slug(library.community_title or library.title, library.id), used_libraries)
+            / _unique(
+                _slug(library.community_title or library.title, library.id),
+                used_libraries.setdefault(home(library), set()),
+            )
         )
         bundle = _Bundle(directory, blob_reader, stats)
         for file_id, derived in library.files.items():
@@ -763,15 +901,30 @@ def write_hugo_content(
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(text, encoding="utf-8")
 
-    def write_section(name: str) -> None:
-        write(
-            content / name / "_index.md",
-            _front_matter(_SECTIONS[name], weight=list(_SECTIONS).index(name) + 1, params={}),
-        )
+    #: Per folder a section is in, per section: its containers and items --
+    #: what a community's overview counts.
+    tally: dict[Path, dict[str, list[int]]] = {}
 
-    if wikis:
-        write_section("wikis")
+    def write_section(container, name: str, items: int) -> None:
+        """The section `_index.md` a container is listed in, written with
+        the first container; and the container counted into it."""
+        base = home(container)
+        counted = tally.setdefault(base, {})
+        if name not in counted:
+            community = communities.get(container.community_uuid or None)
+            params = {"community": community.title if community and community.key else None}
+            write(
+                base / name / "_index.md",
+                _front_matter(
+                    _SECTIONS[name], weight=list(_SECTIONS).index(name) + 1, params=params
+                ),
+            )
+            counted[name] = [0, 0]
+        counted[name][0] += 1
+        counted[name][1] += items
+
     for position, (wiki, wiki_dir, planned) in enumerate(wikis, start=1):
+        write_section(wiki, "wikis", len(wiki.pages))
         stats.wikis += 1
         write(
             wiki_dir / "_index.md",
@@ -815,9 +968,8 @@ def write_hugo_content(
             )
             stats.pages += 1
 
-    if blogs:
-        write_section("blogs")
     for position, (blog, directory, posts) in enumerate(blogs, start=1):
+        write_section(blog, "blogs", len(blog.posts))
         stats.blogs += 1
         write(
             directory / "_index.md",
@@ -854,9 +1006,8 @@ def write_hugo_content(
             write(entry.directory / "index.md", _page(front, body, _comments(post)))
             stats.posts += 1
 
-    if forums:
-        write_section("forums")
     for position, (forum, directory, topics) in enumerate(forums, start=1):
+        write_section(forum, "forums", len(forum.topics))
         stats.forums += 1
         write(
             directory / "_index.md",
@@ -896,9 +1047,8 @@ def write_hugo_content(
             write(entry.directory / "index.md", _page(front, body, attachments, replies))
             stats.topics += 1
 
-    if libraries:
-        write_section("files")
     for position, (library, directory) in enumerate(libraries, start=1):
+        write_section(library, "files", len(library.files))
         stats.libraries += 1
         lines = []
         for derived in _ordered(library.file_ids, library.files):
@@ -929,9 +1079,8 @@ def write_hugo_content(
         )
         write(directory / "_index.md", _page(front, "\n".join(lines)))
 
-    if highlights:
-        write_section("highlights")
     for position, (area, directory, pages) in enumerate(highlights, start=1):
+        write_section(area, "highlights", len(area.pages))
         stats.highlights += 1
         write(
             directory / "_index.md",
@@ -968,26 +1117,73 @@ def write_hugo_content(
             write(entry.directory / "index.md", _page(front, body))
             stats.highlight_pages += 1
 
+    # Each community's overview: what it holds, section by section.
+    for community in communities.values():
+        sections = tally.get(community.directory, {})
+        lines = []
+        for name, (containers, items) in sorted(
+            sections.items(), key=lambda entry: list(_SECTIONS).index(entry[0])
+        ):
+            container_noun, item_noun = _NOUNS[name]
+            parts = [_counted(containers, container_noun)] if container_noun else []
+            parts.append(_counted(items, item_noun))
+            target = _relref(page_file(community.directory / name, "_index.md"))
+            lines.append(f"- [{_SECTIONS[name]}]({target}): {', '.join(parts)}")
+        front = _front_matter(
+            community.title,
+            weight=community.weight,
+            params={
+                "kind": "community" if community.key else "no_community",
+                "source_id": community.key,
+                "item_count": sum(items for _, items in sections.values()),
+            },
+        )
+        write(community.directory / "_index.md", _page(front, "\n".join(lines)))
+    stats.communities = len(communities)
+
     stats.markdown_blocks, stats.html_blocks = counts.markdown, counts.html
     root.mkdir(parents=True, exist_ok=True)
     if starter_site:
-        write_starter_site(root, title=_site_title(interchange, combined), html_mode=mode)
+        write_starter_site(
+            root,
+            title=_site_title(interchange, combined, several=bool(communities)),
+            html_mode=mode,
+            layout=stats.starter_layout,
+            sites=_source_sites(interchange),
+        )
     (root / "README.md").write_text(_readme(interchange, stats, combined), encoding="utf-8")
     return stats
 
 
-def _site_title(interchange: Interchange, combined: CombineReport | None) -> str:
+def _source_sites(interchange: Interchange) -> list[tuple[str, str]]:
+    """The Connections deployments the content came from, for the starter
+    site's footer (`hugo_starter.site_of`).
+
+    The export's base URL says it when there is one: the deployment the
+    capture was made against -- and, for archives combined into one, set
+    only when they all share it. Without it, the containers' own addresses
+    say it instead, one entry per host in the order they first appear: two
+    archives of two deployments name both. Nothing linkable, nothing listed."""
+    site = site_of(interchange.base_url)
+    if site is not None:
+        return [site]
+    sites: list[tuple[str, str]] = []
+    for container in _containers(interchange):
+        site = site_of(container.alternate_url)
+        if site is not None and site not in sites:
+            sites.append(site)
+    return sites
+
+
+def _site_title(
+    interchange: Interchange, combined: CombineReport | None, *, several: bool = False
+) -> str:
     """The starter site's title: the community, when everything exported is
-    from one, as it usually is; otherwise a plain description."""
-    containers = [
-        *interchange.wikis,
-        *interchange.blogs,
-        *interchange.forums,
-        *interchange.file_libraries,
-        *interchange.rich_content,
-    ]
-    communities = {c.community_title for c in containers if c.community_title}
-    if len(communities) == 1:
+    from one, as it usually is; otherwise a plain description. `several`
+    says the export holds more than one community -- which two communities
+    sharing a title would not show here."""
+    communities = {c.community_title for c in _containers(interchange) if c.community_title}
+    if len(communities) == 1 and not several:
         return communities.pop()
     if combined is not None:
         return f"Connections content from {len(combined.archives)} archives"
@@ -1070,17 +1266,90 @@ _COMBINED_FIELD = (
 )
 
 
-def _field_table(combined: bool = False) -> str:
+#: Written only in a community-first export: the rows of `_FIELDS` that say
+#: more there, by field, and the one field only a community's page has.
+_COMMUNITY_ROWS = {
+    "`params.kind`": (
+        "`params.kind`",
+        "every page but the sections",
+        "What the page is: `community` (a community's overview), `no_community` (the "
+        "folder of content in no community), `wiki`, `wiki_page`, `blog`, "
+        "`ideation_blog`, `blog_post`, `forum`, `forum_topic`, `file_library`, "
+        "`highlights`, `highlights_page`.",
+    ),
+    "`params.source_id`": (
+        "`params.source_id`",
+        "items, community pages",
+        "The item's or community's identifier on that deployment.",
+    ),
+    "`weight`": (
+        "`weight`",
+        "wiki pages, Highlights pages, sections, community pages",
+        "Order among siblings (1 = first), so a wiki's page tree keeps its order.",
+    ),
+    "`params.community`": (
+        "`params.community`",
+        "every page in a community, sections included",
+        "The community the page belongs to.",
+    ),
+}
+_COMMUNITY_FIELD = (
+    "`params.item_count`",
+    "community pages",
+    "How many items the community's folder holds, across its sections.",
+)
+
+
+def _field_table(combined: bool = False, communities: bool = False) -> str:
     rows = ["| Field | Where | What it holds |", "| --- | --- | --- |"]
     fields = (*_FIELDS, _COMBINED_FIELD) if combined else _FIELDS
+    if communities:
+        fields = (*(_COMMUNITY_ROWS.get(row[0], row) for row in fields), _COMMUNITY_FIELD)
     rows += [f"| {name} | {where} | {what} |" for name, where, what in fields]
     return "\n".join(rows) + "\n"
+
+
+def _communities_section(starter_site: bool) -> list[str]:
+    """The README section on the community-first layout, written only when
+    the export uses it."""
+    starter = (
+        [
+            "The starter site follows the layout: its front page and header list the "
+            "communities, a community's page lists its sections, and every breadcrumb "
+            "starts with the community.",
+            "",
+        ]
+        if starter_site
+        else []
+    )
+    return [
+        "## Communities",
+        "",
+        "This export holds more than one community, so it is written community "
+        "first: each community has a folder of its own, `content/<community>/`, "
+        "named after its title, with the sections described above beneath it. Its "
+        "`_index.md` is the community's overview (`kind: community`), listing its "
+        "sections and how much each holds. Content that belongs to no community — a "
+        "wiki captured on its own, say — is in `content/other/` (`kind: no_community`). "
+        "Two communities with the same title get different folders, the second tagged "
+        "with a short code from its id; an export with one community, or none, has the "
+        "sections directly under `content/`.",
+        "",
+        "Nothing already in the output folder is deleted. Exporting again into the same "
+        "folder after the number of communities changed — from one to several, or back "
+        "— writes the other layout, and the folders of the earlier one are left in "
+        "place, so the site would show both; a fresh folder avoids that.",
+        "",
+        *starter,
+    ]
 
 
 def _readme(
     interchange: Interchange, stats: HugoStats, combined: CombineReport | None = None
 ) -> str:
     source = f" of {code_span(interchange.base_url)}" if interchange.base_url else ""
+    # In a community-first export every section is one folder deeper.
+    at = "<community>/" if stats.communities else ""
     lines = [
         "# Hugo content",
         "",
@@ -1107,23 +1376,24 @@ def _readme(
         )
         + "Copy or merge `content/` into your site's `content/` folder, at its "
         "root: links between pages are `relref` shortcodes to paths from the root of "
-        "`content/` (`/wikis/…/index.md`), which Hugo resolves through your own URL "
+        f"`content/` (`/{at}wikis/…/index.md`), which Hugo resolves through your own URL "
         "settings and checks at build time. Moved into a subfolder, those paths would no "
         "longer match.",
         "",
-        "- `content/wikis/<wiki>/` — a section per wiki. A page with sub-pages is a "
+        f"- `content/{at}wikis/<wiki>/` — a section per wiki. A page with sub-pages is a "
         "branch bundle (`<page>/_index.md`), a page without is a leaf bundle "
         "(`<page>/index.md`); `weight` keeps the wiki's order.",
-        "- `content/blogs/<blog>/`, `content/forums/<forum>/`, "
-        "`content/highlights/<community>/` — a leaf bundle per post, topic and page. A "
+        f"- `content/{at}blogs/<blog>/`, `content/{at}forums/<forum>/`, "
+        f"`content/{at}highlights/<community>/` — a leaf bundle per post, topic and page. A "
         "topic's replies are rendered beneath it as nested headings.",
-        "- `content/files/<library>/` — the library's files, listed in its `_index.md`, "
+        f"- `content/{at}files/<library>/` — the library's files, listed in its `_index.md`, "
         "with the files themselves in the same folder.",
         "- Images and attachments sit inside the bundle of the page that shows them "
         "(page resources), linked by name. A file whose name Hugo would read as content "
         "(`.md`, `.html`, `.gotmpl` …) has `.txt` added to its name.",
         "- Anything never captured is shown as a visible `[not captured: …]` marker.",
         "",
+        *(_communities_section(stats.starter_site) if stats.communities else []),
         "## Page content",
         "",
         html_mode_note(stats.html_mode, stats.markdown_blocks, stats.html_blocks),
@@ -1156,10 +1426,10 @@ def _readme(
         "into `.Params` — a template reads `.Params.source_url`. On an older Hugo they "
         "are under `.Params.params`.",
         "",
-        _field_table(combined is not None),
+        _field_table(combined is not None, communities=bool(stats.communities)),
     ]
     if stats.starter_site:
-        lines += readme_section()
+        lines += readme_section(stats.starter_layout)
     if combined is not None:
         lines += [*combined_section(combined, _text), ""]
     if stats.assets_missing:
@@ -1172,10 +1442,16 @@ def _readme(
 
 
 def from_source(
-    source, out_dir: Path | str, *, html_mode: str = "mixed", starter_site: bool = False
+    source,
+    out_dir: Path | str,
+    *,
+    html_mode: str = "mixed",
+    starter_site: bool = False,
+    starter_layout: str | None = None,
 ) -> HugoStats:
     """Write Hugo content from any compatible model source -- with the
-    starter site beside it when `starter_site` is set."""
+    starter site beside it when `starter_site` is set, its front page drawn
+    as `starter_layout`."""
     interchange = source.get_model()
     if interchange is None:
         raise ValueError("nothing to ingest: the source holds no derivable content")
@@ -1191,4 +1467,5 @@ def from_source(
         html_mode=html_mode,
         combined=getattr(source, "combine_report", None),
         starter_site=starter_site,
+        starter_layout=starter_layout,
     )

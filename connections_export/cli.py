@@ -872,6 +872,16 @@ def ingest_main(argv: Sequence[str] | None = None, *, env: Mapping[str, str] | N
         ),
     )
     parser.add_argument(
+        "--starter-layout",
+        choices=["list", "cards"],
+        default=None,
+        help=(
+            "With --starter-site: how the front page, and each community's page, is "
+            "drawn -- list (a plain list, the default) or cards. It is homeLayout in "
+            "the site's hugo.toml, which can be edited later without exporting again."
+        ),
+    )
+    parser.add_argument(
         "--author",
         dest="filter_author",
         default=None,
@@ -882,6 +892,8 @@ def ingest_main(argv: Sequence[str] | None = None, *, env: Mapping[str, str] | N
         parser.error("one of the arguments --archive --package is required")
     if args.starter_site and args.format != "hugo":
         parser.error("--starter-site is for --format hugo only")
+    if args.starter_layout and not args.starter_site:
+        parser.error("--starter-layout needs --starter-site")
 
     from connections_export.archive.source import ArchiveSourceError  # noqa: PLC0415
     from connections_export.derive import DeriveError  # noqa: PLC0415
@@ -901,6 +913,7 @@ def ingest_main(argv: Sequence[str] | None = None, *, env: Mapping[str, str] | N
             args.format,
             html_mode=args.html_mode,
             starter_site=args.starter_site,
+            starter_layout=args.starter_layout,
         )
     except (ValueError, DeriveError, ArchiveSourceError) as error:
         print(f"connections-export ingest: {error}", file=sys.stderr)

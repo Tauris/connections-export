@@ -625,7 +625,8 @@ def test_cli_hugo_format_writes_content(tmp_path, capsys):
     )
 
     assert code == 0
-    assert (tmp_path / "hugo" / "content" / "wikis").is_dir()
+    # The demo holds two communities, so the export is community first.
+    assert (tmp_path / "hugo" / "content" / "platform-engineering" / "wikis").is_dir()
     out = capsys.readouterr().out
     assert "Highlights page(s)" in out and "kept as HTML" in out
 
