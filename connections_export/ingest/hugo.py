@@ -44,6 +44,7 @@ them. The README written beside ``content/`` documents every field.
 from __future__ import annotations
 
 import re
+import shutil
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -644,17 +645,41 @@ def write_hugo_content(
     root = Path(out_dir)
     content = root / "content"
     stats = HugoStats(html_mode=mode)
+    if interchange.communities:
+        # A target may have been generated previously in app-first mode.
+        # Remove those stale top-level sections before writing community-first
+        # content, otherwise Hugo still exposes them on the homepage.
+        for section in ("wikis", "blogs", "forums", "files", "highlights", "communities"):
+            shutil.rmtree(content / section, ignore_errors=True)
     counts = BlockCounts()
     site = _Site(page_files={}, file_targets={}, mode=mode, counts=counts)
 
     def page_file(directory: Path, name: str) -> str:
         return "/" + (directory / name).relative_to(content).as_posix()
 
+    community_mode = bool(interchange.communities)
+    community_titles = {
+        community.id: community.title for community in interchange.communities
+    }
+
+    def community_slug(value: str | None, fallback: str) -> str:
+        return _unique(_slug(value or fallback, fallback), set())
+
+    def community_root(title: str | None, identifier: str) -> Path:
+        resolved_title = title or community_titles.get(identifier)
+        if not community_mode:
+            return content
+        return content / community_slug(resolved_title, identifier)
+
     # Plan every path first, so a link can point at a page written later.
     wikis: list[tuple[DerivedWiki, Path, list[_Planned]]] = []
     used_wikis: set[str] = set()
     for wiki in interchange.wikis:
-        wiki_dir = content / "wikis" / _unique(_slug(wiki.title or wiki.label, wiki.id), used_wikis)
+        wiki_dir = (
+            community_root(wiki.community_title, wiki.community_uuid or wiki.id)
+            / "wikis"
+            / _unique(_slug(wiki.title or wiki.label, wiki.id), used_wikis)
+        )
         planned: dict[str, _Planned] = {}
         used_in: dict[Path, set[str]] = {}
         order = _wiki_order(wiki)
@@ -680,7 +705,11 @@ def write_hugo_content(
         planned_containers = []
         used: set[str] = set()
         for container in containers:
-            directory = content / section / _unique(_slug(title_of(container), container.id), used)
+            directory = (
+                community_root(container.community_title, container.community_uuid or container.id)
+                / section
+                / _unique(_slug(title_of(container), container.id), used)
+            )
             used_items: set[str] = set()
             leaves = []
             for item in children_of(container):
@@ -714,7 +743,7 @@ def write_hugo_content(
     used_libraries: set[str] = set()
     for library in interchange.file_libraries:
         directory = (
-            content
+            community_root(library.community_title, library.community_uuid or library.id)
             / "files"
             / _unique(_slug(library.community_title or library.title, library.id), used_libraries)
         )
@@ -731,16 +760,58 @@ def write_hugo_content(
                     site.file_targets[file_id] = (page_file(directory, "_index.md"), name)
         libraries.append((library, directory))
 
+    # Community-first navigation: each community owns its app sections.
+    section_dirs: set[Path] = set()
+    community_dirs: set[Path] = set()
+    for _, directory, _ in wikis + blogs + forums + highlights:
+        section_dirs.add(directory.parent)
+        community_dirs.add(directory.parent.parent)
+    for _, directory in libraries:
+        section_dirs.add(directory.parent)
+        community_dirs.add(directory.parent.parent)
+    for directory in sorted(community_dirs) if community_mode else []:
+        write_path = directory / "_index.md"
+        write_path.parent.mkdir(parents=True, exist_ok=True)
+        title = next(
+            (
+                community.title
+                for community in interchange.communities
+                if community.title and _slug(community.title, community.id) == directory.name
+            ),
+            directory.name.replace("-", " ").title(),
+        )
+        sections = sorted(path.name for path in section_dirs if path.parent == directory)
+        body = "\n".join([f"# {title}", "", *[f"- [{name.title()}]({name}/)" for name in sections]])
+        write_path.write_text(_front_matter(title, params={}) + body + "\n", encoding="utf-8")
+    for directory in sorted(section_dirs) if community_mode else []:
+        title = directory.name.replace("-", " ").title()
+        write_path = directory / "_index.md"
+        write_path.parent.mkdir(parents=True, exist_ok=True)
+        write_path.write_text(_front_matter(title, params={}), encoding="utf-8")
+    if community_mode:
+        root_lines = []
+        for directory in sorted(community_dirs):
+            root_lines.append(
+                f"- [{directory.name.replace('-', ' ').title()}]({directory.name}/)"
+            )
+        root_index = content / "_index.md"
+        root_index.parent.mkdir(parents=True, exist_ok=True)
+        root_index.write_text(
+            _front_matter("Communities", params={}) + "\n".join(root_lines) + "\n",
+            encoding="utf-8",
+        )
+
     # Then the pages themselves.
     def write(path: Path, text: str) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(text, encoding="utf-8")
 
     def write_section(name: str) -> None:
-        write(
-            content / name / "_index.md",
-            _front_matter(_SECTIONS[name], weight=list(_SECTIONS).index(name) + 1, params={}),
-        )
+        if not community_mode:
+            write(
+                content / name / "_index.md",
+                _front_matter(_SECTIONS[name], weight=list(_SECTIONS).index(name) + 1, params={}),
+            )
 
     if wikis:
         write_section("wikis")
@@ -1091,6 +1162,83 @@ def _readme(interchange: Interchange, stats: HugoStats) -> str:
         )
         lines.append("")
     return "\n".join(lines)
+
+
+def write_hugo_theme(root: Path | str, source_url: str | None = None) -> None:
+    """Add an optional small theme around already-written Hugo content."""
+    root = Path(root)
+    (root / "layouts" / "_default").mkdir(parents=True, exist_ok=True)
+    (root / "layouts" / "_markup").mkdir(parents=True, exist_ok=True)
+    (root / "static" / "css").mkdir(parents=True, exist_ok=True)
+    (root / "hugo.toml").write_text(
+        'baseURL = "/"\ntitle = "Connections export"\n', encoding="utf-8"
+    )
+    (root / "static" / "css" / "main.css").write_text(
+        "body{margin:0;font:16px/1.6 system-ui,sans-serif;color:#243447}"
+        "main{max-width:70rem;margin:2rem auto;padding:0 1rem}"
+        "a{color:#1769aa}.site-header{padding:1rem max(1rem,calc((100% - 70rem)/2));"
+        "background:#243b53;color:white;border-bottom:1px solid #102a43}"
+        ".site-header a{color:white;text-decoration:none}"
+        "footer{display:flex;justify-content:space-between;align-items:center;gap:1rem;"
+        "margin-top:3rem;padding:1rem max(1rem,calc((100% - 70rem)/2));"
+        "background:#243b53;color:white;border-top:1px solid #102a43;font-size:.9rem}"
+        "footer svg{display:block}"
+        "footer a{color:white}",
+        encoding="utf-8",
+    )
+    (root / "layouts" / "_markup" / "render-link.html").write_text(
+        '{{- $external := or (strings.HasPrefix .Destination "http://") '
+        '(strings.HasPrefix .Destination "https://") -}}'
+        '<a href="{{ .Destination | safeURL }}"{{ if $external }} target="_blank" '
+        'rel="noopener noreferrer"{{ end }}>{{ .Text }}</a>',
+        encoding="utf-8",
+    )
+    (root / "layouts" / "index.html").write_text(
+        '{{ define "main" }}<h1>{{ .Title }}</h1>{{ .Content }}{{ end }}',
+        encoding="utf-8",
+    )
+    hostname = urlsplit(source_url).netloc if source_url else ""
+    original = (
+        f'<a href="{source_url}" rel="noopener noreferrer">{hostname}</a>'
+        if source_url
+        else ""
+    )
+    github = (
+        '<a href="https://github.com/tauris/connections-export" '
+        'rel="noopener noreferrer" aria-label="connections-export on GitHub">'
+        '<svg aria-hidden="true" viewBox="0 0 24 24" width="22" height="22" fill="currentColor">'
+        '<path d="M12 .5a12 12 0 0 0-3.79 23.39c.6.11.82-.26.82-.58v-2.03 '
+        'c-3.34.73-4.04-1.61-4.04-1.61-.55-1.39-1.34-1.76-1.34-1.76 '
+        '-1.09-.75.08-.74.08-.74 1.2.09 1.83 1.23 1.83 1.23 1.07 1.83 '
+        '2.8 1.3 3.48.99.11-.77.42-1.3.76-1.6-2.67-.3-5.47-1.34-5.47-5.93 '
+        '0-1.31.47-2.38 1.23-3.22-.12-.3-.53-1.52.12-3.18 0 0 1-.32 '
+        '3.3 1.23a11.5 11.5 0 0 1 6 0c2.3-1.55 3.3-1.23 3.3-1.23 '
+        '.65 1.66.24 2.88.12 3.18.77.84 1.23 1.91 1.23 3.22 0 4.6-2.8 5.62 '
+        '-5.48 5.92.43.37.81 1.1.81 2.22v3.29c0 .32.22.7.83.58A12 12 0 0 0 12 .5Z"/></svg></a>'
+    )
+    hugo = '<span>Powered by <a href="https://gohugo.io" rel="noopener noreferrer">Hugo</a></span>'
+    footer = f"<footer><span>{original}</span>{hugo}<span>{github}</span></footer>"
+    (root / "layouts" / "_default" / "baseof.html").write_text(
+        '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" '
+        'content="width=device-width,initial-scale=1">'
+        '<link rel="stylesheet" href="{{ "css/main.css" | relURL }}">'
+        '<title>{{ .Title }}</title></head><body><header class="site-header">'
+        '<a href="{{ "/" | relURL }}">Connections export</a></header>'
+        '<main>{{ block "main" . }}{{ end }}'
+        f"</main>{footer}</body></html>",
+        encoding="utf-8",
+    )
+    (root / "layouts" / "_default" / "single.html").write_text(
+        '{{ define "main" }}<article><h1>{{ .Title }}</h1>{{ with .Params.author }}'
+        '<p><small><em>Original author: {{ . }}</em></small></p>'
+        '{{ end }}{{ .Content }}</article>{{ end }}',
+        encoding="utf-8",
+    )
+    (root / "layouts" / "_default" / "list.html").write_text(
+        '{{ define "main" }}<h1>{{ .Title }}</h1><ul>{{ range .Pages }}<li>'
+        '<a href="{{ .RelPermalink }}">{{ .Title }}</a></li>{{ end }}</ul>{{ end }}',
+        encoding="utf-8",
+    )
 
 
 def from_source(source, out_dir: Path | str, *, html_mode: str = "mixed") -> HugoStats:

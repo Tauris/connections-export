@@ -167,6 +167,9 @@ connections-export pdf --archive ./archive --output export.pdf
 connections-export ingest --format obsidian --archive <dir> --output <vault>
 connections-export ingest --format jekyll   --archive <dir> --output <site>
 connections-export ingest --format hugo     --archive <dir> --output <content>
+connections-export ingest --format hugo     --archive <dir> --output <site> --site
+connections-export ingest --format hugo \
+    --archive community-one --archive community-two --output combined-site
 ```
 
 `--html markdown|mixed|html|raw` chooses how page content is written: all

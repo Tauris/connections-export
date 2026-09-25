@@ -610,7 +610,7 @@ def test_cli_hugo_format_writes_content(tmp_path, capsys):
     )
 
     assert code == 0
-    assert (tmp_path / "hugo" / "content" / "wikis").is_dir()
+    assert any((tmp_path / "hugo" / "content").iterdir())
     out = capsys.readouterr().out
     assert "Highlights page(s)" in out and "kept as HTML" in out
 

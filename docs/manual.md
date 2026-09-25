@@ -171,11 +171,15 @@ Obsidian, Jekyll and Hugo are **independent, third-party applications**, not par
 connections-export ingest --format obsidian --archive PATH/TO/ARCHIVE --output PATH/TO/VAULT
 connections-export ingest --format jekyll   --archive PATH/TO/ARCHIVE --output PATH/TO/SITE
 connections-export ingest --format hugo     --archive PATH/TO/ARCHIVE --output PATH/TO/CONTENT
+connections-export ingest --format hugo     --archive PATH/TO/ARCHIVE --output PATH/TO/SITE --site
+connections-export ingest --format hugo \
+  --archive PATH/TO/COMMUNITY-ONE --archive PATH/TO/COMMUNITY-TWO \
+  --output PATH/TO/COMBINED-SITE
 ```
 
 Add `--html markdown`, `--html mixed`, `--html html` or `--html raw` to choose how page content is written ([below](#man-export-html)).
 
-`--archive` is an archive directory (the one holding `manifest.jsonl` and `blobs/`) or a `.zip` of one; `--package` takes a package written by `connections-export package` instead. Either flag accepts either kind — the directory says what it is — and `--author` narrows the output to one person's content. Nothing is read from or sent to the source deployment during an export — it only ever touches what is on disk. All three exporters work from a plain install — the executable has them built in, and a `pip`/`uv` install includes what they need (`markdownify`) as a base dependency, so no extra is required.
+`--archive` is an archive directory (the one holding `manifest.jsonl` and `blobs/`) or a `.zip` of one; `--package` takes a package written by `connections-export package` instead. Either flag accepts either kind — the directory says what it is — and `--author` narrows the output to one person's content. Repeat `--archive` with `--format hugo --output DIR` to combine multiple archives into one Hugo content tree. Nothing is read from or sent to the source deployment during an export — it only ever touches what is on disk. All three exporters work from a plain install — the executable has them built in, and a `pip`/`uv` install includes what they need (`markdownify`) as a base dependency, so no extra is required.
 
 ### <a id="man-export-obsidian"></a>Obsidian — a linked vault
 
@@ -189,7 +193,7 @@ The Jekyll exporter writes a site fragment: dated Markdown files under `_posts/`
 
 The Hugo exporter writes **content only**: a `content/` folder, and a `README.md` beside it. There are no layouts, no theme and no `hugo.toml` — those belong to your site. Copy or merge the `content/` folder into your site's own `content/` folder, at its root, and build.
 
-Each wiki, blog, forum, file library and Highlights area becomes a section (`content/wikis/<wiki>/`, `content/blogs/<blog>/`, `content/forums/<forum>/`, `content/files/<library>/`, `content/highlights/<community>/`). A wiki's page tree becomes nested *page bundles*: a page with sub-pages is a folder with an `_index.md`, a page without one a folder with an `index.md`, and `weight` in the front matter keeps the wiki's own order. Blog posts, forum topics and Highlights pages are one folder each; a topic's replies appear beneath it as nested headings, comments beneath a page. Every image and attachment is copied **into the folder of the page that shows it**, so Hugo publishes it next to that page; a library's files sit in the library's folder, listed on its page. Anything never captured shows as a visible marker.
+Each community becomes a top-level section (`content/communities/<community>/`) with nested `wikis/`, `blogs/`, `forums/`, `files/`, and `highlights/` sections. This keeps each community's content together in a multi-community export. A wiki's page tree becomes nested *page bundles*: a page with sub-pages is a folder with an `_index.md`, a page without one a folder with an `index.md`, and `weight` in the front matter keeps the wiki's own order. Blog posts, forum topics and Highlights pages are one folder each; a topic's replies appear beneath it as nested headings, comments beneath a page. Every image and attachment is copied **into the folder of the page that shows it**, so Hugo publishes it next to that page; a library's files sit in the community's files folder, listed on its page. Anything never captured shows as a visible marker.
 
 Links between exported pages are Hugo `relref` links, which Hugo resolves through your site's own address settings and checks when it builds — a link to a page that is not there stops the build rather than publishing a dead link. They name paths from the root of `content/`, which is why the folder goes in at the root. The front matter carries the title, dates, tags and weight Hugo itself uses, and, under `params`, where each item came from (`source_url`), what it is (`kind`), its community, author and comment count; the `README.md` lists every field. A file whose name Hugo would treat as a page of the site (`.md`, `.html` and the like) gets `.txt` added to its name, so it is published as the file it is.
 

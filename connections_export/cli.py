@@ -829,10 +829,16 @@ def ingest_main(argv: Sequence[str] | None = None, *, env: Mapping[str, str] | N
     source = parser.add_mutually_exclusive_group(required=True)
     source.add_argument(
         "--archive",
-        help="An archive a capture wrote (the directory holding manifest.jsonl), or a .zip of one.",
+        action="append",
+        help="An archive a capture wrote. Repeat for a combined Hugo site.",
     )
-    source.add_argument("--package", help="A written interchange package directory.")
-    parser.add_argument("--output", required=True, help="Target vault/output dir to write.")
+    source.add_argument(
+        "--package", action="append", help="A written interchange package directory."
+    )
+    parser.add_argument("--output", required=True, help="Target vault/site directory to write.")
+    parser.add_argument(
+        "--site", action="store_true", help="Add a small built-in theme to a Hugo export."
+    )
     parser.add_argument(
         "--html",
         dest="html_mode",
@@ -853,23 +859,57 @@ def ingest_main(argv: Sequence[str] | None = None, *, env: Mapping[str, str] | N
         help="Only ingest content this user authored/participated in (name or user id).",
     )
     args = parser.parse_args(argv)
+    output = args.output
+    if args.site and args.format != "hugo":
+        parser.error("--site is only supported with --format hugo")
 
     from connections_export.archive.source import ArchiveSourceError  # noqa: PLC0415
     from connections_export.derive import DeriveError  # noqa: PLC0415
     from connections_export.ingest import from_source_for_format  # noqa: PLC0415
 
     try:
-        source_obj, kind = _content_source(args.archive or args.package, author=args.filter_author)
-        stats = from_source_for_format(
-            source_obj, args.output, args.format, html_mode=args.html_mode
-        )
+        source_paths = args.archive or args.package
+        sources = [_content_source(path, author=args.filter_author)[0] for path in source_paths]
+        theme_source_url = None
+        kind = "archive" if args.archive else "package"
+        if len(sources) == 1:
+            stats = from_source_for_format(
+                sources[0], output, args.format, html_mode=args.html_mode
+            )
+            if args.format == "hugo":
+                theme_source_url = sources[0].get_model().base_url
+        elif args.format != "hugo":
+            raise ValueError("multiple inputs are only supported with --format hugo")
+        else:
+            from connections_export.ingest.hugo import write_hugo_content  # noqa: PLC0415
+            models = [source.get_model() for source in sources]
+            merged = models[0].model_copy(update={
+                field: sum((getattr(model, field) for model in models), [])
+                for field in (
+                    "wikis", "blogs", "forums", "file_libraries", "rich_content", "communities"
+                )
+            })
+            def blob_reader(blob_hash):
+                for source in sources:
+                    result = source.get_blob(blob_hash)
+                    if result is not None:
+                        return result[0]
+                return None
+            theme_source_url = merged.base_url
+            stats = write_hugo_content(
+                merged, blob_reader, output, html_mode=args.html_mode or "mixed"
+            )
+        if args.site:
+            from connections_export.ingest.hugo import write_hugo_theme  # noqa: PLC0415
+
+            write_hugo_theme(output, theme_source_url)
     except (ValueError, DeriveError, ArchiveSourceError) as error:
         print(f"connections-export ingest: {error}", file=sys.stderr)
         return 1
     if args.format == "jekyll":
         print(
             f"connections-export ingest: from the {kind}, {stats.posts} post(s), "
-            f"{stats.assets_written} asset(s) → {args.output}"
+            f"{stats.assets_written} asset(s) → {output}"
         )
     elif args.format == "hugo":
         print(
@@ -877,7 +917,7 @@ def ingest_main(argv: Sequence[str] | None = None, *, env: Mapping[str, str] | N
             f"{stats.wikis} wiki(s), {stats.posts} post(s) in {stats.blogs} blog(s), "
             f"{stats.topics} topic(s) in {stats.forums} forum(s), "
             f"{stats.files} file(s), {stats.highlight_pages} Highlights page(s), "
-            f"{stats.assets_written} file(s) copied → {args.output}"
+            f"{stats.assets_written} file(s) copied → {output}"
         )
     else:
         print(
