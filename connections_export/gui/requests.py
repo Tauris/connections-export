@@ -147,9 +147,12 @@ class _BulkRepairRequest(BaseModel):
 
 
 class _IngestRequest(BaseModel):
-    """Which developer format to reconstruct the open archive into."""
+    """Which developer format to reconstruct the open archive into, and how
+    its page content is written (`ingest._bodies.HTML_MODES`; the format's
+    own default when absent)."""
 
     format: str
+    html_mode: str | None = None
 
 
 class _ArchiveZipRequest(BaseModel):

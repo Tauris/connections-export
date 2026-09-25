@@ -41,10 +41,14 @@ content stays faithful today and portable for whatever you move it into next.
   zipped on a share or in OneDrive and still opened.
 - **Export onward** — render to a single print-ready **PDF**, or, for people who
   work with developer tools, reconstruct a capture as an **Obsidian vault**
-  (Markdown with `[[wikilinks]]`) or a **Jekyll site** (a static website you can
-  publish). [Obsidian](https://obsidian.md) and [Jekyll](https://jekyllrb.com)
-  are independent third-party applications; the exporters are provided for
-  convenience and are not an endorsement of either.
+  (Markdown with `[[wikilinks]]`), a **Jekyll site** (a static website you can
+  publish), or **Hugo content** (pages to drop into a Hugo site of your own).
+  Page content can be written as Markdown, as HTML, or as Markdown with HTML
+  kept only where Markdown would lose something.
+  [Obsidian](https://obsidian.md), [Jekyll](https://jekyllrb.com) and
+  [Hugo](https://gohugo.io) are independent third-party applications; the
+  exporters are provided for convenience and are not an endorsement of any of
+  them.
 - **Respects people** — personal avatars are never exported; consent for the
   source system doesn't extend to a copy.
 
@@ -54,7 +58,7 @@ content stays faithful today and portable for whatever you move it into next.
 pip install connections-export
 ```
 
-That includes everything, the Obsidian and Jekyll exporters too; the only
+That includes everything, the Obsidian, Jekyll and Hugo exporters too; the only
 optional extra is Windows Integrated Auth, below.
 
 Requires Python 3.12 or newer (tested on 3.12, 3.13 and 3.14, on Linux, macOS
@@ -97,7 +101,7 @@ Two things worth knowing:
   (`msedge` or `chrome`) or `CONNECTIONS_EXPORT_BROWSER_PATH` (an explicit
   executable).
 
-Everything else — capture, browsing, the Obsidian and Jekyll exports — works
+Everything else — capture, browsing, the Obsidian, Jekyll and Hugo exports — works
 with no browser at all.
 
 ## Quick start
@@ -162,7 +166,13 @@ Then render or convert what you captured:
 connections-export pdf --archive ./archive --output export.pdf
 connections-export ingest --format obsidian --archive <dir> --output <vault>
 connections-export ingest --format jekyll   --archive <dir> --output <site>
+connections-export ingest --format hugo     --archive <dir> --output <content>
 ```
+
+`--html markdown|mixed|html|raw` chooses how page content is written: all
+Markdown (Obsidian's default), Markdown with HTML only where Markdown would lose
+something (Jekyll's and Hugo's default), cleaned HTML, or the HTML exactly as
+captured — not cleaned, and then yours to answer for if you publish it.
 
 Settings can also come from `connections-export.toml` or `CONNECTIONS_EXPORT_*`
 environment variables. Precedence is CLI flags → environment → config file →
@@ -289,12 +299,12 @@ shape of the thing it produces.
 
 The export is deliberately not a proprietary blob. It's an open interchange
 package described by [the format specification](https://github.com/Tauris/connections-export/blob/main/docs/reference/interchange-format.md), a copy
-of which travels inside every package — the Obsidian and Jekyll exporters are
+of which travels inside every package — the Obsidian, Jekyll and Hugo exporters are
 worked examples of consuming it. Your content stays portable and readable long after the
 export.
 
 **On writing your own exporter:** how much work that is depends far more on the
-destination than on the package. An Obsidian vault or a Jekyll site is a
+destination than on the package. An Obsidian vault, a Jekyll site or Hugo content is a
 directory of Markdown files, so the exporter can write whatever it decides to
 write. Hosted platforms often
 impose a fixed content model that no amount of care on the reading side can

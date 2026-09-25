@@ -815,8 +815,9 @@ def ingest_main(argv: Sequence[str] | None = None, *, env: Mapping[str, str] | N
     """`connections-export ingest --format obsidian --archive DIR --output VAULT`:
     a reference ingester that reconstructs captured content into a target
     (docs/reference/interchange-format.md §7). The built-in formats are
-    `obsidian` and `jekyll`; both use `markdownify`, a base dependency, so a
-    plain install runs them.
+    `obsidian`, `jekyll` and `hugo`; all use `markdownify`, a base dependency,
+    so a plain install runs them. `--html` chooses how page bodies are written
+    (`ingest._bodies`).
 
     Takes what a capture actually produces -- an archive directory, or a zip
     of one -- as readily as a written package. `--package` and `--archive`
@@ -824,7 +825,7 @@ def ingest_main(argv: Sequence[str] | None = None, *, env: Mapping[str, str] | N
     of directory works, and says which it found.
     """
     parser = argparse.ArgumentParser(prog="connections-export ingest")
-    parser.add_argument("--format", choices=["obsidian", "jekyll"], default="obsidian")
+    parser.add_argument("--format", choices=["obsidian", "jekyll", "hugo"], default="obsidian")
     source = parser.add_mutually_exclusive_group(required=True)
     source.add_argument(
         "--archive",
@@ -832,6 +833,19 @@ def ingest_main(argv: Sequence[str] | None = None, *, env: Mapping[str, str] | N
     )
     source.add_argument("--package", help="A written interchange package directory.")
     parser.add_argument("--output", required=True, help="Target vault/output dir to write.")
+    parser.add_argument(
+        "--html",
+        dest="html_mode",
+        choices=["markdown", "mixed", "html", "raw"],
+        default=None,
+        help=(
+            "How page content is written. markdown: everything converted to Markdown. "
+            "mixed: Markdown where that loses nothing, cleaned HTML where it would. "
+            "html: cleaned HTML (scripts and event handlers removed). raw: the HTML "
+            "exactly as captured, NOT cleaned -- whatever it contains is then your "
+            "responsibility. Default: markdown for obsidian, mixed for jekyll and hugo."
+        ),
+    )
     parser.add_argument(
         "--author",
         dest="filter_author",
@@ -846,7 +860,9 @@ def ingest_main(argv: Sequence[str] | None = None, *, env: Mapping[str, str] | N
 
     try:
         source_obj, kind = _content_source(args.archive or args.package, author=args.filter_author)
-        stats = from_source_for_format(source_obj, args.output, args.format)
+        stats = from_source_for_format(
+            source_obj, args.output, args.format, html_mode=args.html_mode
+        )
     except (ValueError, DeriveError, ArchiveSourceError) as error:
         print(f"connections-export ingest: {error}", file=sys.stderr)
         return 1
@@ -855,6 +871,14 @@ def ingest_main(argv: Sequence[str] | None = None, *, env: Mapping[str, str] | N
             f"connections-export ingest: from the {kind}, {stats.posts} post(s), "
             f"{stats.assets_written} asset(s) → {args.output}"
         )
+    elif args.format == "hugo":
+        print(
+            f"connections-export ingest: from the {kind}, {stats.pages} page(s) in "
+            f"{stats.wikis} wiki(s), {stats.posts} post(s) in {stats.blogs} blog(s), "
+            f"{stats.topics} topic(s) in {stats.forums} forum(s), "
+            f"{stats.files} file(s), {stats.highlight_pages} Highlights page(s), "
+            f"{stats.assets_written} file(s) copied → {args.output}"
+        )
     else:
         print(
             f"connections-export ingest: from the {kind}, {stats.pages} page(s) in "
@@ -862,6 +886,13 @@ def ingest_main(argv: Sequence[str] | None = None, *, env: Mapping[str, str] | N
             f"{stats.topics} topic(s) in {stats.forums} forum(s), "
             f"{stats.assets_written} attachment(s) → {args.output}"
         )
+    if stats.html_mode != "markdown":
+        print(
+            f"  page content ({stats.html_mode}): {stats.markdown_blocks} block(s) as "
+            f"Markdown, {stats.html_blocks} kept as HTML."
+        )
+    if stats.html_mode == "raw":
+        print("  raw HTML was NOT cleaned: whoever publishes it is responsible for its content.")
     if stats.assets_missing:
         print(f"  {stats.assets_missing} referenced asset(s) not captured (shown as visible gaps).")
     return 0
@@ -2145,7 +2176,7 @@ _MAIN_USAGE = (
     "  serve           launch the local web console (--demo for a synthetic run)\n"
     "  open            open an existing archive/package to browse or export\n"
     "  pdf             render the reconstructed wiki to a PDF\n"
-    "  ingest          reconstruct an archive or package into a target (obsidian vault)\n"
+    "  ingest          reconstruct an archive or package into a target (obsidian, jekyll, hugo)\n"
     "  package         write a capture's portable interchange package\n"
     "  style           show or dump the PDF stylesheet, and list its settings\n"
     "  licenses        what is in this build, with licence texts to extract\n"

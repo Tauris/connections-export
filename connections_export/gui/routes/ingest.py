@@ -1,11 +1,11 @@
 """Reconstruct the open archive into a developer format from the console.
 
-The CLI has long offered `connections-export ingest --format obsidian|jekyll`.
-This exposes the same two exporters to the console so someone who never touches
-a terminal can produce an Obsidian vault or a Jekyll site from the archive they
-are already reading. It writes a folder next to the archive and reports where,
-rather than streaming a download: an Obsidian vault and a Jekyll site are both
-directory trees the person then opens in their own tool.
+The CLI offers `connections-export ingest --format obsidian|jekyll|hugo`. This
+exposes the same exporters to the console so someone who never touches a
+terminal can produce an Obsidian vault, a Jekyll site or Hugo content from the
+archive they are already reading. It writes a folder next to the archive and
+reports where, rather than streaming a download: each is a directory tree the
+person then opens in their own tool.
 
 Deliberately not on the front of the Reader: PDF is the everyday export, and
 these formats are for people who want to re-home the content. The console keeps
@@ -25,21 +25,38 @@ from connections_export.gui.requests import _IngestRequest
 _FORMATS = {
     "obsidian": {"suffix": "-obsidian-vault", "label": "Obsidian vault"},
     "jekyll": {"suffix": "-jekyll-site", "label": "Jekyll site"},
+    "hugo": {"suffix": "-hugo-content", "label": "Hugo content"},
 }
 
 
 def _summary(fmt: str, stats) -> str:
-    """A one-line, human count of what was written, per format."""
+    """A one-line, human count of what was written, per format -- with how
+    much of the page content stayed HTML, when any could."""
     if fmt == "jekyll":
-        return (
+        counted = (
             f"{stats.posts} post(s), {stats.files} file(s) in "
             f"{stats.libraries} library/libraries, {stats.assets_written} asset(s)"
         )
+    elif fmt == "hugo":
+        counted = (
+            f"{stats.pages} page(s) in {stats.wikis} wiki(s), "
+            f"{stats.posts} post(s) in {stats.blogs} blog(s), "
+            f"{stats.topics} topic(s) in {stats.forums} forum(s), "
+            f"{stats.files} file(s), {stats.highlight_pages} Highlights page(s), "
+            f"{stats.assets_written} file(s) copied"
+        )
+    else:
+        counted = (
+            f"{stats.pages} page(s) in {stats.wikis} wiki(s), "
+            f"{stats.posts} post(s) in {stats.blogs} blog(s), "
+            f"{stats.topics} topic(s) in {stats.forums} forum(s), "
+            f"{stats.assets_written} attachment(s)"
+        )
+    if stats.html_mode == "markdown":
+        return counted
     return (
-        f"{stats.pages} page(s) in {stats.wikis} wiki(s), "
-        f"{stats.posts} post(s) in {stats.blogs} blog(s), "
-        f"{stats.topics} topic(s) in {stats.forums} forum(s), "
-        f"{stats.assets_written} attachment(s)"
+        f"{counted}; page content as {stats.html_mode}: {stats.markdown_blocks} block(s) "
+        f"Markdown, {stats.html_blocks} kept as HTML"
     )
 
 
@@ -56,7 +73,8 @@ def register(
 
     @app.post("/api/ingest")
     def ingest(body: _IngestRequest) -> JSONResponse:
-        """Write the open archive out as an Obsidian vault or a Jekyll site.
+        """Write the open archive out as an Obsidian vault, a Jekyll site or
+        Hugo content.
 
         Uses the console's already-loaded model source, so the author filter in
         force (if any) is the export's, exactly as the CLI's `--author` would
@@ -66,7 +84,17 @@ def register(
         fmt = (body.format or "").strip().lower()
         spec = _FORMATS.get(fmt)
         if spec is None:
-            return JSONResponse({"error": "format must be 'obsidian' or 'jekyll'"}, status_code=422)
+            return JSONResponse(
+                {"error": "format must be 'obsidian', 'jekyll' or 'hugo'"}, status_code=422
+            )
+        from connections_export.ingest import HTML_MODES, html_mode_for  # noqa: PLC0415
+
+        try:
+            html_mode = html_mode_for(fmt, body.html_mode)
+        except ValueError:
+            return JSONResponse(
+                {"error": "html_mode must be one of " + ", ".join(HTML_MODES)}, status_code=422
+            )
 
         source = app.state.model_source
         if source.get_model() is None:
@@ -91,7 +119,7 @@ def register(
         from connections_export.ingest import from_source_for_format  # noqa: PLC0415
 
         try:
-            stats = from_source_for_format(source, out_dir, fmt)
+            stats = from_source_for_format(source, out_dir, fmt, html_mode=html_mode)
         except (ValueError, DeriveError) as error:
             return JSONResponse({"error": str(error)}, status_code=422)
         except OSError as error:
@@ -115,5 +143,8 @@ def register(
                 "path": str(out_dir),
                 "summary": _summary(fmt, stats),
                 "assets_missing": missing,
+                "html_mode": stats.html_mode,
+                "markdown_blocks": stats.markdown_blocks,
+                "html_blocks": stats.html_blocks,
             }
         )

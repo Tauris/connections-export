@@ -1,8 +1,9 @@
-"""`POST /api/ingest` writes the open archive out as an Obsidian vault or a
-Jekyll site, into a folder beside the archive, and reports where.
+"""`POST /api/ingest` writes the open archive out as an Obsidian vault, a
+Jekyll site or Hugo content, into a folder beside the archive, and reports
+where -- and how much of the page content stayed HTML.
 
-This is the console's front door to the same two exporters the CLI has always
-had (`connections-export ingest --format …`). Driven via `httpx.ASGITransport`
+This is the console's front door to the same exporters the CLI has
+(`connections-export ingest --format …`). Driven via `httpx.ASGITransport`
 with a localhost Host (the security guard), same as the PDF endpoint test.
 """
 
@@ -104,3 +105,70 @@ def test_an_exporter_failure_is_surfaced_to_the_client(tmp_path, monkeypatch):
 
     assert response.status_code == 500
     assert "markdownify" in response.json()["error"]
+
+
+def test_ingest_writes_hugo_content_beside_the_archive(tmp_path):
+    """Hugo sits beside the other two: content only, in a folder named for it,
+    with how much of the page content stayed HTML in the summary."""
+    archive_dir = tmp_path / "archive"
+    run_demo((lambda _e: None), archive_dir=archive_dir, delay=0)
+    app = make_app(demo=True, archive_dir=archive_dir)
+
+    response = _post(app, {"format": "hugo"})
+
+    assert response.status_code == 200
+    body = response.json()
+    content = archive_dir.parent / "archive-hugo-content"
+    assert body["path"] == str(content)
+    assert (content / "content" / "wikis" / "_index.md").is_file()
+    assert body["html_mode"] == "mixed"
+    assert "kept as HTML" in body["summary"]
+    assert body["markdown_blocks"] > 0
+
+
+def test_ingest_takes_the_html_mode_or_the_formats_default(tmp_path):
+    archive_dir = tmp_path / "archive"
+    run_demo((lambda _e: None), archive_dir=archive_dir, delay=0)
+    app = make_app(demo=True, archive_dir=archive_dir)
+
+    assert _post(app, {"format": "obsidian"}).json()["html_mode"] == "markdown"
+    assert _post(app, {"format": "jekyll", "html_mode": None}).json()["html_mode"] == "mixed"
+    chosen = _post(app, {"format": "jekyll", "html_mode": "html"}).json()
+    assert chosen["html_mode"] == "html"
+    assert chosen["markdown_blocks"] == 0 and chosen["html_blocks"] > 0
+
+
+def test_an_unknown_html_mode_is_rejected(tmp_path):
+    archive_dir = tmp_path / "archive"
+    run_demo((lambda _e: None), archive_dir=archive_dir, delay=0)
+    app = make_app(demo=True, archive_dir=archive_dir)
+
+    response = _post(app, {"format": "hugo", "html_mode": "<script>"})
+
+    assert response.status_code == 422
+    assert "mixed" in response.json()["error"]
+    assert not (archive_dir.parent / "archive-hugo-content").exists()
+
+
+def test_the_console_offers_hugo_and_the_page_content_choice():
+    """The developer-formats section has the Hugo button, the four content
+    choices plus the format's default, and sends the choice with the export."""
+    from pathlib import Path
+
+    static = Path(__file__).resolve().parents[2] / "connections_export" / "gui" / "static"
+    html = (static / "console.html").read_text(encoding="utf-8")
+    script = (static / "console.js").read_text(encoding="utf-8")
+
+    assert 'id="r-export-hugo"' in html and "Export Hugo content" in html
+    assert 'id="r-dev-html-mode"' in html
+    for value, label in (
+        ("", "Default for the format"),
+        ("markdown", "Markdown"),
+        ("mixed", "Markdown with HTML where needed"),
+        ("html", "HTML"),
+        ("raw", "HTML as captured (not cleaned)"),
+    ):
+        assert f'<option value="{value}"' in html and f">{label}</option>" in html
+    assert "Obsidian, Jekyll and Hugo are independent, third-party applications" in html
+    assert "html_mode: htmlMode" in script
+    assert 'exportDevFormat("hugo"' in script

@@ -5,6 +5,30 @@ Notable changes to `connections-export`, newest first. Versions follow
 the archive format may still change between minor versions — the format's own
 version is recorded inside every archive.
 
+## 0.1.12 — 2026-09-25
+
+### Added
+- **Hugo exporter.** `connections-export ingest --format hugo` and the console's
+  "Export Hugo content" write content for a Hugo site of your own: a `content/`
+  tree with a section per wiki, blog, forum, file library and Highlights area,
+  the wiki's page tree as nested page bundles (sibling order kept in `weight`),
+  images and attachments as page resources, links between pages as `relref`s
+  that Hugo checks at build time, and a README documenting every front matter
+  field. No layouts or site configuration — those stay yours.
+- **Page content as Markdown, HTML, or both.** Every exporter takes
+  `--html markdown|mixed|html|raw` (console: "Page content as"). `mixed` writes
+  each part of a page as Markdown only when that shows exactly what the
+  original did, and as cleaned HTML otherwise; the export reports how many
+  parts stayed HTML. `html` writes cleaned HTML; `raw` writes the HTML as
+  captured, not cleaned. Links, images and template-syntax escaping are handled
+  in every mode.
+
+### Changed
+- The Jekyll exporter now defaults to `mixed`: tables with merged or coloured
+  cells, sized images, figures and coloured text keep their layout as HTML
+  instead of being flattened. `--html markdown` gives the previous output.
+  Obsidian still defaults to Markdown, unchanged.
+
 ## 0.1.11 — 2026-09-25
 
 ### Security fixes — please upgrade

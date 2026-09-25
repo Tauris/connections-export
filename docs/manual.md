@@ -155,23 +155,27 @@ The sections above summarize the shape reconstruction needs; the full document �
 
 For most people the export they want is the **PDF** — a document to keep, print or send, produced right from the Reader. This section is about something different, and a bit more involved: turning a capture into a **Markdown project you can edit and re-home** into another tool. It is aimed at people who are comfortable with developer tools; if the PDF is all you need, you can happily skip the rest of this section.
 
-Two such exporters ship today, on an equal footing — **Obsidian** and **Jekyll**. Both read the same capture and write a folder of Markdown next to it; they differ only in what that folder is shaped for.
+Three such exporters ship today, on an equal footing — **Obsidian**, **Jekyll** and **Hugo**. All three read the same capture and write a folder of Markdown next to it; they differ only in what that folder is shaped for.
 
 - **[Obsidian](https://obsidian.md)** is a free, local Markdown notes app. The export is an Obsidian *vault* — a linked, browsable knowledge base you open and edit on your own machine, with the community's structure and cross-links preserved as `[[wikilinks]]`.
 - **[Jekyll](https://jekyllrb.com)** is a static-site generator: it turns a folder of Markdown into a plain website. The export is a Jekyll *site* you can preview locally and publish anywhere static files are served — [GitHub Pages](https://pages.github.com), for instance.
+- **[Hugo](https://gohugo.io)** is another static-site generator. The export is Hugo *content* — the pages, images and files, and nothing else — to drop into a Hugo site you already have, with your own theme and configuration.
 
-Obsidian and Jekyll are **independent, third-party applications**, not part of this tool and not affiliated with it. These exporters are provided purely for convenience, to write formats those tools can read; providing them is **not an endorsement** of either, and this project makes no claim about them. Each is governed by its own licence and terms — obtain and use it from its own project. The names are the property of their respective owners.
+Obsidian, Jekyll and Hugo are **independent, third-party applications**, not part of this tool and not affiliated with it. These exporters are provided purely for convenience, to write formats those tools can read; providing them is **not an endorsement** of any of them, and this project makes no claim about them. Each is governed by its own licence and terms — obtain and use it from its own project. The names are the property of their respective owners.
 
-**From the console.** Open an archive in the Reader, then use **Export → “Advanced — developer formats”** and choose **Export Obsidian vault** or **Export Jekyll site**. Each writes a folder beside the archive (`…-obsidian-vault` / `…-jekyll-site`) and tells you exactly where. The advanced section is tucked away on purpose, so the everyday PDF export stays front and centre.
+**From the console.** Open an archive in the Reader, then use **Export → “Advanced — developer formats”** and choose **Export Obsidian vault**, **Export Jekyll site** or **Export Hugo content**. Each writes a folder beside the archive (`…-obsidian-vault` / `…-jekyll-site` / `…-hugo-content`) and tells you exactly where, and how much of the page content stayed HTML (see [Page content](#man-export-html)). **Page content as** above the buttons chooses how pages are written; leave it on *Default for the format* unless you have a reason. The advanced section is tucked away on purpose, so the everyday PDF export stays front and centre.
 
-**From the command line**, the same two exporters are one command:
+**From the command line**, the same three exporters are one command:
 
 ```
 connections-export ingest --format obsidian --archive PATH/TO/ARCHIVE --output PATH/TO/VAULT
 connections-export ingest --format jekyll   --archive PATH/TO/ARCHIVE --output PATH/TO/SITE
+connections-export ingest --format hugo     --archive PATH/TO/ARCHIVE --output PATH/TO/CONTENT
 ```
 
-`--archive` is an archive directory (the one holding `manifest.jsonl` and `blobs/`) or a `.zip` of one; `--package` takes a package written by `connections-export package` instead. Either flag accepts either kind — the directory says what it is — and `--author` narrows the output to one person's content. Nothing is read from or sent to the source deployment during an export — it only ever touches what is on disk. Both exporters work from a plain install — the executable has them built in, and a `pip`/`uv` install includes what they need (`markdownify`) as a base dependency, so no extra is required.
+Add `--html markdown`, `--html mixed`, `--html html` or `--html raw` to choose how page content is written ([below](#man-export-html)).
+
+`--archive` is an archive directory (the one holding `manifest.jsonl` and `blobs/`) or a `.zip` of one; `--package` takes a package written by `connections-export package` instead. Either flag accepts either kind — the directory says what it is — and `--author` narrows the output to one person's content. Nothing is read from or sent to the source deployment during an export — it only ever touches what is on disk. All three exporters work from a plain install — the executable has them built in, and a `pip`/`uv` install includes what they need (`markdownify`) as a base dependency, so no extra is required.
 
 ### <a id="man-export-obsidian"></a>Obsidian — a linked vault
 
@@ -180,6 +184,25 @@ The Obsidian exporter converts a capture into a vault. Every wiki becomes one no
 ### <a id="man-export-jekyll"></a>Jekyll — a publishable site
 
 The Jekyll exporter writes a site fragment: dated Markdown files under `_posts/`, with images under `assets/images/imported/`, ready to drop into a Jekyll site whose `_config.yml` and layouts you own. It is the shape a static-site generator expects, so `jekyll serve` previews it locally and a push to a [GitHub Pages](https://pages.github.com) repository publishes it. It is the right choice when the goal is a public, browsable website rather than a private notebook — the same captured content, aimed at a different destination.
+
+### <a id="man-export-hugo"></a>Hugo — content for your own site
+
+The Hugo exporter writes **content only**: a `content/` folder, and a `README.md` beside it. There are no layouts, no theme and no `hugo.toml` — those belong to your site. Copy or merge the `content/` folder into your site's own `content/` folder, at its root, and build.
+
+Each wiki, blog, forum, file library and Highlights area becomes a section (`content/wikis/<wiki>/`, `content/blogs/<blog>/`, `content/forums/<forum>/`, `content/files/<library>/`, `content/highlights/<community>/`). A wiki's page tree becomes nested *page bundles*: a page with sub-pages is a folder with an `_index.md`, a page without one a folder with an `index.md`, and `weight` in the front matter keeps the wiki's own order. Blog posts, forum topics and Highlights pages are one folder each; a topic's replies appear beneath it as nested headings, comments beneath a page. Every image and attachment is copied **into the folder of the page that shows it**, so Hugo publishes it next to that page; a library's files sit in the library's folder, listed on its page. Anything never captured shows as a visible marker.
+
+Links between exported pages are Hugo `relref` links, which Hugo resolves through your site's own address settings and checks when it builds — a link to a page that is not there stops the build rather than publishing a dead link. They name paths from the root of `content/`, which is why the folder goes in at the root. The front matter carries the title, dates, tags and weight Hugo itself uses, and, under `params`, where each item came from (`source_url`), what it is (`kind`), its community, author and comment count; the `README.md` lists every field. A file whose name Hugo would treat as a page of the site (`.md`, `.html` and the like) gets `.txt` added to its name, so it is published as the file it is.
+
+### <a id="man-export-html"></a>Page content — Markdown, HTML, or both
+
+Markdown is simple to read and edit, but it cannot say everything a page in Connections can. A table with merged cells or coloured cells, a picture shown at a particular size, a coloured word or a figure with a caption has no Markdown spelling — converted anyway, the words survive and the layout does not. So each exporter lets you choose how page content is written:
+
+- **Markdown** (`--html markdown`) — everything converted to Markdown. Easiest to edit; loses what Markdown cannot express. The default for **Obsidian**, where you will mostly be editing.
+- **Markdown with HTML where needed** (`--html mixed`) — each part of a page (a paragraph, a heading, a list, a table…) is converted to Markdown, then the exporter checks that the Markdown shows *exactly* what the original did. Where it does, the part is written as Markdown; where anything would be lost, that part is written as HTML instead, cleaned of anything that could run. Most text ends up as Markdown and only the parts that need it stay HTML — the export reports how many. The default for **Jekyll** and **Hugo**, where the result is a web page.
+- **HTML** (`--html html`) — every page written as cleaned HTML inside the Markdown file: scripts, event handlers, embedded documents and page-wide stylesheets removed, everything else kept.
+- **HTML as captured** (`--html raw`) — the HTML exactly as it came from Connections, **not cleaned**. It can contain scripts or anything else its authors wrote; if you publish it, that is your responsibility.
+
+In every choice, links between exported pages and pictures still point at the exported copies, and text that a site generator would otherwise treat as its own instructions (Jekyll's `{{ … }}`, Hugo's `{{< … >}}`) is still written so that it only ever shows as text. **Hugo** leaves HTML out of a page unless the site allows it: for the HTML parts to appear, your site's configuration needs `markup.goldmark.renderer.unsafe = true`. Whether to allow that is your site's decision; the Hugo export's `README.md` says the same.
 
 ### <a id="man-export-new"></a>Building a new exporter
 
@@ -231,7 +254,7 @@ Two limits, both deliberate. Only a link that names the document's **bytes** is 
 
 ### <a id="man-external-images"></a>Images from other websites, in the reader and in the PDF
 
-An image a page shows from another website stays a reference to that website everywhere the archive goes. The **reader** shows it the way any browser would — loaded from where it lives, when it can be reached. The **Obsidian** and **Jekyll** exports keep its address.
+An image a page shows from another website stays a reference to that website everywhere the archive goes. The **reader** shows it the way any browser would — loaded from where it lives, when it can be reached. The **Obsidian**, **Jekyll** and **Hugo** exports keep its address.
 
 The **PDF** asks, because a PDF is a copy that travels without the web. **Export → Include external images** is ticked by default: such images are fetched when you export, put into the PDF, and each is **marked where it sits** — a dashed frame captioned _External image E1 · the website_ — so it can be told apart on paper, not only on screen. A **small image in running text** — an icon, an emoji, a status badge, anything shown at 48 pixels or less, a size you can change under **Settings → Small external images** — gets a lighter mark instead: a small superscript _E1_ after it, like a footnote number, so the line reads as it did. The size the page gives the image decides; when it gives none, the image's own size does, and an image whose size cannot be told is marked as a full one. An **External content** page at the end (listed in the table of contents) gives every E-number with its full original address, the page it first appears on, and whether it could be retrieved. An image that could not be fetched is marked in place with its address instead of disappearing.
 
@@ -273,7 +296,7 @@ connections-export open my-export.zip
 
 Both zip layouts work: the archive's files at the top of the zip, and the archive nested under one folder — which is what Windows' "Send to → Compressed folder" and the **Save as .zip** button both produce. You do not have to know which one you have.
 
-**A directory is read/write; a `.zip` is read-only.** Both browse identically in the Reader, and both export to PDF, Obsidian and Jekyll. The one difference is that a directory can be _extended_: "Extend & update" can add a component it never captured, or bring it up to date, because it writes back into the folder. A `.zip` cannot be written into, so "Extend & update" refuses in words rather than appearing to run and landing nowhere — unpack it to a folder to add to it. So keep the working copy as a directory, and make a `.zip` when you want to store or send a finished snapshot.
+**A directory is read/write; a `.zip` is read-only.** Both browse identically in the Reader, and both export to PDF, Obsidian, Jekyll and Hugo. The one difference is that a directory can be _extended_: "Extend & update" can add a component it never captured, or bring it up to date, because it writes back into the folder. A `.zip` cannot be written into, so "Extend & update" refuses in words rather than appearing to run and landing nowhere — unpack it to a folder to add to it. So keep the working copy as a directory, and make a `.zip` when you want to store or send a finished snapshot.
 
 **Reading a `.zip` in place is efficient** when the file is actually on the machine: the console reads it by random access — the two small index files when it opens, then images only as you view the pages that use them — so it never unpacks the whole thing or loads it into memory. Two cases are slower and worth knowing. An **online-only cloud file** (OneDrive "Files On-Demand") is downloaded in full by the operating system the first time any byte is read; a **live network share** turns each of those random reads into a network round-trip. For either, a large archive is quicker if you let it download once — copy it to a local disk, or open it from a link, which fetches it a single time — rather than reading it repeatedly over the wire. A `.zip` that is synced and available offline is just a local file, and none of this applies.
 
@@ -401,7 +424,7 @@ Run `connections-export` with no arguments and you get this console, in a browse
 | `serve` | Start this console. `--open` opens a browser at it. |
 | `open` | Open an existing archive or package to read and export — no capture, so no deployment needed. |
 | `pdf` | Render an archive or package to PDF. |
-| `ingest` | Reconstruct a capture into another tool: an Obsidian vault, or a Jekyll site fragment. |
+| `ingest` | Reconstruct a capture into another tool: an Obsidian vault, a Jekyll site fragment, or Hugo content. |
 | `package` | Write a capture’s portable interchange package, for an ingester of your own. |
 | `style` | Show or dump the PDF stylesheet, and list every setting in it. |
 | `licenses` | What is inside this build and under what terms, with the licence texts. |
@@ -448,7 +471,7 @@ These need no deployment: they work from an archive or a package.
 | `pdf --fidelity` | Render through the original system’s own stylesheets instead of the portable ones. Needs the deployment. |
 | `pdf --css FILE` | Your own stylesheet, appended after the captured pages’ own CSS so it wins. |
 | `pdf --no-external-images` | Leave images from other websites out of the PDF, keeping their addresses; by default they are included, marked, and listed on an External content page. [More](#man-external-images) |
-| `ingest --archive DIR --output DIR` | Reconstruct a capture into a developer format: `--format obsidian` writes an Obsidian vault, `--format jekyll` a Jekyll site. `--package` takes a package instead of an archive. |
+| `ingest --archive DIR --output DIR` | Reconstruct a capture into a developer format: `--format obsidian` writes an Obsidian vault, `--format jekyll` a Jekyll site, `--format hugo` Hugo content. `--html` (`markdown`, `mixed`, `html` or `raw`) chooses how page content is written ([more](#man-export-html)). `--package` takes a package instead of an archive. |
 | `package --archive DIR --output DIR` | Write the portable interchange package for a capture — for an ingester of your own, or to hand to someone who has never seen this tool. |
 | `style --dump` | Write the whole stylesheet out to edit. `--marks` lists the header and footer settings. |
 

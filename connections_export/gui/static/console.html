@@ -519,11 +519,21 @@
           <button class="btn" id="r-live-pdf" title="Render from the live HCL system via browser.&#10;Works without a prior import — drag a page URL onto this button."><svg class="icon" aria-hidden="true"><use href="#i-globe"/></svg> Live PDF from source</button>
           <details class="dev-export" id="r-dev-export">
             <summary>Advanced — developer formats</summary>
-            <p class="dev-export-note">For re-homing the content into a tool you edit yourself. If a PDF is all you need, you can ignore this. Both write a folder of Markdown next to the archive.</p>
-            <p class="dev-export-note"><a href="https://obsidian.md" target="_blank" rel="noopener noreferrer">Obsidian</a> is a local Markdown notes app — the vault opens as a linked, browsable knowledge base. <a href="https://jekyllrb.com" target="_blank" rel="noopener noreferrer">Jekyll</a> builds a static website from Markdown you can publish anywhere.</p>
-            <p class="dev-export-note">Obsidian and Jekyll are independent, third-party applications, not part of this tool. These exporters are provided for convenience only and are not an endorsement; each application is governed by its own licence and terms.</p>
+            <p class="dev-export-note">For re-homing the content into a tool you edit yourself. If a PDF is all you need, you can ignore this. Each writes a folder of Markdown next to the archive.</p>
+            <p class="dev-export-note"><a href="https://obsidian.md" target="_blank" rel="noopener noreferrer">Obsidian</a> is a local Markdown notes app — the vault opens as a linked, browsable knowledge base. <a href="https://jekyllrb.com" target="_blank" rel="noopener noreferrer">Jekyll</a> builds a static website from Markdown you can publish anywhere. <a href="https://gohugo.io" target="_blank" rel="noopener noreferrer">Hugo</a> is another static-site generator; the export is content only, to drop into a Hugo site you already have.</p>
+            <p class="dev-export-note">Obsidian, Jekyll and Hugo are independent, third-party applications, not part of this tool. These exporters are provided for convenience only and are not an endorsement; each application is governed by its own licence and terms.</p>
+            <label class="menu-field" for="r-dev-html-mode" title="How each page's text and layout is written. Markdown is easiest to edit but drops what it cannot express (merged table cells, colours, image sizes). &quot;Where needed&quot; keeps exactly those parts as HTML. &quot;As captured&quot; writes the HTML unchanged, scripts included: publishing it is then your responsibility. The default is Markdown for Obsidian, and Markdown with HTML where needed for Jekyll and Hugo.">Page content as
+              <select id="r-dev-html-mode" aria-label="How page content is written">
+                <option value="" selected>Default for the format</option>
+                <option value="markdown">Markdown</option>
+                <option value="mixed">Markdown with HTML where needed</option>
+                <option value="html">HTML</option>
+                <option value="raw">HTML as captured (not cleaned)</option>
+              </select>
+            </label>
             <button class="btn" id="r-export-obsidian" title="Write an Obsidian vault (one Markdown note per page/post/topic) beside the archive."><svg class="icon" aria-hidden="true"><use href="#i-layers"/></svg> Export Obsidian vault</button>
             <button class="btn" id="r-export-jekyll" title="Write a Jekyll site (dated Markdown posts and assets) beside the archive."><svg class="icon" aria-hidden="true"><use href="#i-globe"/></svg> Export Jekyll site</button>
+            <button class="btn" id="r-export-hugo" title="Write Hugo content (a content/ folder of sections and page bundles) beside the archive, for a Hugo site of your own."><svg class="icon" aria-hidden="true"><use href="#i-globe"/></svg> Export Hugo content</button>
             <div class="dev-export-result" id="r-dev-export-result" hidden></div>
           </details>
         </div>

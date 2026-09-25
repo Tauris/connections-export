@@ -25,6 +25,14 @@ from pathlib import Path
 from urllib.parse import quote, unquote, urlsplit
 
 from connections_export.derive.model import DerivedItem, Interchange
+from connections_export.ingest._bodies import (
+    BlockCounts,
+    BodyTarget,
+    attribute_sentinels,
+    html_mode_for,
+    render_body,
+    rewrite_tree,
+)
 from connections_export.ingest._markdown import (
     BRACKET_TEXT,
     code_span,
@@ -55,6 +63,11 @@ class JekyllStats:
     assets_written: int = 0
     assets_missing: int = 0
     notes: list[str] | None = None
+    #: How bodies were written (`_bodies.HTML_MODES`), and how many of their
+    #: blocks went out as Markdown and as HTML.
+    html_mode: str = "mixed"
+    markdown_blocks: int = 0
+    html_blocks: int = 0
 
 
 class _AssetStore:
@@ -154,98 +167,169 @@ def _code(value: str) -> str:
     return _liquid_escape(code_span(value))
 
 
-def _rewrite_body(
-    item: DerivedItem,
-    store: _AssetStore,
-    id_to_permalink: dict[str, str],
-    file_targets: dict[str, str] | None = None,
-) -> str:
-    from bs4 import BeautifulSoup  # noqa: PLC0415 - optional ingester dependency
+class _Body:
+    """One body's images and links, pointed at sentinels and resolved after
+    conversion. A present image is copied and remembered by position, not by
+    name: the name goes through the converter's URL encoding, and back out of
+    it, otherwise."""
 
-    soup = BeautifulSoup(item.content_html or "", "html.parser")
-    embedded: list[str] = []
-    assets = {}
-    for asset in item.assets:
-        assets[asset.original_href] = asset
-        if asset.resolved_url:
-            assets[asset.resolved_url] = asset
+    def __init__(
+        self,
+        item: DerivedItem,
+        store: _AssetStore,
+        id_to_permalink: dict[str, str],
+        file_targets: dict[str, str] | None,
+    ) -> None:
+        self.store = store
+        self.id_to_permalink = id_to_permalink
+        self.files = file_targets or {}
+        self.embedded: list[str] = []
+        self.assets = {}
+        for asset in item.assets:
+            self.assets[asset.original_href] = asset
+            if asset.resolved_url:
+                self.assets[asset.resolved_url] = asset
+        self.links = {link.original_href: link for link in item.links}
 
-    for image in soup.find_all("img"):
-        asset = assets.get(image.get("src", ""))
+    def image(self, src: str) -> str | None:
+        asset = self.assets.get(src)
         if asset is None:
-            continue
+            return None
         if asset.present and asset.blob_hash:
-            name = store.store(
+            name = self.store.store(
                 blob_hash=asset.blob_hash,
                 preferred_name=Path(urlsplit(asset.original_href).path).name or "image",
                 content_type=None,
             )
             if name:
-                # By position, not by name: the name goes through the
-                # converter's URL encoding, and back out of it, otherwise.
-                image["src"] = f"{_ASSET}{len(embedded)}"
-                embedded.append(name)
-            else:
-                image["src"] = f"{_MISSING}{asset.original_href}"
-        else:
-            image["src"] = f"{_MISSING}{asset.original_href}"
-            store._stats.assets_missing += 1
+                self.embedded.append(name)
+                return f"{_ASSET}{len(self.embedded) - 1}"
+            return f"{_MISSING}{asset.original_href}"
+        self.store._stats.assets_missing += 1
+        return f"{_MISSING}{asset.original_href}"
 
-    files = file_targets or {}
-    links = {link.original_href: link for link in item.links}
-    for anchor in soup.find_all("a"):
-        link = links.get(anchor.get("href", ""))
+    def link(self, href: str) -> str | None:
+        link = self.links.get(href)
         if not link or link.scope != "in_export":
-            continue
-        if link.target_page_id in id_to_permalink:
-            anchor["href"] = f"{_LINK}{link.target_page_id}"
-        elif link.target_file_id and link.target_file_id in files:
+            return None
+        if link.target_page_id in self.id_to_permalink:
+            return f"{_LINK}{link.target_page_id}"
+        if link.target_file_id and link.target_file_id in self.files:
             # A body link to a community file, resolved to the copied file.
-            anchor["href"] = f"{_FILELINK}{link.target_file_id}"
+            return f"{_FILELINK}{link.target_file_id}"
+        return None
+
+    def finish_markdown(self, markdown: str) -> str:
+        """Escaped for Liquid -- before the sentinels below add the
+        exporter's own Liquid, which must survive."""
+        markdown = _liquid_escape(markdown)
+        embedded, id_to_permalink, files = self.embedded, self.id_to_permalink, self.files
+
+        def replace_asset(match: re.Match[str]) -> str:
+            position = int(match.group(2))
+            if position >= len(embedded):
+                # A body that spelled out a sentinel itself; nothing was stored.
+                return _code(f"[image not captured: {match.group(2)}]")
+            return f"![{match.group(1)}]({_liquid_url(_asset_path(embedded[position]))})"
+
+        markdown = re.sub(
+            r"!\[" + BRACKET_TEXT + r"\]\(" + re.escape(_ASSET) + r"([0-9]{1,9})\)",
+            replace_asset,
+            markdown,
+        )
+        markdown = re.sub(
+            r"!\[" + BRACKET_TEXT + r"\]\(" + re.escape(_MISSING) + r"([^)]+)\)",
+            lambda match: _code(f"[image not captured: {match.group(2)}]"),
+            markdown,
+        )
+
+        def replace_link(match: re.Match[str]) -> str:
+            text, target = match.group(1), unquote(match.group(2))
+            permalink = id_to_permalink.get(target, target)
+            return f"[{text}]({_liquid_url(permalink)})"
+
+        markdown = re.sub(
+            r"\[" + BRACKET_TEXT + r"\]\(" + re.escape(_LINK) + r"([^)]+)\)", replace_link, markdown
+        )
+
+        def replace_file(match: re.Match[str]) -> str:
+            text, fid = match.group(1), unquote(match.group(2))
+            name = files.get(fid, fid)
+            return f"[{text or _text(name)}]({_liquid_url(f'/assets/files/{name}')})"
+
+        return re.sub(
+            r"\[" + BRACKET_TEXT + r"\]\(" + re.escape(_FILELINK) + r"([^)]+)\)",
+            replace_file,
+            markdown,
+        )
+
+    def finish_html(self, html: str) -> str:
+        """An HTML block: escaped for Liquid, then its sentinel attributes
+        replaced by the exporter's own `relative_url` Liquid -- which holds no
+        double quote, so it stays inside the attribute."""
+        html = _liquid_escape(html)
+
+        def asset(_attribute: str, value: str) -> str:
+            if value.isdigit() and int(value) < len(self.embedded):
+                return _liquid_url(_asset_path(self.embedded[int(value)]))
+            return "#"
+
+        def link(_attribute: str, value: str) -> str:
+            permalink = self.id_to_permalink.get(value)
+            return _liquid_url(permalink) if permalink else "#"
+
+        def file(_attribute: str, value: str) -> str:
+            name = self.files.get(value)
+            return _liquid_url(f"/assets/files/{name}") if name else "#"
+
+        html = attribute_sentinels(html, _ASSET, asset)
+        html = attribute_sentinels(html, _LINK, link)
+        return attribute_sentinels(html, _FILELINK, file)
+
+    def target(self) -> BodyTarget:
+        return BodyTarget(
+            convert=lambda html: _md()(html, heading_style="ATX", bullets="-", escape_braces=True),
+            finish_markdown=self.finish_markdown,
+            finish_html=self.finish_html,
+            missing_prefix=_MISSING,
+        )
+
+
+def _rewrite_body(
+    item: DerivedItem,
+    store: _AssetStore,
+    id_to_permalink: dict[str, str],
+    file_targets: dict[str, str] | None = None,
+    *,
+    mode: str = "markdown",
+    counts: BlockCounts | None = None,
+) -> str:
+    body = _Body(item, store, id_to_permalink, file_targets)
+    if mode != "markdown":
+        return render_body(
+            item.content_html,
+            mode,
+            rewrite=lambda tree: rewrite_tree(tree, image=body.image, link=body.link),
+            target=body.target(),
+            counts=counts if counts is not None else BlockCounts(),
+        )
+
+    from bs4 import BeautifulSoup  # noqa: PLC0415 - optional ingester dependency
+
+    soup = BeautifulSoup(item.content_html or "", "html.parser")
+    for image in soup.find_all("img"):
+        new = body.image(image.get("src", ""))
+        if new is not None:
+            image["src"] = new
+    for anchor in soup.find_all("a"):
+        new = body.link(anchor.get("href", ""))
+        if new is not None:
+            anchor["href"] = new
 
     # Escaped for Markdown (kramdown attribute lists included) by the
-    # converter, then for Liquid -- before the sentinels below add the
-    # exporter's own Liquid, which must survive.
+    # converter, then for Liquid by `finish_markdown`.
     markdown = _md()(str(soup), heading_style="ATX", bullets="-", escape_braces=True)
-    markdown = _liquid_escape(markdown)
-
-    def replace_asset(match: re.Match[str]) -> str:
-        position = int(match.group(2))
-        if position >= len(embedded):
-            # A body that spelled out a sentinel itself; nothing was stored.
-            return _code(f"[image not captured: {match.group(2)}]")
-        return f"![{match.group(1)}]({_liquid_url(_asset_path(embedded[position]))})"
-
-    markdown = re.sub(
-        r"!\[" + BRACKET_TEXT + r"\]\(" + re.escape(_ASSET) + r"([0-9]{1,9})\)",
-        replace_asset,
-        markdown,
-    )
-    markdown = re.sub(
-        r"!\[" + BRACKET_TEXT + r"\]\(" + re.escape(_MISSING) + r"([^)]+)\)",
-        lambda match: _code(f"[image not captured: {match.group(2)}]"),
-        markdown,
-    )
-
-    def replace_link(match: re.Match[str]) -> str:
-        text, target = match.group(1), unquote(match.group(2))
-        permalink = id_to_permalink.get(target, target)
-        return f"[{text}]({_liquid_url(permalink)})"
-
-    markdown = re.sub(
-        r"\[" + BRACKET_TEXT + r"\]\(" + re.escape(_LINK) + r"([^)]+)\)", replace_link, markdown
-    )
-
-    def replace_file(match: re.Match[str]) -> str:
-        text, fid = match.group(1), unquote(match.group(2))
-        name = files.get(fid, fid)
-        return f"[{text or _text(name)}]({_liquid_url(f'/assets/files/{name}')})"
-
-    return re.sub(
-        r"\[" + BRACKET_TEXT + r"\]\(" + re.escape(_FILELINK) + r"([^)]+)\)",
-        replace_file,
-        markdown,
-    )
+    return body.finish_markdown(markdown)
 
 
 def _frontmatter(item: DerivedItem, *, kind: str, date_value: str, tags: list[str]) -> str:
@@ -362,12 +446,20 @@ def _write_files_index(
 
 
 def write_jekyll_site(
-    interchange: Interchange, blob_reader: BlobReader, out_dir: Path | str
+    interchange: Interchange,
+    blob_reader: BlobReader,
+    out_dir: Path | str,
+    *,
+    html_mode: str = "mixed",
 ) -> JekyllStats:
-    """Write a generic Jekyll site fragment under ``out_dir``."""
+    """Write a generic Jekyll site fragment under ``out_dir``. ``html_mode``
+    is how bodies are written (``_bodies.HTML_MODES``); an HTML block reaches
+    the built page because kramdown passes block-level HTML through."""
+    mode = html_mode_for("jekyll", html_mode)
+    counts = BlockCounts()
     root = Path(out_dir)
     posts_dir = root / "_posts"
-    stats = JekyllStats()
+    stats = JekyllStats(html_mode=mode)
     store = _AssetStore(root / "assets" / "images" / "imported", blob_reader, stats)
     # Files get their own dir and share the stats. Built before the posts so a
     # body link to a file resolves to the copied file, not the dead URL.
@@ -398,18 +490,21 @@ def write_jekyll_site(
 
     posts_dir.mkdir(parents=True, exist_ok=True)
     for kind, item, path, date_value, tags in paths:
-        body = _rewrite_body(item, store, id_to_permalink, file_targets).strip()
+        body = _rewrite_body(
+            item, store, id_to_permalink, file_targets, mode=mode, counts=counts
+        ).strip()
         content = _frontmatter(item, kind=kind, date_value=date_value, tags=tags)
         content += body + "\n" if body else ""
         content += _attachments(item, store) + _comments(item)
         path.write_text(content.rstrip() + "\n", encoding="utf-8")
 
     stats.posts = len(paths)
+    stats.markdown_blocks, stats.html_blocks = counts.markdown, counts.html
     _write_files_index(root, interchange, file_targets, stats)
     return stats
 
 
-def from_source(source, out_dir: Path | str) -> JekyllStats:
+def from_source(source, out_dir: Path | str, *, html_mode: str = "mixed") -> JekyllStats:
     """Write a Jekyll site fragment from any compatible model source."""
     interchange = source.get_model()
     if interchange is None:
@@ -419,4 +514,4 @@ def from_source(source, out_dir: Path | str) -> JekyllStats:
         result = source.get_blob(blob_hash)
         return result[0] if result is not None else None
 
-    return write_jekyll_site(interchange, blob_reader, out_dir)
+    return write_jekyll_site(interchange, blob_reader, out_dir, html_mode=html_mode)

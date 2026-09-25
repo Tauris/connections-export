@@ -2582,24 +2582,28 @@
   }
   $("r-pdf").addEventListener("click", exportPdf);
 
-  // Developer-format export (Obsidian vault / Jekyll site). Unlike PDF these
-  // write a folder next to the archive, so the result is a path, not a
-  // download — reported inline rather than as a browser save.
+  // Developer-format export (Obsidian vault / Jekyll site / Hugo content).
+  // Unlike PDF these write a folder next to the archive, so the result is a
+  // path, not a download — reported inline rather than as a browser save.
+  const DEV_FORMAT_LABELS = { obsidian: "Obsidian vault", jekyll: "Jekyll site", hugo: "Hugo content" };
   async function exportDevFormat(format, btn) {
     const label = btn.textContent;
     const result = $("r-dev-export-result");
+    // Empty means "the format's own default", which the server picks.
+    const modeSelect = $("r-dev-html-mode");
+    const htmlMode = modeSelect && modeSelect.value ? modeSelect.value : null;
     btn.disabled = true;
     btn.textContent = "⏳ Writing…";
     if (result) {
       result.hidden = false;
       result.className = "dev-export-result";
-      result.textContent = "Writing the " + (format === "jekyll" ? "Jekyll site" : "Obsidian vault") + "…";
+      result.textContent = "Writing the " + (DEV_FORMAT_LABELS[format] || format) + "…";
     }
     try {
       const res = await fetch("/api/ingest", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ format }),
+        body: JSON.stringify({ format, html_mode: htmlMode }),
       });
       const j = await res.json().catch(() => ({}));
       if (!res.ok || !j.ok) {
@@ -2613,7 +2617,10 @@
         : "";
       if (result) {
         result.className = "dev-export-result is-done";
-        result.textContent = j.label + " written to " + j.path + " — " + j.summary + "." + gaps;
+        const raw = j.html_mode === "raw"
+          ? " The page HTML was written as captured, not cleaned — publishing it is your responsibility."
+          : "";
+        result.textContent = j.label + " written to " + j.path + " — " + j.summary + "." + gaps + raw;
       }
       notify(j.label + " written to " + j.path, "Export complete");
     } catch (_) {
@@ -2628,6 +2635,8 @@
     $("r-export-obsidian").addEventListener("click", (e) => exportDevFormat("obsidian", e.currentTarget));
   if ($("r-export-jekyll"))
     $("r-export-jekyll").addEventListener("click", (e) => exportDevFormat("jekyll", e.currentTarget));
+  if ($("r-export-hugo"))
+    $("r-export-hugo").addEventListener("click", (e) => exportDevFormat("hugo", e.currentTarget));
 
   // Accumulating, abortable export preview (page by page). Same viewer the
   // dashboard "Live PDF preview" uses; here it renders the reader's model.

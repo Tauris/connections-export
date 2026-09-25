@@ -46,12 +46,13 @@ _ALLOWED_SUFFIXES = {
     "mozilla.github.io",
     "pagedjs.org",
     "apache.org",  # the Apache-2.0 text's canonical URL, in the same file
-    # The two developer-export targets. The manual (served inside the console)
-    # introduces Obsidian and Jekyll and links to their homepages so a reader
-    # can learn what they are. Public informational pages for the tools this
-    # exports INTO -- not a deployment, and never contacted by the tool itself.
+    # The developer-export targets. The manual (served inside the console)
+    # introduces Obsidian, Jekyll and Hugo and links to their homepages so a
+    # reader can learn what they are. Public informational pages for the tools
+    # this exports INTO -- not a deployment, and never contacted by the tool.
     "obsidian.md",
     "jekyllrb.com",
+    "gohugo.io",
 }
 
 

@@ -373,9 +373,20 @@ def _drop_active_elements(tree: lxml.html.HtmlElement) -> None:
             element.drop_tag()
 
 
-def _clean_attributes(tree: lxml.html.HtmlElement) -> None:
+def _clean_attributes(
+    tree: lxml.html.HtmlElement,
+    *,
+    resource_ok: Callable[[str], bool] = _safe_resource,
+    mark_unembedded_images: bool = True,
+) -> None:
     """Handlers, loading attributes, script URLs and remote CSS -- run AFTER
-    the image and link rewrites, so it also sees what they produced."""
+    the image and link rewrites, so it also sees what they produced.
+
+    `resource_ok` and `mark_unembedded_images` are the two places where a
+    printed page and a published one differ: the PDF loads nothing, so only an
+    embedded resource may stay; an exported site links its images as files and
+    may show one from elsewhere, so there a resource is judged like a link
+    (`clean_for_export`)."""
     for element in list(tree.iter()):
         if not isinstance(element.tag, str):
             continue
@@ -393,15 +404,42 @@ def _clean_attributes(tree: lxml.html.HtmlElement) -> None:
             elif key in _URL_ATTRIBUTES:
                 navigation = name in _NAVIGATION_ELEMENTS and key != "src"
                 if not (
-                    _safe_navigation(value)
-                    if navigation or key == "cite"
-                    else _safe_resource(value)
+                    _safe_navigation(value) if navigation or key == "cite" else resource_ok(value)
                 ):
                     del element.attrib[attr]
         # An image nobody rewrote (a comment has no asset list) would be
         # fetched at render time; its address is kept as visible text instead.
-        if name == "img" and not _is_data_image(element.get("src") or ""):
+        if (
+            mark_unembedded_images
+            and name == "img"
+            and not _is_data_image(element.get("src") or "")
+        ):
             _replace(element, _missing_image_marker(tree, original_src))
+
+
+def drop_active_for_export(tree: lxml.html.HtmlElement) -> None:
+    """The first half of `clean_for_export`, run BEFORE an exporter rewrites
+    images and links -- so an image inside a dropped `<noscript>` is never
+    copied into the export for something nobody will see.
+
+    Beyond the PDF's list, a `<style>` element and HTML comments go too: a
+    stylesheet inside a page body applies to the whole page of the site it is
+    published in, theme included, and a comment shows nothing."""
+    _drop_active_elements(tree)
+    for element in list(tree.iter()):
+        if element is tree:
+            continue
+        if not isinstance(element.tag, str) or element.tag.lower() == "style":
+            element.drop_tree()
+
+
+def clean_for_export(tree: lxml.html.HtmlElement) -> None:
+    """The second half, run AFTER the rewrites: the PDF's allowlist cleaner
+    (handlers, loading attributes, script URLs, remote CSS), except that a
+    resource is judged like a link -- an exported image is a file beside the
+    page, not a data URI -- and an image nothing rewrote keeps its `src`, as
+    it does in the Markdown the same exporter writes."""
+    _clean_attributes(tree, resource_ok=_safe_navigation, mark_unembedded_images=False)
 
 
 def _strip_scripts_and_handlers(tree: lxml.html.HtmlElement) -> None:

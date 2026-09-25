@@ -36,17 +36,27 @@ converter (`markdownify`) is a base dependency, so a plain install runs it.
 
 from __future__ import annotations
 
+import posixpath
 import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 
 from connections_export.derive.model import (
     DerivedForumTopic,
     DerivedItem,
     DerivedPage,
     Interchange,
+)
+from connections_export.ingest._bodies import (
+    BlockCounts,
+    BodyTarget,
+    attribute_sentinels,
+    html_mode_for,
+    html_mode_note,
+    render_body,
+    rewrite_tree,
 )
 from connections_export.ingest._markdown import (
     BRACKET_TEXT,
@@ -95,6 +105,11 @@ class VaultStats:
     assets_written: int = 0
     assets_missing: int = 0
     notes: list[str] = field(default_factory=list)
+    #: How bodies were written (`_bodies.HTML_MODES`), and how many of their
+    #: blocks went out as Markdown and as HTML.
+    html_mode: str = "markdown"
+    markdown_blocks: int = 0
+    html_blocks: int = 0
 
     @property
     def items(self) -> int:
@@ -270,28 +285,25 @@ def _frontmatter(page: DerivedItem, *, kind: str | None = None) -> str:
     return "\n".join(lines)
 
 
-def _rewrite_body(
+def _resolvers(
     page: DerivedItem,
     store: _AssetStore,
     id_to_title: dict[str, str],
-    file_targets: dict[str, str] | None = None,
-) -> str:
-    """Rewrite the page body's `<img>`/`<a>` to sentinels (resolved after
-    markdownify), copying present image blobs and mapping in-export links.
-    Uses `markdownify`'s own BeautifulSoup so parsing matches the converter."""
-    from bs4 import BeautifulSoup  # noqa: PLC0415 - ships with markdownify
-
-    soup = BeautifulSoup(page.content_html or "", "html.parser")
-
+    files: dict[str, str],
+) -> tuple[Callable[[str], str | None], Callable[[str], str | None]]:
+    """What a body's `<img src>` and `<a href>` become: a sentinel resolved
+    after conversion, or `None` to leave it. Copies present image blobs and
+    maps in-export links as a side effect, whichever tree they are run on."""
     asset_by_href = {}
     for asset in page.assets:
         asset_by_href[asset.original_href] = asset
         if asset.resolved_url:
             asset_by_href[asset.resolved_url] = asset
-    for img in soup.find_all("img"):
-        asset = asset_by_href.get(img.get("src", ""))
+
+    def image(src: str) -> str | None:
+        asset = asset_by_href.get(src)
         if asset is None:
-            continue
+            return None
         if asset.present and asset.blob_hash:
             name = store.store(
                 blob_hash=asset.blob_hash,
@@ -299,24 +311,111 @@ def _rewrite_body(
                 content_type=None,
             )
             # store already counts a present-but-uncaptured blob as missing
-            img["src"] = f"{_EMBED}{name}" if name else f"{_MISSING}{asset.original_href}"
-        else:
-            img["src"] = f"{_MISSING}{asset.original_href}"
-            store.note_missing()
+            return f"{_EMBED}{name}" if name else f"{_MISSING}{asset.original_href}"
+        store.note_missing()
+        return f"{_MISSING}{asset.original_href}"
 
-    files = file_targets or {}
     link_by_href = {link.original_href: link for link in page.links}
-    for a in soup.find_all("a"):
-        link = link_by_href.get(a.get("href", ""))
-        if not link or link.scope != "in_export":
-            continue  # hcl_deployment / external links keep their href (§7 step 5)
-        if link.target_page_id in id_to_title:
-            a["href"] = f"{_LINK}{link.target_page_id}"
-        elif link.target_file_id and link.target_file_id in files:
+
+    def link(href: str) -> str | None:
+        found = link_by_href.get(href)
+        if not found or found.scope != "in_export":
+            return None  # hcl_deployment / external links keep their href (§7 step 5)
+        if found.target_page_id in id_to_title:
+            return f"{_LINK}{found.target_page_id}"
+        if found.target_file_id and found.target_file_id in files:
             # A body link to a community file -- "especially referenced":
             # it now points at the file this exporter wrote, not the dead
             # deployment URL.
-            a["href"] = f"{_FILELINK}{link.target_file_id}"
+            return f"{_FILELINK}{found.target_file_id}"
+        return None
+
+    return image, link
+
+
+@dataclass
+class _HtmlContext:
+    """What a body written in an HTML mode needs beyond the Markdown path:
+    where its note is, so an HTML link can be a relative path (a wikilink
+    means nothing inside HTML)."""
+
+    mode: str
+    counts: BlockCounts
+    note: Path
+    id_to_note: dict[str, Path]
+    vault: Path
+
+
+def _relative(target: Path, note: Path) -> str:
+    return quote(posixpath.relpath(target.as_posix(), note.parent.as_posix()), safe="/-._~")
+
+
+def _body_target(
+    context: _HtmlContext, id_to_title: dict[str, str], files: dict[str, str]
+) -> BodyTarget:
+    attachments = context.vault / "attachments"
+
+    def resolve(prefix: str):
+        def inner(_attribute: str, value: str) -> str:
+            if prefix == _EMBED:
+                return _relative(attachments / value, context.note)
+            if prefix == _FILELINK and value in files:
+                return _relative(attachments / files[value], context.note)
+            if prefix == _LINK and value in context.id_to_note:
+                return _relative(context.id_to_note[value], context.note)
+            return "#"
+
+        return inner
+
+    def finish_html(html: str) -> str:
+        for prefix in (_EMBED, _LINK, _FILELINK):
+            html = attribute_sentinels(html, prefix, resolve(prefix))
+        return html
+
+    return BodyTarget(
+        convert=lambda html: _md()(html, heading_style="ATX", bullets="-"),
+        finish_markdown=lambda markdown: _apply_sentinels(markdown, id_to_title, files),
+        finish_html=finish_html,
+        missing_prefix=_MISSING,
+    )
+
+
+def _rewrite_body(
+    page: DerivedItem,
+    store: _AssetStore,
+    id_to_title: dict[str, str],
+    file_targets: dict[str, str] | None = None,
+    context: _HtmlContext | None = None,
+) -> str:
+    """Rewrite the page body's `<img>`/`<a>` to sentinels (resolved after
+    markdownify), copying present image blobs and mapping in-export links.
+    Uses `markdownify`'s own BeautifulSoup so parsing matches the converter.
+
+    In an HTML mode (`context`) the body goes through `_bodies.render_body`
+    instead, with the same sentinels."""
+    files = file_targets or {}
+    image, link = _resolvers(page, store, id_to_title, files)
+    if context is not None and context.mode != "markdown":
+        rendered = render_body(
+            page.content_html,
+            context.mode,
+            rewrite=lambda tree: rewrite_tree(tree, image=image, link=link),
+            target=_body_target(context, id_to_title, files),
+            counts=context.counts,
+        )
+        return rendered + "\n" if rendered else ""
+
+    from bs4 import BeautifulSoup  # noqa: PLC0415 - ships with markdownify
+
+    soup = BeautifulSoup(page.content_html or "", "html.parser")
+    for img in soup.find_all("img"):
+        new = image(img.get("src", ""))
+        if new is not None:
+            img["src"] = new
+    for a in soup.find_all("a"):
+        new = link(a.get("href", ""))
+        if new is not None:
+            a["href"] = new
 
     markdown = _md()(str(soup), heading_style="ATX", bullets="-")
     return _apply_sentinels(markdown, id_to_title, files)
@@ -425,6 +524,7 @@ def _replies_md(
     store: _AssetStore,
     id_to_title: dict[str, str],
     file_targets: dict[str, str] | None = None,
+    context: _HtmlContext | None = None,
 ) -> str:
     """The reply tree beneath a topic, nested by `child_ids`.
 
@@ -447,7 +547,7 @@ def _replies_md(
         answer = " · *answer*" if "answer" in (reply.flags or []) else ""
         lines.append(f"{'#' * min(3 + depth, 6)} {who}{when}{answer}")
         lines.append("")
-        body = _rewrite_body(reply, store, id_to_title, file_targets).strip()
+        body = _rewrite_body(reply, store, id_to_title, file_targets, context).strip()
         lines.append(body if body else "*(no text)*")
         attachments = _attachments_md(reply, store)
         if attachments:
@@ -545,15 +645,48 @@ def _write_files_index(
     (vault / "Files.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
+def _note_paths(vault: Path, interchange: Interchange) -> dict[str, Path]:
+    """Every note's path by item id, as `write_obsidian_vault` lays them out --
+    what a link in an HTML block points at."""
+    paths: dict[str, Path] = {}
+    for wiki in interchange.wikis:
+        wiki_dir = _safe(wiki.title or wiki.label, wiki.id)
+        for page in wiki.pages.values():
+            paths[page.id] = _note_path(vault, wiki_dir, page, wiki.pages)
+    for blog in interchange.blogs:
+        blog_dir = vault / _safe(blog.title or blog.handle or blog.id, blog.id)
+        for post in blog.posts.values():
+            paths[post.id] = blog_dir / (_safe(post.title or post.id, post.id) + ".md")
+    for forum in interchange.forums:
+        forum_dir = vault / _safe(forum.title or forum.id, forum.id)
+        for topic in forum.topics.values():
+            paths[topic.id] = forum_dir / (_safe(topic.title or topic.id, topic.id) + ".md")
+    return paths
+
+
 def write_obsidian_vault(
-    interchange: Interchange, blob_reader: BlobReader, out_dir: Path | str
+    interchange: Interchange,
+    blob_reader: BlobReader,
+    out_dir: Path | str,
+    *,
+    html_mode: str = "markdown",
 ) -> VaultStats:
     """Write `interchange`'s wikis, blogs and forums as an Obsidian vault
     under `out_dir`. `blob_reader` resolves an asset/attachment `blob_hash`
-    to bytes (or `None` if absent). Returns what was written."""
+    to bytes (or `None` if absent). `html_mode` is how bodies are written
+    (`_bodies.HTML_MODES`). Returns what was written."""
+    mode = html_mode_for("obsidian", html_mode)
     vault = Path(out_dir)
     vault.mkdir(parents=True, exist_ok=True)
-    stats = VaultStats()
+    stats = VaultStats(html_mode=mode)
+    counts = BlockCounts()
+    id_to_note = _note_paths(vault, interchange) if mode != "markdown" else {}
+
+    def context(note: Path) -> _HtmlContext | None:
+        if mode == "markdown":
+            return None
+        return _HtmlContext(mode, counts, note, id_to_note, vault)
+
     store = _AssetStore(vault / "attachments", blob_reader, stats)
 
     # Obsidian resolves [[Title]] by note name across the whole vault, so
@@ -593,7 +726,7 @@ def write_obsidian_vault(
         for page in wiki.pages.values():
             note = _note_path(vault, wiki_dir, page, wiki.pages)
             note.parent.mkdir(parents=True, exist_ok=True)
-            body = _rewrite_body(page, store, id_to_title, file_targets)
+            body = _rewrite_body(page, store, id_to_title, file_targets, context(note))
             heading = f"# {escape_inline(page.title or page.label or page.id)}\n\n"
             note.write_text(
                 _frontmatter(page)
@@ -616,7 +749,7 @@ def write_obsidian_vault(
         ordered += [post for pid, post in blog.posts.items() if pid not in blog.post_ids]
         for post in ordered:
             note = blog_dir / (_safe(post.title or post.id, post.id) + ".md")
-            body = _rewrite_body(post, store, id_to_title, file_targets)
+            body = _rewrite_body(post, store, id_to_title, file_targets, context(note))
             heading = f"# {escape_inline(post.title or post.id)}\n\n"
             note.write_text(
                 _frontmatter(post, kind="post") + heading + body + _comments_md(post),
@@ -632,18 +765,19 @@ def write_obsidian_vault(
         ordered_topics += [t for tid, t in forum.topics.items() if tid not in forum.topic_ids]
         for topic in ordered_topics:
             note = forum_dir / (_safe(topic.title or topic.id, topic.id) + ".md")
-            body = _rewrite_body(topic, store, id_to_title, file_targets)
+            body = _rewrite_body(topic, store, id_to_title, file_targets, context(note))
             heading = f"# {escape_inline(topic.title or topic.id)}\n\n"
             note.write_text(
                 _frontmatter(topic, kind="topic")
                 + heading
                 + body
                 + _attachments_md(topic, store)
-                + _replies_md(topic, store, id_to_title, file_targets),
+                + _replies_md(topic, store, id_to_title, file_targets, context(note)),
                 encoding="utf-8",
             )
             stats.topics += 1
 
+    stats.markdown_blocks, stats.html_blocks = counts.markdown, counts.html
     _write_files_index(vault, interchange, file_targets, stats)
     _write_readme(vault, interchange, stats)
     return stats
@@ -691,6 +825,8 @@ def _write_readme(vault: Path, interchange: Interchange, stats: VaultStats) -> N
             lines.append("")
     if interchange.file_libraries:
         lines += ["## Files", "", "- [[Files]] — every library and its documents", ""]
+    if stats.html_mode != "markdown":
+        lines += [html_mode_note(stats.html_mode, stats.markdown_blocks, stats.html_blocks), ""]
     if stats.assets_missing:
         lines.append(
             f"> {stats.assets_missing} referenced asset(s) were not captured in the "
@@ -699,7 +835,7 @@ def _write_readme(vault: Path, interchange: Interchange, stats: VaultStats) -> N
     (vault / "README.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
-def from_source(source, out_dir: Path | str) -> VaultStats:
+def from_source(source, out_dir: Path | str, *, html_mode: str = "markdown") -> VaultStats:
     """Write a vault from anything that answers `get_model()` and
     `get_blob(hash)` -- a `ModelSource` over a package, an archive
     directory, or a zipped archive. The author filter, if any, is the
@@ -716,7 +852,7 @@ def from_source(source, out_dir: Path | str) -> VaultStats:
         result = source.get_blob(blob_hash)
         return result[0] if result is not None else None
 
-    return write_obsidian_vault(interchange, blob_reader, out_dir)
+    return write_obsidian_vault(interchange, blob_reader, out_dir, html_mode=html_mode)
 
 
 def from_package(

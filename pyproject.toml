@@ -1,6 +1,6 @@
 [project]
 name = "connections-export"
-version = "0.1.11"
+version = "0.1.12"
 description = "Lossless, archive-first export of HCL Connections content — wikis, blogs, and forums — to a portable, self-documenting package"
 readme = "README.md"
 requires-python = ">=3.12"

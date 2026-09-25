@@ -121,3 +121,31 @@ def test_the_manual_explains_the_external_images_choice():
     assert "small image in running text" in MANUAL
     assert "Small external images" in MANUAL
     assert "pdf_small_image_px" in MANUAL
+
+
+def test_the_manual_explains_how_page_content_is_written():
+    """Each exporter asks how to write a page: the manual must name all four
+    choices, which is whose default, that the mixed one checks rather than
+    guesses, that raw is not cleaned and is the publisher's responsibility,
+    and what a Hugo site needs before its HTML shows."""
+    assert 'id="man-export-html"' in MANUAL
+    for flag in ("--html markdown", "--html mixed", "--html html", "--html raw"):
+        assert flag in MANUAL
+    for label in ("Markdown with HTML where needed", "HTML as captured"):
+        assert label in MANUAL
+    assert "The default for <strong>Obsidian</strong>" in MANUAL
+    assert "The default for <strong>Jekyll</strong> and <strong>Hugo</strong>" in MANUAL
+    assert "shows <em>exactly</em> what the original did" in MANUAL
+    assert "<strong>not cleaned</strong>" in MANUAL and "your responsibility" in MANUAL
+    assert "markup.goldmark.renderer.unsafe = true" in MANUAL
+
+
+def test_the_manual_puts_hugo_beside_obsidian_and_jekyll():
+    assert 'id="man-export-hugo"' in MANUAL
+    assert "connections-export ingest --format hugo" in MANUAL
+    assert (
+        "Obsidian, Jekyll and Hugo are <strong>independent, third-party applications</strong>"
+        in (MANUAL)
+    )
+    assert "<strong>not an endorsement</strong>" in MANUAL
+    assert "Export Hugo content" in MANUAL
