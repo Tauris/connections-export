@@ -98,3 +98,28 @@ def test_cli_jekyll_format_writes_posts(tmp_path, capsys):
     assert code == 0
     assert (tmp_path / "site" / "_posts").is_dir()
     assert "post(s)" in capsys.readouterr().out
+
+
+def test_every_post_names_the_layout_that_shows_its_title_author_and_charset(tmp_path):
+    """Without `layout:` a post renders bare: the theme never runs, so the
+    title and author (front matter only a layout prints) are missing, and so
+    is the page head with `<meta charset="utf-8">` -- a browser then guesses
+    the encoding and shows a typographic apostrophe as "â€˜". Forum topics
+    were the case reported (issues #3 and #4); every post gets it."""
+    from connections_export.cli import ingest_main
+    from connections_export.gui.demo import run_demo
+
+    archive = tmp_path / "archive"
+    run_demo(lambda _event: None, archive_dir=archive, delay=0)
+    assert (
+        ingest_main(
+            ["--format", "jekyll", "--archive", str(archive), "--output", str(tmp_path / "site")]
+        )
+        == 0
+    )
+
+    posts = sorted((tmp_path / "site" / "_posts").glob("*.md"))
+    assert any("kind: forum" in p.read_text(encoding="utf-8") for p in posts)
+    for post in posts:
+        front = post.read_text(encoding="utf-8").split("\n---\n", 1)[0]
+        assert "\nlayout: post" in front, post.name

@@ -166,3 +166,29 @@ def html_to_text(html: str | None) -> str:
     from bs4 import BeautifulSoup  # noqa: PLC0415 - ships with markdownify
 
     return BeautifulSoup(html or "", "html.parser").get_text()
+
+
+def readable_time(value: str) -> str:
+    """An ISO timestamp (`YYYY-MM-DDTHH:MM:SSZ`) as `YYYY-MM-DD HH:MM UTC`;
+    anything that is not one as it came."""
+    from datetime import UTC, datetime  # noqa: PLC0415
+
+    try:
+        moment = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return value
+    if moment.tzinfo is None:
+        return moment.strftime("%Y-%m-%d %H:%M")
+    return moment.astimezone(UTC).strftime("%Y-%m-%d %H:%M UTC")
+
+
+def quote_block(text: str, depth: int) -> list[str]:
+    """`text` as lines inside `depth` nested blockquotes (unchanged at 0).
+
+    How a reply to a reply is indented in every export: a deeper heading
+    only shows in the Markdown, while every renderer and theme indents a
+    quote, heading and body together."""
+    if depth <= 0:
+        return text.split("\n")
+    marker = ">" * depth
+    return [f"{marker} {line}".rstrip() for line in text.split("\n")] + [""]

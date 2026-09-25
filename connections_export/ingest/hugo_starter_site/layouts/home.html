@@ -1,0 +1,26 @@
+{{/*
+  The front page: every top-level section this export holds, each with its
+  containers (wikis, blogs, forums, libraries, Highlights areas) and how much
+  each one holds. Sections come in the exporter's order, set by `weight`.
+*/}}
+{{ define "main" }}
+  <header class="page-header">
+    <h1>{{ site.Title }}</h1>
+    <p class="lead">Content exported from HCL Connections.</p>
+  </header>
+  <div class="cards">
+    {{- range site.Sections.ByWeight }}
+    <section class="card">
+      <h2><a href="{{ .RelPermalink }}">{{ .Title }}</a></h2>
+      <ul>
+        {{- range .Sections.ByWeight }}
+        <li>
+          <a href="{{ .RelPermalink }}">{{ .LinkTitle }}</a>
+          <span class="count">{{ partial "count.html" . }}</span>
+        </li>
+        {{- end }}
+      </ul>
+    </section>
+    {{- end }}
+  </div>
+{{ end }}

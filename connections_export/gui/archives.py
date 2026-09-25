@@ -534,15 +534,38 @@ def is_demo_archive(name: str) -> bool:
     )
 
 
+#: The folder-name endings the developer-format exports are written under
+#: (`gui/routes/ingest.py`), beside the archive they came from -- which puts
+#: them in the archives folder whenever the archive is there.
+EXPORT_FOLDER_SUFFIXES = ("-hugo-content", "-jekyll-site", "-obsidian-vault")
+
+#: What an archive or a package holds at its root, whatever its name.
+_ARCHIVE_MARKERS = ("manifest.jsonl", "interchange.json")
+
+
+def _is_export(child: Path) -> bool:
+    """A Hugo content folder, Jekyll site or Obsidian vault this tool wrote.
+
+    Recognised by the name the export gives it, and only when nothing in it
+    makes it an archive: a folder that holds one stays an archive, whatever
+    someone named it."""
+    return child.name.endswith(EXPORT_FOLDER_SUFFIXES) and not any(
+        (child / marker).exists() for marker in _ARCHIVE_MARKERS
+    )
+
+
 def _is_archive_candidate(child: Path) -> bool:
     """A direct child that could be an archive: a directory, or a `.zip`.
 
     A zip moves cleanly where a directory of thousands of small files does
     not, which is the whole reason it is readable at all -- so someone handed
     one has only to drop it here. Whether it really holds an archive is
-    settled by reading it, not by its name.
+    settled by reading it, not by its name -- except for the exports this tool
+    writes beside the archives, which are not archives at all.
     """
-    return child.is_dir() or (child.is_file() and child.suffix.lower() == ".zip")
+    if child.is_dir():
+        return not _is_export(child)
+    return child.is_file() and child.suffix.lower() == ".zip"
 
 
 def writable_archive(archive_dir: Path) -> bool:

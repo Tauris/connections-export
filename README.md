@@ -45,6 +45,10 @@ content stays faithful today and portable for whatever you move it into next.
   publish), or **Hugo content** (pages to drop into a Hugo site of your own).
   Page content can be written as Markdown, as HTML, or as Markdown with HTML
   kept only where Markdown would lose something.
+  Several archives can be combined into one export: the most recent capture of
+  anything held twice wins, and links between them become internal links.
+  A Hugo export can add a starter site to view it with `hugo server` — or,
+  when Hugo is installed, straight from the console with Preview with Hugo.
   [Obsidian](https://obsidian.md), [Jekyll](https://jekyllrb.com) and
   [Hugo](https://gohugo.io) are independent third-party applications; the
   exporters are provided for convenience and are not an endorsement of any of

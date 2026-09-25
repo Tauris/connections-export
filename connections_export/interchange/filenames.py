@@ -157,8 +157,10 @@ def collision_key(name: str) -> str:
     return unicodedata.normalize("NFC", name).casefold()
 
 
-def _disambiguator(file_id: str) -> str:
-    """A short, stable tag for a file, derived from its identity.
+def disambiguator(file_id: str) -> str:
+    """A short, stable tag for a file -- or any item with a Connections id --
+    derived from its identity. The exporters tag a colliding note or folder
+    name with it too, so one rule tells same-named things apart everywhere.
 
     Deliberately not a counter. A counter numbers files by the order they
     arrived, so an unchanged library can produce different names on a second
@@ -191,7 +193,7 @@ def plan(entries: list[tuple[str, str]]) -> list[PlannedName]:
     for file_id, (name, reasons) in cleaned.items():
         if counts[collision_key(name)] > 1:
             stem, suffix = _split_extension(name)
-            name = f"{stem} ({_disambiguator(file_id)}){suffix}"
+            name = f"{stem} ({disambiguator(file_id)}){suffix}"
             reasons = (*reasons, REASON_COLLISION)
         planned[file_id] = PlannedName(file_id, originals[file_id], name, reasons)
 
@@ -205,7 +207,7 @@ def plan(entries: list[tuple[str, str]]) -> list[PlannedName]:
             planned[file_id] = PlannedName(
                 file_id,
                 entry.original,
-                f"{stem} ({_disambiguator(file_id + '!')}){suffix}",
+                f"{stem} ({disambiguator(file_id + '!')}){suffix}",
                 entry.reasons
                 if REASON_COLLISION in entry.reasons
                 else (*entry.reasons, REASON_COLLISION),

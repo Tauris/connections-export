@@ -1,0 +1,32 @@
+{{/*
+  A list of items -- blog posts, forum topics, the pages under a tag -- each
+  with its title, author, date and a short plain-text summary.
+
+  Called with the pages to list, already in the order wanted. The summary is
+  Hugo's own (the start of the body), reduced to plain text: a listing is for
+  choosing what to read, and a table or an image cut in half is not.
+  Forum topics also show their reply count and any status flags.
+*/}}
+<ul class="entries">
+  {{- range . }}
+  <li>
+    <h3><a href="{{ .RelPermalink }}">{{ .LinkTitle }}</a></h3>
+    <p class="byline">
+      {{- with .Params.author }}<span>{{ . }}</span>{{ end }}
+      {{- if not .Date.IsZero }}<span><time datetime="{{ .Date.Format "2006-01-02T15:04:05Z07:00" }}">{{ .Date.Format "2 January 2006" }}</time></span>{{ end }}
+      {{- if eq .Params.kind "forum_topic" }}
+      {{- $replies := int (or .Params.reply_count 0) }}
+      <span>{{ $replies }} {{ if eq $replies 1 }}reply{{ else }}replies{{ end }}</span>
+      {{- end }}
+      {{- range .Params.flags }}<span class="flag">{{ . }}</span>{{ end }}
+    </p>
+    {{- /* Plain text all the way: cut by characters, then escaped once, by
+           html/template, on the way out. */}}
+    {{- $summary := .Summary | plainify | htmlUnescape | strings.TrimSpace }}
+    {{- if gt (strings.RuneCount $summary) 220 }}{{ $summary = printf "%s…" (substr $summary 0 220 | strings.TrimSpace) }}{{ end }}
+    {{- with $summary }}
+    <p class="summary">{{ . }}</p>
+    {{- end }}
+  </li>
+  {{- end }}
+</ul>

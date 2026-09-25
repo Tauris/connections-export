@@ -1,0 +1,42 @@
+{{/*
+  One piece of content -- a wiki page, blog post, forum topic or Highlights
+  page -- with its breadcrumb, title, facts and body.
+
+  A wiki page is drawn beside its wiki's whole page tree, the current page
+  marked, as the wiki itself shows it; a page with sub-pages also lists them
+  under its body. The wiki is found by walking up the ancestors to the one
+  whose `params.kind` is `wiki`. The sub-pages list holds only the direct
+  children, in wiki order; the tree beside it shows the rest.
+*/}}
+{{- $wiki := false }}
+{{- if eq .Params.kind "wiki_page" }}
+  {{- range .Ancestors }}{{ if eq .Params.kind "wiki" }}{{ $wiki = . }}{{ end }}{{ end }}
+{{- end }}
+<div class="{{ if $wiki }}with-tree{{ else }}single{{ end }}">
+  {{- with $wiki }}
+  <aside class="tree" aria-label="Pages in this wiki">
+    <p class="tree-title"><a href="{{ .RelPermalink }}">{{ .LinkTitle }}</a></p>
+    {{- partial "tree.html" (dict "node" . "current" $) }}
+  </aside>
+  {{- end }}
+  <article>
+    {{- partial "crumbs.html" . }}
+    <header class="page-header">
+      <h1>{{ .Title }}</h1>
+      {{- partial "facts.html" . }}
+    </header>
+    <div class="content">
+      {{- .Content }}
+    </div>
+    {{- if and .IsSection .Pages }}
+    <nav class="children" aria-label="Sub-pages">
+      <h2>Sub-pages</h2>
+      <ul>
+        {{- range .Pages.ByWeight }}
+        <li><a href="{{ .RelPermalink }}">{{ .LinkTitle }}</a></li>
+        {{- end }}
+      </ul>
+    </nav>
+    {{- end }}
+  </article>
+</div>

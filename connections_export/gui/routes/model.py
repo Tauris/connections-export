@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import markdown
 from fastapi.responses import JSONResponse, Response
 
@@ -112,16 +114,35 @@ def register(
     def current_archive() -> JSONResponse:
         """Which archive the reader/ingest is currently working with: the
         backing directory's name, its state (pending/partial/complete), and
-        whether this is the demo. `name` is null before anything is loaded.
-        Lets the GUI always show which archive is in view, in both sections."""
-        from connections_export.gui.archives import is_demo_archive  # noqa: PLC0415
+        whether this is the demo. `name` is null before anything is loaded;
+        `archive_name` is the name it has in the archives folder, or null
+        when it is not filed there. Lets the GUI always show which archive is
+        in view, in both sections, and export it."""
+        from connections_export.gui import support  # noqa: PLC0415
+        from connections_export.gui.archives import (  # noqa: PLC0415
+            is_demo_archive,
+            resolve_archive,
+        )
 
         source = app.state.model_source
         root = source.package_root()
         name = root.name if root is not None else None
+        # The name the Archives screen lists it under -- what the guided
+        # export addresses it by, and combines it with others by -- or null
+        # for an archive opened from elsewhere (a dropped folder or zip),
+        # which the export then takes as "the open archive".
+        listed = None
+        if name:
+            filed = resolve_archive(support.ARCHIVES_BASE, name)
+            try:
+                if filed is not None and filed.resolve() == Path(root).resolve():
+                    listed = name
+            except (OSError, RuntimeError):
+                listed = None
         return JSONResponse(
             {
                 "name": name,
+                "archive_name": listed,
                 "state": source.model_state(),
                 # How the server was started. Kept because callers already
                 # read it, but it does not answer "is what I am looking at

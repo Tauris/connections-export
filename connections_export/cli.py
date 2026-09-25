@@ -823,15 +823,31 @@ def ingest_main(argv: Sequence[str] | None = None, *, env: Mapping[str, str] | N
     of one -- as readily as a written package. `--package` and `--archive`
     are both accepted and both auto-detected: either flag with either kind
     of directory works, and says which it found.
+
+    Either may be repeated: everything given is combined into ONE export
+    (`derive.combine` -- the most recent capture of anything held twice wins,
+    and links between the archives become internal). One of them alone
+    behaves exactly as it always has.
     """
     parser = argparse.ArgumentParser(prog="connections-export ingest")
     parser.add_argument("--format", choices=["obsidian", "jekyll", "hugo"], default="obsidian")
-    source = parser.add_mutually_exclusive_group(required=True)
-    source.add_argument(
+    # One list for both flags, so the order they were given in is kept -- it
+    # is the tie-break when two archives were captured at the same moment.
+    parser.add_argument(
         "--archive",
-        help="An archive a capture wrote (the directory holding manifest.jsonl), or a .zip of one.",
+        dest="inputs",
+        action="append",
+        help=(
+            "An archive a capture wrote (the directory holding manifest.jsonl), or a .zip "
+            "of one. Repeat to combine several archives into one export."
+        ),
     )
-    source.add_argument("--package", help="A written interchange package directory.")
+    parser.add_argument(
+        "--package",
+        dest="inputs",
+        action="append",
+        help="A written interchange package directory. May be repeated, like --archive.",
+    )
     parser.add_argument("--output", required=True, help="Target vault/output dir to write.")
     parser.add_argument(
         "--html",
@@ -847,21 +863,44 @@ def ingest_main(argv: Sequence[str] | None = None, *, env: Mapping[str, str] | N
         ),
     )
     parser.add_argument(
+        "--starter-site",
+        action="store_true",
+        help=(
+            "Hugo only: also write a starter site beside content/ -- hugo.toml, templates "
+            "and a stylesheet -- so the export can be viewed with `hugo server`. Off by "
+            "default: content/ alone is what goes into an existing site."
+        ),
+    )
+    parser.add_argument(
         "--author",
         dest="filter_author",
         default=None,
         help="Only ingest content this user authored/participated in (name or user id).",
     )
     args = parser.parse_args(argv)
+    if not args.inputs:
+        parser.error("one of the arguments --archive --package is required")
+    if args.starter_site and args.format != "hugo":
+        parser.error("--starter-site is for --format hugo only")
 
     from connections_export.archive.source import ArchiveSourceError  # noqa: PLC0415
     from connections_export.derive import DeriveError  # noqa: PLC0415
     from connections_export.ingest import from_source_for_format  # noqa: PLC0415
 
+    report = None
     try:
-        source_obj, kind = _content_source(args.archive or args.package, author=args.filter_author)
+        if len(args.inputs) == 1:
+            source_obj, kind = _content_source(args.inputs[0], author=args.filter_author)
+        else:
+            source_obj = _combined_source(args.inputs, author=args.filter_author)
+            report = source_obj.combine_report
+            kind = f"{len(args.inputs)} combined archives"
         stats = from_source_for_format(
-            source_obj, args.output, args.format, html_mode=args.html_mode
+            source_obj,
+            args.output,
+            args.format,
+            html_mode=args.html_mode,
+            starter_site=args.starter_site,
         )
     except (ValueError, DeriveError, ArchiveSourceError) as error:
         print(f"connections-export ingest: {error}", file=sys.stderr)
@@ -893,9 +932,56 @@ def ingest_main(argv: Sequence[str] | None = None, *, env: Mapping[str, str] | N
         )
     if stats.html_mode == "raw":
         print("  raw HTML was NOT cleaned: whoever publishes it is responsible for its content.")
+    if getattr(stats, "starter_site", False):
+        print(
+            f"  starter site written beside content/: run `hugo server` in {args.output} "
+            "to view it."
+        )
     if stats.assets_missing:
         print(f"  {stats.assets_missing} referenced asset(s) not captured (shown as visible gaps).")
+    disambiguated = getattr(stats, "disambiguated", None) or []
+    if disambiguated:
+        # Two different things titled alike are both kept; the reader should
+        # know some names carry a tag, and the README says which.
+        print(
+            f"  {len(disambiguated)} name(s) disambiguated (the same name as a different "
+            "note or folder; listed in the README)."
+        )
+    if report is not None:
+        print(f"  {report.summary()}.")
+        for container in report.containers:
+            others = ", ".join(label for label in container.archives if label != container.winner)
+            print(
+                f"  {container.kind} {container.title!r}: kept from {container.winner} "
+                f"(also in {others})"
+            )
+        for collision in report.collisions:
+            print(
+                f"  {collision.kind} {collision.id} from {collision.archive} is a different "
+                f"deployment's; kept apart as {collision.renamed_to}"
+            )
     return 0
+
+
+def _combined_source(paths: Sequence[str], *, author: str | None):
+    """One source for several archives or packages (`derive.combine`), each
+    labelled by its own folder or file name. An archive's capture times come
+    from its own run records; a package has none to offer."""
+    from connections_export.derive.combine import (  # noqa: PLC0415
+        CombinedSource,
+        input_from_source,
+        unique_labels,
+    )
+
+    labels = unique_labels(Path(path).name for path in paths)
+    inputs = []
+    for label, path in zip(labels, paths, strict=True):
+        try:
+            source, kind = _content_source(path, author=author)
+        except ValueError as error:
+            raise ValueError(f"{path}: {error}") from error
+        inputs.append(input_from_source(label, source, None if kind == "package" else path))
+    return CombinedSource(inputs)
 
 
 def package_main(argv: Sequence[str] | None = None, *, env: Mapping[str, str] | None = None) -> int:

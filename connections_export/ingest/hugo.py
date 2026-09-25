@@ -39,6 +39,10 @@ exporter's own ``relref``s, added after escaping, over paths it built itself.
 Front matter is YAML through the shared ``_yaml_scalar``, so no title can
 end it early; custom fields are under ``params:``, Hugo's own place for
 them. The README written beside ``content/`` documents every field.
+
+Asked for (``starter_site``), a small site to view the content with is
+written beside ``content/`` as well -- ``hugo_starter`` -- leaving
+``content/`` itself exactly what it is without one.
 """
 
 from __future__ import annotations
@@ -49,6 +53,7 @@ from datetime import datetime
 from pathlib import Path
 from urllib.parse import quote, unquote, urlsplit
 
+from connections_export.derive.combine import CombineReport
 from connections_export.derive.model import (
     DerivedForumTopic,
     DerivedItem,
@@ -65,13 +70,17 @@ from connections_export.ingest._bodies import (
     render_body,
     rewrite_tree,
 )
+from connections_export.ingest._combined import combined_section, several
 from connections_export.ingest._markdown import (
     BRACKET_TEXT,
     code_span,
     escape_inline,
     html_to_text,
+    quote_block,
+    readable_time,
     to_markdown,
 )
+from connections_export.ingest.hugo_starter import readme_section, write_starter_site
 from connections_export.ingest.obsidian import (
     BlobReader,
     _ext_for,
@@ -146,6 +155,8 @@ class HugoStats:
     html_mode: str = "mixed"
     markdown_blocks: int = 0
     html_blocks: int = 0
+    #: Whether the starter site (`hugo_starter`) was written beside `content/`.
+    starter_site: bool = False
     notes: list[str] = field(default_factory=list)
 
     @property
@@ -553,16 +564,19 @@ def _replies(topic: DerivedForumTopic, bundle: _Bundle, site: _Site, stats: Hugo
         rendered.add(reply_id)
         stats.replies += 1
         who = _text(reply.author or "Unknown")
-        when = f" · {_text(reply.created)}" if reply.created else ""
+        when = f" · {_text(readable_time(reply.created))}" if reply.created else ""
         answer = " · *answer*" if "answer" in (reply.flags or []) else ""
-        lines.append(f"{'#' * min(3 + depth, 6)} {who}{when}{answer}")
-        lines.append("")
+        # One heading level for every reply: the quote depth below shows the
+        # nesting, and headings shrinking level by level only made deep
+        # replies unreadable.
+        block = [f"### {who}{when}{answer}", ""]
         body = _Body(reply, bundle, site).render(reply.content_html)
-        lines.append(body if body else "*(no text)*")
-        lines.append("")
+        block.extend([body if body else "*(no text)*", ""])
         attachments = _attachments(reply, bundle, heading="**Attachments**")
         if attachments:
-            lines.extend([attachments, ""])
+            block.extend([attachments, ""])
+        # A reply to a reply goes one blockquote deeper per level.
+        lines.extend(quote_block("\n".join(block), depth))
         for child in reply.child_ids:
             render(child, depth + 1)
 
@@ -636,14 +650,27 @@ def write_hugo_content(
     out_dir: Path | str,
     *,
     html_mode: str = "mixed",
+    combined: CombineReport | None = None,
+    starter_site: bool = False,
 ) -> HugoStats:
     """Write `interchange` as Hugo content under `out_dir`: a `content/`
     tree and a `README.md` beside it describing the fields. `html_mode` is how
-    bodies are written (`_bodies.HTML_MODES`)."""
+    bodies are written (`_bodies.HTML_MODES`). `combined` is the report of
+    combining several archives into `interchange` (`derive.combine`): every
+    page then names the archive it came from, and the README lists them.
+    `starter_site` also writes a `hugo.toml`, templates and a stylesheet
+    beside `content/`, so the export can be viewed with `hugo server`."""
     mode = html_mode_for("hugo", html_mode)
+    combined = several(combined)
+
+    def origin(entity_id: str) -> dict:
+        # Only when several archives went in, so a single archive's content
+        # is exactly what it always was.
+        return {"source_archive": combined.origins.get(entity_id)} if combined else {}
+
     root = Path(out_dir)
     content = root / "content"
-    stats = HugoStats(html_mode=mode)
+    stats = HugoStats(html_mode=mode, starter_site=starter_site)
     counts = BlockCounts()
     site = _Site(page_files={}, file_targets={}, mode=mode, counts=counts)
 
@@ -756,6 +783,7 @@ def write_hugo_content(
                     "source_url": wiki.alternate_url,
                     "community": wiki.community_title,
                     "page_count": len(wiki.pages),
+                    **origin(wiki.id),
                 },
             ),
         )
@@ -778,6 +806,7 @@ def write_hugo_content(
                     comment_count=len(page.comments),
                     attachment_count=len(page.attachments),
                     version_count=len(page.versions),
+                    **origin(page.id),
                 ),
             )
             write(
@@ -800,6 +829,7 @@ def write_hugo_content(
                     "source_url": blog.alternate_url,
                     "community": blog.community_title,
                     "post_count": len(blog.posts),
+                    **origin(blog.id),
                 },
             ),
         )
@@ -818,6 +848,7 @@ def write_hugo_content(
                     blog=blog.title or blog.handle,
                     community=blog.community_title,
                     comment_count=len(post.comments),
+                    **origin(post.id),
                 ),
             )
             write(entry.directory / "index.md", _page(front, body, _comments(post)))
@@ -837,6 +868,7 @@ def write_hugo_content(
                     "source_url": forum.alternate_url,
                     "community": forum.community_title,
                     "topic_count": len(forum.topics),
+                    **origin(forum.id),
                 },
             ),
         )
@@ -858,6 +890,7 @@ def write_hugo_content(
                     community=forum.community_title,
                     flags=topic.flags,
                     reply_count=len(topic.replies),
+                    **origin(topic.id),
                 ),
             )
             write(entry.directory / "index.md", _page(front, body, attachments, replies))
@@ -891,6 +924,7 @@ def write_hugo_content(
                 "source_url": library.alternate_url,
                 "community": library.community_title,
                 "file_count": len(library.files),
+                **origin(library.id),
             },
         )
         write(directory / "_index.md", _page(front, "\n".join(lines)))
@@ -910,6 +944,7 @@ def write_hugo_content(
                     "community": area.community_title,
                     "placed": area.placed,
                     "initialized": area.initialized,
+                    **origin(area.id),
                 },
             ),
         )
@@ -927,6 +962,7 @@ def write_hugo_content(
                     "highlights_page",
                     community=area.community_title,
                     version_label=page.version_label,
+                    **origin(page.id),
                 ),
             )
             write(entry.directory / "index.md", _page(front, body))
@@ -934,8 +970,28 @@ def write_hugo_content(
 
     stats.markdown_blocks, stats.html_blocks = counts.markdown, counts.html
     root.mkdir(parents=True, exist_ok=True)
-    (root / "README.md").write_text(_readme(interchange, stats), encoding="utf-8")
+    if starter_site:
+        write_starter_site(root, title=_site_title(interchange, combined), html_mode=mode)
+    (root / "README.md").write_text(_readme(interchange, stats, combined), encoding="utf-8")
     return stats
+
+
+def _site_title(interchange: Interchange, combined: CombineReport | None) -> str:
+    """The starter site's title: the community, when everything exported is
+    from one, as it usually is; otherwise a plain description."""
+    containers = [
+        *interchange.wikis,
+        *interchange.blogs,
+        *interchange.forums,
+        *interchange.file_libraries,
+        *interchange.rich_content,
+    ]
+    communities = {c.community_title for c in containers if c.community_title}
+    if len(communities) == 1:
+        return communities.pop()
+    if combined is not None:
+        return f"Connections content from {len(combined.archives)} archives"
+    return "Connections content"
 
 
 # --- README -------------------------------------------------------------------------------
@@ -1006,13 +1062,24 @@ _FIELDS = (
 )
 
 
-def _field_table() -> str:
+#: Written only when several archives were combined into one export.
+_COMBINED_FIELD = (
+    "`params.source_archive`",
+    "every page, when several archives were combined",
+    "The archive this page's copy came from (the most recent capture of it).",
+)
+
+
+def _field_table(combined: bool = False) -> str:
     rows = ["| Field | Where | What it holds |", "| --- | --- | --- |"]
-    rows += [f"| {name} | {where} | {what} |" for name, where, what in _FIELDS]
+    fields = (*_FIELDS, _COMBINED_FIELD) if combined else _FIELDS
+    rows += [f"| {name} | {where} | {what} |" for name, where, what in fields]
     return "\n".join(rows) + "\n"
 
 
-def _readme(interchange: Interchange, stats: HugoStats) -> str:
+def _readme(
+    interchange: Interchange, stats: HugoStats, combined: CombineReport | None = None
+) -> str:
     source = f" of {code_span(interchange.base_url)}" if interchange.base_url else ""
     lines = [
         "# Hugo content",
@@ -1030,8 +1097,15 @@ def _readme(interchange: Interchange, stats: HugoStats) -> str:
         "",
         "## Using it",
         "",
-        "This folder is content only — no layouts, no theme, no `hugo.toml`. Your site "
-        "brings those. Copy or merge `content/` into your site's `content/` folder, at its "
+        (
+            "`content/` is the content, and all of it. The `hugo.toml`, `layouts/` and "
+            "`static/` beside it are the optional starter site (below), for viewing it; "
+            "an existing site brings its own. "
+            if stats.starter_site
+            else "This folder is content only — no layouts, no theme, no `hugo.toml`. Your "
+            "site brings those. "
+        )
+        + "Copy or merge `content/` into your site's `content/` folder, at its "
         "root: links between pages are `relref` shortcodes to paths from the root of "
         "`content/` (`/wikis/…/index.md`), which Hugo resolves through your own URL "
         "settings and checks at build time. Moved into a subfolder, those paths would no "
@@ -1082,8 +1156,12 @@ def _readme(interchange: Interchange, stats: HugoStats) -> str:
         "into `.Params` — a template reads `.Params.source_url`. On an older Hugo they "
         "are under `.Params.params`.",
         "",
-        _field_table(),
+        _field_table(combined is not None),
     ]
+    if stats.starter_site:
+        lines += readme_section()
+    if combined is not None:
+        lines += [*combined_section(combined, _text), ""]
     if stats.assets_missing:
         lines.append(
             f"{stats.assets_missing} referenced asset(s) were not captured — shown as "
@@ -1093,8 +1171,11 @@ def _readme(interchange: Interchange, stats: HugoStats) -> str:
     return "\n".join(lines)
 
 
-def from_source(source, out_dir: Path | str, *, html_mode: str = "mixed") -> HugoStats:
-    """Write Hugo content from any compatible model source."""
+def from_source(
+    source, out_dir: Path | str, *, html_mode: str = "mixed", starter_site: bool = False
+) -> HugoStats:
+    """Write Hugo content from any compatible model source -- with the
+    starter site beside it when `starter_site` is set."""
     interchange = source.get_model()
     if interchange is None:
         raise ValueError("nothing to ingest: the source holds no derivable content")
@@ -1103,4 +1184,11 @@ def from_source(source, out_dir: Path | str, *, html_mode: str = "mixed") -> Hug
         result = source.get_blob(blob_hash)
         return result[0] if result is not None else None
 
-    return write_hugo_content(interchange, blob_reader, out_dir, html_mode=html_mode)
+    return write_hugo_content(
+        interchange,
+        blob_reader,
+        out_dir,
+        html_mode=html_mode,
+        combined=getattr(source, "combine_report", None),
+        starter_site=starter_site,
+    )

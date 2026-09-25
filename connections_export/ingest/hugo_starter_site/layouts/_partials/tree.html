@@ -1,0 +1,25 @@
+{{/*
+  A wiki's page tree, as nested lists, from `node` down.
+
+  Called with a dict: `node` is the page whose children are listed (the wiki
+  itself, or a page with sub-pages), `current` the page being viewed, marked
+  so a reader sees where they are. Children are ordered by `weight`, which
+  the exporter sets to each page's position among its siblings in the wiki --
+  the order the wiki's own navigation showed. A page with sub-pages is a
+  branch bundle, a section to Hugo, so `.IsSection` is what says "recurse".
+*/}}
+{{- $current := .current }}
+{{- with .node.Pages.ByWeight }}
+<ul>
+  {{- range . }}
+  <li>
+    {{- if and $current (eq . $current) }}
+    <a href="{{ .RelPermalink }}" aria-current="page">{{ .LinkTitle }}</a>
+    {{- else }}
+    <a href="{{ .RelPermalink }}">{{ .LinkTitle }}</a>
+    {{- end }}
+    {{- if .IsSection }}{{ partial "tree.html" (dict "node" . "current" $current) }}{{ end }}
+  </li>
+  {{- end }}
+</ul>
+{{- end }}

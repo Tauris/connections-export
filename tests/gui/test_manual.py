@@ -149,3 +149,44 @@ def test_the_manual_puts_hugo_beside_obsidian_and_jekyll():
     )
     assert "<strong>not an endorsement</strong>" in MANUAL
     assert "Export Hugo content" in MANUAL
+
+
+def test_the_manual_explains_combining_several_archives():
+    """What combining does to overlap and to links, and how to do it from both
+    front ends -- the three things someone combining archives has to know."""
+    assert 'id="man-export-combine"' in MANUAL
+    assert "most recent capture wins" in MANUAL
+    assert "Links between the archives become internal" in MANUAL
+    assert "Export combined…" in MANUAL
+    assert "--archive PATH/TO/MARCH --archive PATH/TO/JUNE" in MANUAL
+
+
+def test_the_manual_walks_through_the_guided_exports_steps():
+    """The four steps by name, and the dry run called Check -- the word the
+    dialog uses, so it is never mistaken for Preview with Hugo."""
+    for step in ("<strong>1 Archives</strong>", "<strong>2 Format</strong>"):
+        assert step in MANUAL, step
+    assert "<strong>3 Check</strong>" in MANUAL and "<strong>4 Export</strong>" in MANUAL
+    assert "asks for a new <strong>Check</strong>" in MANUAL
+
+
+def test_the_manual_says_the_readers_buttons_open_the_same_dialog():
+    assert "<strong>Export Hugo content…</strong>" in MANUAL
+    assert 'same <a href="#man-export-combine">guided export</a>' in MANUAL
+
+
+def test_the_manual_explains_the_hugo_starter_site_and_its_preview():
+    """What the starter site is and that it is a starting point, and that the
+    preview uses the person's own Hugo, served apart from the console."""
+    assert 'id="man-export-hugo-starter"' in MANUAL
+    assert "--starter-site" in MANUAL and "<code>hugo server</code>" in MANUAL
+    assert "<strong>a starting point</strong>" in MANUAL
+    assert "<strong>Preview with Hugo.</strong>" in MANUAL
+    assert "runs <em>your own</em> Hugo" in MANUAL
+    assert "never through the console" in MANUAL
+
+
+def test_the_manual_says_where_hugo_is_looked_for_and_when_to_restart():
+    assert "shown as soon as you choose Hugo" in MANUAL
+    assert "if you installed Hugo after starting the console, restart the console" in MANUAL
+    assert "does not answer <code>hugo version</code>" in MANUAL

@@ -2582,61 +2582,9 @@
   }
   $("r-pdf").addEventListener("click", exportPdf);
 
-  // Developer-format export (Obsidian vault / Jekyll site / Hugo content).
-  // Unlike PDF these write a folder next to the archive, so the result is a
-  // path, not a download — reported inline rather than as a browser save.
-  const DEV_FORMAT_LABELS = { obsidian: "Obsidian vault", jekyll: "Jekyll site", hugo: "Hugo content" };
-  async function exportDevFormat(format, btn) {
-    const label = btn.textContent;
-    const result = $("r-dev-export-result");
-    // Empty means "the format's own default", which the server picks.
-    const modeSelect = $("r-dev-html-mode");
-    const htmlMode = modeSelect && modeSelect.value ? modeSelect.value : null;
-    btn.disabled = true;
-    btn.textContent = "⏳ Writing…";
-    if (result) {
-      result.hidden = false;
-      result.className = "dev-export-result";
-      result.textContent = "Writing the " + (DEV_FORMAT_LABELS[format] || format) + "…";
-    }
-    try {
-      const res = await fetch("/api/ingest", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ format, html_mode: htmlMode }),
-      });
-      const j = await res.json().catch(() => ({}));
-      if (!res.ok || !j.ok) {
-        const msg = j.error || "Export failed (" + res.status + ").";
-        if (result) { result.className = "dev-export-result is-error"; result.textContent = msg; }
-        notify(msg, "Export failed");
-        return;
-      }
-      const gaps = j.assets_missing
-        ? " " + j.assets_missing + " referenced asset(s) were never captured and show as gaps."
-        : "";
-      if (result) {
-        result.className = "dev-export-result is-done";
-        const raw = j.html_mode === "raw"
-          ? " The page HTML was written as captured, not cleaned — publishing it is your responsibility."
-          : "";
-        result.textContent = j.label + " written to " + j.path + " — " + j.summary + "." + gaps + raw;
-      }
-      notify(j.label + " written to " + j.path, "Export complete");
-    } catch (_) {
-      if (result) { result.className = "dev-export-result is-error"; result.textContent = "The exporter isn't reachable right now."; }
-      notify("The developer-format exporter isn't reachable right now.");
-    } finally {
-      btn.disabled = false;
-      btn.textContent = label;
-    }
-  }
-  if ($("r-export-obsidian"))
-    $("r-export-obsidian").addEventListener("click", (e) => exportDevFormat("obsidian", e.currentTarget));
-  if ($("r-export-jekyll"))
-    $("r-export-jekyll").addEventListener("click", (e) => exportDevFormat("jekyll", e.currentTarget));
-  if ($("r-export-hugo"))
-    $("r-export-hugo").addEventListener("click", (e) => exportDevFormat("hugo", e.currentTarget));
+  // Developer-format export (Obsidian vault / Jekyll site / Hugo content):
+  // the Reader's buttons open the guided export (`openDevExportForReader`,
+  // wired in `wireDevExport`), so there is one way to write these formats.
 
   // Accumulating, abortable export preview (page by page). Same viewer the
   // dashboard "Live PDF preview" uses; here it renders the reader's model.
@@ -6921,6 +6869,12 @@
       del.disabled = count === 0;
       del.textContent = count ? "Delete selected (" + count + ")" : "Delete selected";
     }
+    // One archive is an ordinary export; several are combined into one.
+    const exp = $("export-selected");
+    if (exp) {
+      exp.disabled = count === 0;
+      exp.textContent = count > 1 ? "Export combined (" + count + ")…" : "Export…";
+    }
     renderRepairBanner();
     document.querySelectorAll(".recent-archive-row").forEach((row) => {
       const box = row.querySelector(".archive-select");
@@ -7020,6 +6974,602 @@
       if (!r.ok) return r.json().then((j) => Promise.reject(new Error(j.error || "Delete failed")));
       return readNdjson(r, onProgress);
     });
+  }
+
+  // ---------- The guided developer-format export ----------
+  // Hugo content, a Jekyll site or an Obsidian vault, from the archives
+  // ticked on the Archives screen or from the archive open in the Reader --
+  // one path for both, so every export gets the same options (the Hugo
+  // starter site among them) and the same check before anything is written.
+  // Four short steps rather than one long form: which archives (one is an
+  // ordinary export, several are combined into one); which format, what it
+  // is for and how page content is written; a CHECK from the server --
+  // counts, duplicates and whose copy wins, links between archives that
+  // become internal, and the folder it will write; then the export and what
+  // to do next. Export stays disabled until the current choices have been
+  // checked, so what is written is what was shown. Each step fits a laptop
+  // screen and the footer never scrolls away, so the result and the Hugo
+  // preview are always in view when they arrive.
+  const DEVX_MODE_NOTES = {
+    markdown: "Everything converted to Markdown — easiest to edit; drops what Markdown cannot express (merged table cells, colours, image sizes).",
+    mixed: "Markdown where that loses nothing, and cleaned HTML for the parts where it would.",
+    html: "Cleaned HTML throughout: scripts and event handlers removed.",
+    raw: "The HTML exactly as captured, NOT cleaned — publishing it is then your responsibility.",
+  };
+  const DEVX_DEFAULT_MODE = { obsidian: "markdown", jekyll: "mixed", hugo: "mixed" };
+  const DEVX_NEXT_STEPS = {
+    hugo: "Next: copy the content/ folder into your Hugo site's content/ folder, at its root, and run hugo server. For the HTML parts to show, your site needs markup.goldmark.renderer.unsafe = true — README.md beside content/ explains.",
+    jekyll: "Next: copy _posts/, assets/ and the pages beside them into your Jekyll site, then run bundle exec jekyll serve.",
+    obsidian: "Next: in Obsidian choose “Open folder as vault” and pick this folder. README.md is the index.",
+  };
+  // With the starter site the folder is a whole site, viewable on its own.
+  const DEVX_HUGO_STARTER_NEXT = "Next: run hugo server in this folder to view it — the starter site beside content/ is a starting point to edit or replace. For a Hugo site you already have, copy only the content/ folder into its content/ folder, at its root; README.md explains.";
+  const DEVX_COUNT_LABELS = [
+    ["wikis", "wiki(s)"], ["pages", "page(s)"], ["blogs", "blog(s)"], ["posts", "post(s)"],
+    ["forums", "forum(s)"], ["topics", "topic(s)"], ["libraries", "file librar(ies)"],
+    ["files", "file(s)"], ["highlights", "Highlights area(s)"], ["highlight_pages", "Highlights page(s)"],
+  ];
+  const DEVX_LAST_STEP = 4;
+  let devxNames = [];
+  // The archive open in the Reader when it is not one the Archives screen
+  // lists (a dropped folder or zip): `{label}`, exported as "the open
+  // archive" -- the request then names no archives at all.
+  let devxOpenSource = null;
+  let devxChecked = null;  // the request body the current check answers
+  let devxBusy = false;
+  let devxStep = 1;
+
+  function devxFormat() {
+    const picked = document.querySelector('input[name="devx-format"]:checked');
+    return picked ? picked.value : "hugo";
+  }
+
+  function devxHasSource() {
+    return !!devxOpenSource || devxNames.length > 0;
+  }
+
+  function devxBody(dryRun) {
+    const mode = $("devx-html-mode") ? $("devx-html-mode").value : "";
+    // The starter site is Hugo's alone; for another format it is not sent.
+    const starter = devxFormat() === "hugo" && !!($("devx-starter") && $("devx-starter").checked);
+    // No `archives` at all means the archive open in the Reader.
+    const archives = devxOpenSource ? undefined : devxNames.slice();
+    return { format: devxFormat(), html_mode: mode || null, archives, dry_run: dryRun, starter_site: starter };
+  }
+
+  // The starter site, and whether Hugo is here to preview it, belong to
+  // Hugo: shown only while Hugo is chosen.
+  function devxRenderStarter() {
+    const row = $("devx-starter-row");
+    if (row) row.hidden = devxFormat() !== "hugo";
+  }
+
+  function devxArchive(name) {
+    return archivesOnPage.find((a) => a.name === name) || { name, display_name: name };
+  }
+
+  // Which step is showing, in the indicator, the panes and the footer.
+  function devxGo(step) {
+    devxStep = Math.max(1, Math.min(DEVX_LAST_STEP, step));
+    document.querySelectorAll("#devx-body .devx-pane").forEach((pane) => {
+      pane.hidden = Number(pane.dataset.step) !== devxStep;
+    });
+    document.querySelectorAll("#devx-stepper li").forEach((item) => {
+      const n = Number(item.dataset.step);
+      if (n === devxStep) item.setAttribute("aria-current", "step");
+      else item.removeAttribute("aria-current");
+      item.classList.toggle("is-done", n < devxStep);
+    });
+    if ($("devx-body")) $("devx-body").scrollTop = 0;
+    devxRenderFooter();
+    // Asked each time the format step shows with Hugo chosen: cheap, and a
+    // Hugo that answered is remembered by the server.
+    if (devxStep === 2 && devxFormat() === "hugo") devxRefreshHugo();
+    const heading = document.querySelector('#devx-body .devx-pane[data-step="' + devxStep + '"] h3');
+    if (heading) heading.focus({ preventScroll: true });
+  }
+
+  // Back / Next on the first steps, Check where the choices are complete,
+  // Export once they are checked; Close always.
+  function devxRenderFooter() {
+    const show = (id, visible, enabled) => {
+      const el = $(id);
+      if (!el) return;
+      el.hidden = !visible;
+      el.disabled = !enabled;
+    };
+    show("devx-back", devxStep > 1, !devxBusy);
+    show("devx-next", devxStep === 1, !devxBusy && devxHasSource());
+    show("devx-check-btn", devxStep === 2 || (devxStep === 3 && !devxChecked), !devxBusy && devxHasSource());
+    show("devx-export-btn", devxStep === 3, !devxBusy && !!devxChecked);
+    if ($("devx-close")) $("devx-close").disabled = devxBusy;
+  }
+
+  // Any change to what would be exported makes the check out of date: say
+  // so, and hold Export back until it is checked again.
+  function devxInvalidate(opening) {
+    devxChecked = null;
+    const check = $("devx-check");
+    if (check && !devxBusy) {
+      check.className = "devx-check";
+      check.textContent = !devxHasSource()
+        ? "Add at least one archive to export."
+        : opening
+          ? "Nothing is written until you press Export. Check first to see what the export will hold and where it goes."
+          : "Choices changed — press Check to see what the export will hold and where it goes.";
+    }
+    devxRenderFooter();
+  }
+
+  function devxRenderModeNote() {
+    const select = $("devx-html-mode");
+    const note = $("devx-mode-note");
+    if (!select || !note) return;
+    const fallback = DEVX_DEFAULT_MODE[devxFormat()] || "mixed";
+    const first = select.querySelector('option[value=""]');
+    if (first) {
+      first.textContent = "Default for the format (" +
+        (fallback === "markdown" ? "Markdown" : "Markdown with HTML where needed") + ")";
+    }
+    note.textContent = DEVX_MODE_NOTES[select.value || fallback] || "";
+  }
+
+  function devxArchiveRow(label, title, detail) {
+    const row = document.createElement("li");
+    const name = document.createElement("span");
+    name.className = "devx-archive-name";
+    name.textContent = label;
+    name.title = title;
+    row.appendChild(name);
+    if (detail) {
+      const count = document.createElement("span");
+      count.className = "foot-note";
+      count.textContent = detail;
+      row.appendChild(count);
+    }
+    return row;
+  }
+
+  function devxRenderArchives() {
+    const list = $("devx-archives");
+    const add = $("devx-add-select");
+    const note = $("devx-archives-note");
+    if (!list) return;
+    list.innerHTML = "";
+    if (devxOpenSource) {
+      list.appendChild(devxArchiveRow(devxOpenSource.label, devxOpenSource.label, "open in the Reader"));
+    }
+    devxNames.forEach((name) => {
+      const a = devxArchive(name);
+      const row = devxArchiveRow(a.display_name || a.name, a.name,
+        typeof a.item_count === "number" ? a.item_count + " items" : "");
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.className = "btn";
+      remove.textContent = "Remove";
+      remove.setAttribute("aria-label", "Remove " + (a.display_name || a.name) + " from this export");
+      remove.disabled = devxBusy;
+      remove.addEventListener("click", () => {
+        devxNames = devxNames.filter((n) => n !== name);
+        devxRenderArchives();
+        devxInvalidate();
+      });
+      row.appendChild(remove);
+      list.appendChild(row);
+    });
+    if (add) {
+      add.innerHTML = "";
+      // An archive from outside the archives folder is exported on its own:
+      // there is nothing on the Archives screen to combine it with by name.
+      const addable = devxOpenSource ? [] : archivesOnPage.filter((a) => !devxNames.includes(a.name));
+      addable.forEach((a) => {
+        const option = document.createElement("option");
+        option.value = a.name;
+        option.textContent = (a.display_name || a.name) + " — " + (a.item_count || 0) + " items";
+        add.appendChild(option);
+      });
+      add.disabled = devxBusy || !add.options.length;
+      if ($("devx-add")) $("devx-add").disabled = add.disabled;
+      // Every archive is already in: nothing to add, so no empty picker.
+      if (add.parentElement) add.parentElement.hidden = !add.options.length;
+    }
+    if (note) {
+      note.textContent = devxOpenSource
+        ? "The archive open in the Reader. It is not in the archives folder, so it is exported on its own, beside where it is."
+        : devxNames.length > 1
+          ? "These " + devxNames.length + " archives become ONE export. Anything held by more than one appears once, from the most recent capture, and links from one archive to content another holds point inside the export."
+          : devxNames.length === 1
+            ? "One archive: an ordinary export. Add more to combine them into one."
+            : "No archive chosen yet.";
+    }
+  }
+
+  function devxSetBusy(busy) {
+    devxBusy = busy;
+    document.querySelectorAll("#devx-body input, #devx-body select, #devx-archives button, #devx-add")
+      .forEach((el) => { el.disabled = busy; });
+    devxRenderFooter();
+    if (!busy) devxRenderArchives();
+  }
+
+  function devxCombineHtml(combine) {
+    if (!combine) return "";
+    let html = "<p>" + escapeHtml(combine.archives.length) + " archives combined: "
+      + escapeHtml(combine.duplicates_total) + " duplicate(s) will be merged, the most recent capture of each kept; "
+      + escapeHtml(combine.links_resolved) + " link(s) between the archives will point inside the export.</p>";
+    if (combine.containers && combine.containers.length) {
+      html += "<p>Held by more than one archive, and whose copy is kept:</p><ul>"
+        + combine.containers.map((c) => "<li>" + escapeHtml(c.kind) + " <b>" + escapeHtml(c.title) + "</b> — from "
+          + escapeHtml(devxArchive(c.winner).display_name || c.winner) + " (also in "
+          + c.archives.filter((n) => n !== c.winner).map((n) => escapeHtml(devxArchive(n).display_name || n)).join(", ")
+          + ")</li>").join("")
+        + "</ul>";
+    }
+    if (combine.collisions && combine.collisions.length) {
+      html += "<p>" + escapeHtml(combine.collisions.length)
+        + " id(s) came from different deployments; those are different things and are kept apart.</p>";
+    }
+    return html;
+  }
+
+  // Step 3: what the export would hold and where, from the server, with
+  // nothing written. Choices already checked are not asked about again.
+  async function devxCheck() {
+    if (devxBusy || !devxHasSource()) return;
+    if (devxStep !== 3) devxGo(3);
+    if (devxChecked) return;
+    const body = devxBody(true);
+    const check = $("devx-check");
+    devxSetBusy(true);
+    check.className = "devx-check";
+    check.innerHTML = '<span class="spin" style="display:inline-block;vertical-align:-2px;margin-right:7px;"></span>Reading the archives…';
+    try {
+      const res = await fetch("/api/ingest", {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+      });
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok || !j.ok) {
+        check.className = "devx-check is-error";
+        check.textContent = j.error || "The check failed (" + res.status + ").";
+        return;
+      }
+      const counts = DEVX_COUNT_LABELS
+        .filter(([key]) => j.counts && j.counts[key])
+        .map(([key, label]) => escapeHtml(j.counts[key]) + " " + label).join(", ");
+      check.innerHTML = "<p><b>" + escapeHtml(j.label) + "</b>: " + (counts || "nothing to export") + ".</p>"
+        + devxCombineHtml(j.combine)
+        + "<p>Written to <span class=\"mono\">" + escapeHtml(j.path) + "</span>"
+        + (j.exists ? " — that folder exists and will be refreshed." : ".") + "</p>"
+        + (j.html_mode === "raw" ? "<p>Page HTML is written as captured, not cleaned — publishing it is your responsibility.</p>" : "")
+        + "<p class=\"foot-note\">Nothing has been written yet: press Export to write it.</p>";
+      devxChecked = JSON.stringify(Object.assign({}, body, { dry_run: false }));
+    } catch (_) {
+      check.className = "devx-check is-error";
+      check.textContent = "The exporter isn't reachable right now.";
+    } finally {
+      devxSetBusy(false);
+    }
+  }
+
+  // Step 4: write exactly what was checked, with the time it is taking,
+  // then where it went, what to do next and -- for Hugo with its starter
+  // site -- the preview.
+  async function devxExport() {
+    if (devxBusy || !devxChecked) return;
+    const body = devxChecked;
+    const result = $("devx-result");
+    devxHugo.path = null;
+    devxRenderHugo();
+    devxGo(4);
+    result.className = "dev-export-result";
+    result.innerHTML = '<span class="spin" style="display:inline-block;vertical-align:-2px;margin-right:7px;"></span><span id="devx-elapsed"></span>';
+    const elapsed = $("devx-elapsed");
+    const started = Date.now();
+    const tick = () => {
+      const secs = Math.floor((Date.now() - started) / 1000);
+      elapsed.textContent = "Writing the export… " + Math.floor(secs / 60) + ":" + String(secs % 60).padStart(2, "0");
+    };
+    devxSetBusy(true);
+    tick();
+    const ticker = setInterval(tick, 1000);
+    try {
+      const res = await fetch("/api/ingest", {
+        method: "POST", headers: { "Content-Type": "application/json" }, body,
+      });
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok || !j.ok) {
+        result.className = "dev-export-result is-error";
+        result.textContent = j.error || "Export failed (" + res.status + ").";
+        return;
+      }
+      const gaps = j.assets_missing
+        ? "<p>" + escapeHtml(j.assets_missing) + " referenced asset(s) were never captured and show as gaps.</p>" : "";
+      const raw = j.html_mode === "raw"
+        ? "<p>The page HTML was written as captured, not cleaned — publishing it is your responsibility.</p>" : "";
+      result.className = "dev-export-result is-done";
+      const next = j.format === "hugo" && j.starter_site ? DEVX_HUGO_STARTER_NEXT : (DEVX_NEXT_STEPS[j.format] || "");
+      result.innerHTML = "<p><b>" + escapeHtml(j.label) + "</b> written to <span class=\"mono\">" + escapeHtml(j.path) + "</span></p>"
+        + "<p>" + escapeHtml(j.summary) + ".</p>" + gaps + raw
+        + "<p>" + escapeHtml(next) + "</p>";
+      if (j.format === "hugo" && j.starter_site) devxHugoOffer(j.path);
+    } catch (_) {
+      result.className = "dev-export-result is-error";
+      result.textContent = "The exporter isn't reachable right now.";
+    } finally {
+      clearInterval(ticker);
+      devxSetBusy(false);
+    }
+  }
+
+  // ---------- Preview with Hugo ----------
+  // A Hugo export written with its starter site is a whole site, and when
+  // Hugo is installed the console can show it: `hugo server` in the export
+  // folder, started by the console, on a port of its own. Never through the
+  // console itself -- the pages are other people's HTML, and on another
+  // port they are another origin, which the console's API refuses. Nothing
+  // is downloaded or installed: without Hugo the dialog says so and links to
+  // Hugo's own installation guide. Whether Hugo is here is shown as soon as
+  // Hugo is chosen, not only after the export, so a missing or silent Hugo
+  // is known before anything is written.
+  const HUGO_INSTALL_URL = "https://gohugo.io/installation/";
+  // `info` is undefined while the server is being asked, null when it
+  // could not be asked.
+  const devxHugo = { info: null, path: null, preview: null, busy: false, asked: 0 };
+
+  // Only an address on this machine is ever opened or linked.
+  function devxLocalUrl(url) {
+    return typeof url === "string" && /^http:\/\/127\.0\.0\.1:\d{1,5}\/$/.test(url) ? url : null;
+  }
+
+  // Why Hugo cannot be used, as HTML: not on PATH at all, or found but
+  // silent -- the remedies differ. A running console keeps the PATH it
+  // started with, so a Hugo installed since needs the console restarted.
+  function devxHugoMissingHtml(info) {
+    if (info && info.path) {
+      return "Hugo was found at <span class=\"mono\">" + escapeHtml(info.path)
+        + "</span> but did not answer <code>hugo version</code>.";
+    }
+    return "Hugo was not found on this computer's PATH. If you installed it after starting the console, restart the console."
+      + " Hugo is an independent third-party application: <a href=\"" + HUGO_INSTALL_URL
+      + "\" target=\"_blank\" rel=\"noopener noreferrer\">how to install it</a>.";
+  }
+
+  // The one line step 2 shows under the Hugo choice, as HTML.
+  function devxHugoStatusHtml(info) {
+    if (info === undefined) return "Looking for Hugo on this computer…";
+    if (info === null) return "";
+    if (info.available) {
+      return "Hugo" + (info.version ? " " + escapeHtml(info.version) : "")
+        + " found — after exporting with the starter site you can preview it here.";
+    }
+    return devxHugoMissingHtml(info);
+  }
+
+  // What the result says about viewing the export with Hugo, as HTML. Every
+  // value from the server is escaped.
+  function devxHugoHtml(info, path, preview) {
+    const running = preview && devxLocalUrl(preview.url);
+    if (running) {
+      return "<p>Preview running at <a href=\"" + escapeHtml(running) + "\" target=\"_blank\" rel=\"noopener noreferrer\">"
+        + escapeHtml(running) + "</a>, served by Hugo on its own local address, separately from this console"
+        + (preview.path ? " (<span class=\"mono\">" + escapeHtml(preview.path) + "</span>)" : "")
+        + ". It runs until you stop it or close the console.</p>";
+    }
+    if (!path) return "";
+    if (info === undefined) return "<p>Looking for Hugo on this computer…</p>";
+    if (!info || !info.available) return "<p>" + devxHugoMissingHtml(info) + "</p>";
+    return "<p>Hugo" + (info.version ? " " + escapeHtml(info.version) : "") + " is installed: preview this export with it."
+      + " Hugo serves it on its own local address, separately from this console.</p>";
+  }
+
+  function devxRenderHugo() {
+    const status = $("devx-hugo-status");
+    if (status) {
+      const line = devxHugoStatusHtml(devxHugo.info);
+      status.innerHTML = line;
+      status.hidden = !line;
+      status.classList.toggle("is-found", !!(devxHugo.info && devxHugo.info.available));
+    }
+    const box = $("devx-hugo");
+    if (!box) return;
+    const html = devxHugoHtml(devxHugo.info, devxHugo.path, devxHugo.preview);
+    box.hidden = !html;
+    $("devx-hugo-note").innerHTML = html;
+    const start = $("devx-hugo-preview");
+    const stop = $("devx-hugo-stop");
+    start.hidden = !(devxHugo.path && devxHugo.info && devxHugo.info.available);
+    start.disabled = devxHugo.busy;
+    start.textContent = devxHugo.busy ? "Starting Hugo…" : (devxHugo.preview ? "Restart preview" : "Preview with Hugo");
+    stop.hidden = !devxHugo.preview;
+    stop.disabled = devxHugo.busy;
+  }
+
+  // Whether Hugo is usable here, and any preview already running. Only the
+  // latest answer counts: a Hugo that does not answer takes the server a
+  // while to give up on, and an older reply must not overwrite a newer one.
+  async function devxRefreshHugo() {
+    const ask = ++devxHugo.asked;
+    // A Hugo already found stays shown while it is asked again; anything
+    // else says it is looking.
+    if (!(devxHugo.info && devxHugo.info.available)) {
+      devxHugo.info = undefined;
+      devxRenderHugo();
+    }
+    let info = null;
+    let preview = devxHugo.preview;
+    try {
+      const res = await fetch("/api/hugo");
+      const j = await res.json();
+      info = j;
+      preview = j.preview || null;
+    } catch (_) {
+      info = null;
+    }
+    if (ask !== devxHugo.asked) return;
+    devxHugo.info = info;
+    devxHugo.preview = preview;
+    devxRenderHugo();
+  }
+
+  function devxHugoOffer(path) {
+    devxHugo.path = path;
+    devxRefreshHugo();
+  }
+
+  async function devxHugoStart() {
+    if (devxHugo.busy || !devxHugo.path) return;
+    devxHugo.busy = true;
+    devxRenderHugo();
+    // Opened now, while the click still counts as the person's, so a popup
+    // blocker lets it through; pointed at the preview once it answers. The
+    // preview is someone else's pages: it gets no handle on this window.
+    const tab = window.open("", "_blank");
+    if (tab) tab.opener = null;
+    let failure = null;
+    try {
+      const res = await fetch("/api/hugo-preview", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path: devxHugo.path }),
+      });
+      const j = await res.json().catch(() => ({}));
+      const url = devxLocalUrl(j.url);
+      if (!res.ok || !j.ok || !url) {
+        failure = j.error || "Hugo could not start the preview (" + res.status + ").";
+      } else {
+        devxHugo.preview = { url, path: j.path };
+        if (tab) tab.location.href = url;
+      }
+    } catch (_) {
+      failure = "The console isn't reachable right now.";
+    }
+    devxHugo.busy = false;
+    if (failure !== null) {
+      if (tab) tab.close();
+      devxHugo.preview = null;
+    }
+    devxRenderHugo();
+    if (failure !== null) {
+      // Hugo's own words, as text: they name the file and line that failed.
+      const error = document.createElement("pre");
+      error.className = "dev-export-result is-error devx-hugo-error";
+      error.textContent = failure;
+      $("devx-hugo-note").appendChild(error);
+    }
+  }
+
+  async function devxHugoStop() {
+    if (devxHugo.busy) return;
+    try {
+      await fetch("/api/hugo-preview/stop", { method: "POST" });
+    } catch (_) { /* the console is gone, and the preview with it */ }
+    devxHugo.preview = null;
+    devxRenderHugo();
+  }
+
+  function closeDevExport() {
+    if (devxBusy) return;
+    const scrim = $("devx-scrim");
+    if (scrim) scrim.hidden = true;
+    document.removeEventListener("keydown", devxOnKey);
+  }
+
+  function devxOnKey(event) {
+    if (event.key === "Escape") closeDevExport();
+  }
+
+  // `names`: archives on the Archives screen. `opts.openSource`: the archive
+  // open in the Reader when it is not one of those. `opts.format` preselects
+  // a format, and `opts.step` opens at a later step when the archive is
+  // already settled.
+  function openDevExport(names, opts) {
+    const scrim = $("devx-scrim");
+    if (!scrim) return;
+    const options = opts || {};
+    devxNames = Array.from(new Set(names || []));
+    devxOpenSource = options.openSource || null;
+    if (options.format) {
+      const radio = Array.from(document.querySelectorAll('input[name="devx-format"]'))
+        .find((r) => r.value === options.format);
+      if (radio) radio.checked = true;
+    }
+    devxChecked = null;
+    if ($("devx-result")) { $("devx-result").className = "dev-export-result"; $("devx-result").textContent = ""; }
+    devxHugo.path = null;
+    devxRenderArchives();
+    devxRenderModeNote();
+    devxRenderStarter();
+    devxInvalidate(true);
+    scrim.hidden = false;
+    document.addEventListener("keydown", devxOnKey);
+    devxGo(devxHasSource() ? (options.step || 1) : 1);
+    // Step 2 asks for itself when it opens with Hugo chosen.
+    if (devxStep !== 2) devxRefreshHugo();
+  }
+
+  // The archive list the dialog adds from, when the Archives screen has not
+  // been shown yet (the dialog opened from the Reader).
+  async function devxLoadArchives() {
+    try {
+      const res = await fetch("/api/archives");
+      if (!res.ok) return;
+      const j = await res.json();
+      if (!archivesOnPage.length) archivesOnPage = j.archives || [];
+    } catch (_) { /* the dialog still works with the archive's name alone */ }
+  }
+
+  // The Reader's developer-format buttons: the same dialog, for the archive
+  // being read, with the clicked format chosen -- so an export from the
+  // Reader has every option and the same check as one from the Archives
+  // screen. Addressed by name when it is filed in the archives folder (and
+  // can then be combined with others); otherwise as "the open archive".
+  async function openDevExportForReader(format) {
+    let current = null;
+    try {
+      const res = await fetch("/api/current-archive");
+      if (res.ok) current = await res.json();
+    } catch (_) { current = null; }
+    if (!current || !current.name) {
+      notify("Open an archive in the Reader first — there is nothing to export yet.", "Nothing to export");
+      return;
+    }
+    if (current.archive_name) {
+      if (!archivesOnPage.some((a) => a.name === current.archive_name)) await devxLoadArchives();
+      openDevExport([current.archive_name], { format, step: 2 });
+    } else {
+      openDevExport([], { format, step: 2, openSource: { label: current.name } });
+    }
+  }
+
+  function wireDevExport() {
+    document.querySelectorAll('input[name="devx-format"]').forEach((radio) =>
+      radio.addEventListener("change", () => {
+        devxRenderModeNote();
+        devxRenderStarter();
+        devxInvalidate();
+        if (devxFormat() === "hugo") devxRefreshHugo();
+      }));
+    $("devx-starter")?.addEventListener("change", () => devxInvalidate());
+    $("devx-hugo-preview")?.addEventListener("click", devxHugoStart);
+    $("devx-hugo-stop")?.addEventListener("click", devxHugoStop);
+    $("devx-html-mode")?.addEventListener("change", () => { devxRenderModeNote(); devxInvalidate(); });
+    $("devx-add")?.addEventListener("click", () => {
+      const select = $("devx-add-select");
+      if (!select || !select.value || devxNames.includes(select.value)) return;
+      devxNames.push(select.value);
+      devxRenderArchives();
+      devxInvalidate();
+    });
+    $("devx-back")?.addEventListener("click", () => { if (!devxBusy) devxGo(devxStep - 1); });
+    $("devx-next")?.addEventListener("click", () => { if (!devxBusy && devxHasSource()) devxGo(devxStep + 1); });
+    $("devx-check-btn")?.addEventListener("click", devxCheck);
+    $("devx-export-btn")?.addEventListener("click", devxExport);
+    $("devx-close")?.addEventListener("click", closeDevExport);
+    $("devx-scrim")?.addEventListener("mousedown", (event) => {
+      if (event.target === $("devx-scrim")) closeDevExport();
+    });
+    $("export-selected")?.addEventListener("click", () => openDevExport(Array.from(archiveSelection)));
+    document.querySelectorAll("[data-devx-format]").forEach((button) =>
+      button.addEventListener("click", () => openDevExportForReader(button.dataset.devxFormat)));
   }
 
   // Fills the Archives panel's #archive-list ("Open an existing archive") from
@@ -8027,6 +8577,7 @@
     wireDemoChips();
     wireArchiveActions();
     wireSelectionToolbar();
+    wireDevExport();
     wireArchiveFilter();
     wirePdfPicker();
     wireAuthorSegments();

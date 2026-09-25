@@ -973,7 +973,7 @@
 .pdf-opt { display: inline-flex; align-items: center; gap: var(--sp-1); font-size: 12px; color: var(--muted, #667085); white-space: nowrap; }
 .pdf-opt input { margin: 0; }
 /* Scope dropdown reads as a sibling of the toolbar buttons. */
-#r-pdf-scope, #r-dev-html-mode { padding: var(--sp-2) var(--sp-2); font-size: 12px; }
+#r-pdf-scope { padding: var(--sp-2) var(--sp-2); font-size: 12px; }
 
 /* Inline PDF viewer overlay: view a rendered (live) PDF without a blind
    download. Full-screen scrim, a slim toolbar, and the native PDF viewer
@@ -1119,6 +1119,88 @@ details.advanced > summary::-webkit-details-marker { display: none; }
 .modal .btn.danger:hover { filter: brightness(1.06); }
 .modal .btn.danger:disabled { background: var(--g2); border-color: var(--line); color: var(--ink-faint); }
 
+/* The guided developer-format export: four steps, one at a time. Wider
+   than a confirmation, and never taller than the window: the heading and
+   step indicator sit at the top and the footer at the bottom, both always
+   in view, and only the step's own body scrolls -- and only when its content
+   is genuinely long (many archives, a long list of duplicates). One height
+   for every step, so the footer's buttons stay where the pointer left them
+   when Next or Back changes the step. */
+.modal.devx { width: min(720px, 100%); height: min(640px, calc(100vh - 2 * var(--sp-4)));
+  padding: 0; gap: 0; overflow: hidden; }
+.devx-head { flex: none; padding: var(--sp-6) var(--sp-6) var(--sp-3);
+  display: flex; flex-direction: column; gap: var(--sp-3); border-bottom: 1px solid var(--line-soft); }
+.devx-stepper { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap;
+  gap: var(--sp-1) var(--sp-4); font-size: var(--fs-helper); color: var(--ink-faint); }
+.devx-stepper li { display: flex; align-items: center; gap: var(--sp-2); }
+.devx-stepper li + li::before { content: ""; width: var(--sp-4); height: 1px; background: var(--line);
+  margin-right: var(--sp-2); }
+.devx-stepno { display: inline-grid; place-items: center; width: 20px; height: 20px; border-radius: 50%;
+  border: 1px solid var(--line); font-size: var(--fs-overline); font-weight: 600; font-variant-numeric: tabular-nums; }
+.devx-stepper li.is-done { color: var(--ink-dim); }
+.devx-stepper li.is-done .devx-stepno { border-color: var(--accent-line); color: var(--accent); }
+.devx-stepper li[aria-current="step"] { color: var(--ink); font-weight: 600; }
+.devx-stepper li[aria-current="step"] .devx-stepno { background: var(--accent-strong);
+  border-color: transparent; color: var(--accent-ink); }
+.devx-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: var(--sp-4) var(--sp-6); }
+.devx-pane { display: flex; flex-direction: column; gap: var(--sp-3); }
+.devx-pane[hidden] { display: none; }
+.devx-pane h3 { margin: 0; font-size: var(--fs-helper); font-weight: 600; color: var(--ink); }
+.devx-pane h3:focus { outline: none; }
+.devx-foot { flex: none; margin: 0; padding: var(--sp-3) var(--sp-6); border-top: 1px solid var(--line-soft);
+  align-items: center; background: var(--g1); }
+.devx-foot-gap { flex: 1 1 auto; }
+.devx-foot .btn[hidden] { display: none; }
+.devx-archives { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--sp-1); }
+.devx-archives li { display: flex; align-items: center; gap: var(--sp-2); font-size: var(--fs-helper); color: var(--ink);
+  min-width: 0; }
+.devx-archive-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.devx-archives li .foot-note { margin-left: auto; white-space: nowrap; }
+.devx-add { display: flex; gap: var(--sp-2); align-items: center; }
+.devx-add select, .devx select { max-width: 100%; }
+.devx-formats { display: flex; flex-direction: column; gap: var(--sp-2); }
+.devx-format { display: flex; flex-wrap: wrap; gap: var(--sp-1) var(--sp-2); align-items: baseline;
+  font-size: var(--fs-helper); color: var(--ink-dim); cursor: pointer; }
+.devx-format b { color: var(--ink); }
+.devx-format span { flex-basis: 100%; padding-left: 1.6em; line-height: 1.45; }
+/* The Hugo-only options sit under the Hugo choice they belong to. */
+.devx-hugo-only { display: flex; flex-direction: column; gap: var(--sp-1); margin: 0 0 var(--sp-1) 1.6em;
+  padding-left: var(--sp-3); border-left: 2px solid var(--line-soft); }
+.devx-hugo-only[hidden] { display: none; }
+.devx-starter { display: flex; gap: var(--sp-2); align-items: baseline;
+  font-size: var(--fs-helper); color: var(--ink); }
+.devx-hugo-status { margin: 0; font-size: var(--fs-helper); color: var(--ink-dim); line-height: 1.45; }
+.devx-hugo-status[hidden] { display: none; }
+.devx-hugo-status.is-found { color: var(--ink); }
+.devx-hugo-status .mono { color: var(--ink); word-break: break-all; }
+.devx-mode { display: flex; flex-direction: column; gap: var(--sp-1); }
+.devx-thirdparty { font-size: var(--fs-meta); color: var(--ink-faint); }
+.devx-check { font-size: var(--fs-helper); color: var(--ink-dim); line-height: 1.5;
+  border: 1px solid var(--line-soft); border-radius: var(--radius-sm); padding: var(--sp-3); }
+.devx-check ul { margin: var(--sp-1) 0 var(--sp-2); padding-left: 1.1em; }
+.devx-check .mono, .dev-export-result .mono { color: var(--ink); word-break: break-all; }
+.devx-check p, .dev-export-result p { margin: 0 0 var(--sp-2); }
+.devx-check p:last-child, .dev-export-result p:last-child { margin-bottom: 0; }
+.devx-add[hidden] { display: none; }
+.devx-hugo[hidden], .devx-hugo .btn[hidden] { display: none; }
+.devx-hugo { padding: var(--sp-3); border: 1px solid var(--accent-line); border-radius: var(--radius-sm);
+  background: var(--accent-soft); display: flex; flex-direction: column; gap: var(--sp-2); }
+.devx-hugo p { margin: 0; }
+.devx-hugo .mono { color: var(--ink); word-break: break-all; }
+.devx-hugo-error { margin: var(--sp-2) 0 0; white-space: pre-wrap; overflow-wrap: anywhere;
+  max-height: 240px; overflow-y: auto; font-family: var(--mono, ui-monospace, monospace); }
+.devx-hugo-actions { display: flex; gap: var(--sp-2); flex-wrap: wrap; }
+.devx-hugo-actions:not(:has(.btn:not([hidden]))) { display: none; }
+.devx-check.is-error { color: var(--ink); background: var(--crit-soft); border-color: var(--crit); }
+/* On a phone the four labels do not fit one line: only the current step
+   keeps its name, the others their number. */
+@media (max-width: 560px) {
+  .devx-stepper { gap: var(--sp-1) var(--sp-2); }
+  .devx-stepper li:not([aria-current]) .devx-steplabel { display: none; }
+  .devx-stepper li + li::before { width: var(--sp-2); }
+  .devx-head, .devx-body, .devx-foot { padding-left: var(--sp-4); padding-right: var(--sp-4); }
+}
+
 /* Archive rows. A permanent red Delete on every row means the most
    destructive action is the most visible thing in a list of 200 -- it reveals
    on hover and focus instead, and stays reachable from the keyboard. */
@@ -1168,7 +1250,11 @@ details.advanced > summary::-webkit-details-marker { display: none; }
 .menu-panel { position: absolute; right: 0; top: calc(100% + var(--sp-1)); z-index: 40;
   min-width: 260px; display: flex; flex-direction: column; gap: var(--sp-2);
   padding: var(--sp-3); background: var(--g1); border: 1px solid var(--line);
-  border-radius: var(--radius); box-shadow: var(--shadow); }
+  border-radius: var(--radius); box-shadow: var(--shadow);
+  /* Never taller than the window below the toolbar: with the developer
+     formats open the panel is long, and its last buttons must stay
+     reachable on a laptop screen. */
+  max-height: calc(100vh - 7rem); overflow-y: auto; }
 .menu-panel .btn { justify-content: flex-start; }
 .menu-field { display: flex; flex-direction: column; gap: var(--sp-2); font-size: var(--fs-helper);
   color: var(--ink-dim); }
@@ -1186,6 +1272,10 @@ details.advanced > summary::-webkit-details-marker { display: none; }
 .dev-export > summary::before { content: "\25B8"; color: var(--ink-faint); }
 .dev-export[open] > summary::before { content: "\25BE"; }
 .dev-export[open] { display: flex; flex-direction: column; gap: var(--sp-2); }
+/* A browser that does not lay out a <details> element's content as flex
+   still spaces the buttons and notes, one full-width button to a line. */
+.dev-export > .btn { display: flex; width: 100%; margin-top: var(--sp-2); }
+.dev-export > .dev-export-note { margin-top: var(--sp-2); }
 .dev-export-note { margin: 0; font-size: var(--fs-helper); color: var(--ink-dim); line-height: 1.5; }
 .dev-export-note a { color: var(--accent-2); }
 .dev-export-result { font-size: var(--fs-helper); color: var(--ink-dim); line-height: 1.5;

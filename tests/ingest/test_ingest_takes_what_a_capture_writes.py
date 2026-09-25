@@ -136,10 +136,10 @@ def test_forum_topics_become_notes_with_their_reply_tree(capture, tmp_path):
     assert "## Replies" in body
     first_reply = threaded.replies[threaded.reply_ids[0]]
     assert (first_reply.author or "Unknown") in body
-    # A nested reply sits one heading level deeper than its parent.
+    # A reply to a reply sits one blockquote deeper than its parent.
     nested = next((r for r in threaded.replies.values() if r.child_ids), None)
     if nested is not None:
-        assert "#### " in body
+        assert "\n> ### " in body
 
 
 def test_a_wiki_only_capture_reads_as_before(tmp_path):

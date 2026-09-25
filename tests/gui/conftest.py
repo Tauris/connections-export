@@ -21,6 +21,8 @@ from __future__ import annotations
 import json
 from typing import Any
 
+import pytest
+
 
 async def read_sse(
     response,
@@ -53,3 +55,15 @@ async def read_sse(
             collected.append(payload)
             if read_limit is not None and len(collected) >= read_limit:
                 return
+
+
+@pytest.fixture(autouse=True)
+def _forget_found_hugo():
+    """`hugo_preview.hugo_info` remembers a Hugo that answered for the life
+    of the process. A test that stands in for Hugo would otherwise leave its
+    fake behind for every test after it, real Hugo included."""
+    from connections_export.gui import hugo_preview
+
+    hugo_preview.forget_hugo()
+    yield
+    hugo_preview.forget_hugo()

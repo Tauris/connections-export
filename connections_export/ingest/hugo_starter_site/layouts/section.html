@@ -1,0 +1,61 @@
+{{/*
+  Every page that has pages beneath it, told apart by `params.kind`, which
+  the exporter writes on each one:
+
+  - no kind: a top-level section (Wikis, Blogs, ...), listing its containers;
+  - `wiki`: the wiki's page tree, in the wiki's own order (`weight`);
+  - `wiki_page`: a wiki page that has sub-pages -- a page first, so it is
+    drawn exactly like one without;
+  - `blog`, `ideation_blog`: posts, newest first;
+  - `forum`: topics, newest first;
+  - `file_library`: the file list, which is the body the exporter wrote, the
+    files themselves sitting beside it;
+  - `highlights`: the area's pages, in their order.
+*/}}
+{{ define "main" }}
+{{- $kind := .Params.kind }}
+{{- if eq $kind "wiki_page" }}
+  {{- partial "article.html" . }}
+{{- else }}
+  {{- partial "crumbs.html" . }}
+  <header class="page-header">
+    <h1>{{ .Title }}</h1>
+    {{- if $kind }}
+    <p class="lead">{{ partial "count.html" . }}</p>
+    {{- partial "facts.html" . }}
+    {{- end }}
+  </header>
+
+  {{- if not $kind }}
+  <ul class="containers">
+    {{- range .Sections.ByWeight }}
+    <li>
+      <h2><a href="{{ .RelPermalink }}">{{ .LinkTitle }}</a></h2>
+      <p class="byline">
+        {{- with .Params.community }}<span>{{ . }}</span>{{ end }}
+        <span>{{ partial "count.html" . }}</span>
+        {{- with .Params.source_archive }}<span>from {{ . }}</span>{{ end }}
+      </p>
+    </li>
+    {{- end }}
+  </ul>
+
+  {{- else if eq $kind "wiki" }}
+  <nav class="tree wiki-index" aria-label="Pages in this wiki">
+    {{- partial "tree.html" (dict "node" . "current" false) }}
+  </nav>
+
+  {{- else if in (slice "blog" "ideation_blog" "forum") $kind }}
+  {{- partial "entries.html" .Pages.ByDate.Reverse }}
+
+  {{- else if eq $kind "file_library" }}
+  <div class="content files">
+    {{- .Content }}
+  </div>
+
+  {{- else }}
+  {{- with .Content }}<div class="content">{{ . }}</div>{{ end }}
+  {{- partial "entries.html" .Pages.ByWeight }}
+  {{- end }}
+{{- end }}
+{{ end }}

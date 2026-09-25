@@ -21,6 +21,8 @@ THIRD_PARTY_SUFFIXES = {".js", ".mjs", ".css", ".wasm", ".woff", ".woff2", ".ttf
 OURS = {
     "connections_export/gui/static/console.js",
     "connections_export/gui/static/console.css",
+    # The Hugo starter site's stylesheet, written for it (`ingest.hugo_starter`).
+    "connections_export/ingest/hugo_starter_site/static/css/site.css",
 }
 
 

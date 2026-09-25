@@ -293,9 +293,24 @@ def test_replies_are_threaded_beneath_the_topic(content):
 
     assert "## Replies" in text
     assert "### L. Haddad · *answer*" in text
-    assert "#### M. Lindqvist" in text
-    assert text.index("### L. Haddad") < text.index("#### M. Lindqvist")
+    assert text.index("### L. Haddad") < text.index("M. Lindqvist\n")
     assert "![shot](shot.png)" in text
+
+
+def test_a_reply_to_a_reply_is_indented_under_it(content):
+    """Deeper headings alone mark nesting only for someone reading the
+    Markdown: a rendered page shows every reply at the same indent, and no
+    template can indent the text below a heading. A reply to a reply sits in
+    a blockquote per level, which every Markdown renderer and theme indents,
+    heading and body together."""
+    text = (content[0] / "forums" / "help" / "login-fails" / "index.md").read_text(encoding="utf-8")
+
+    assert "> ### M. Lindqvist" in text
+    assert "> Worked." in text
+    # One heading level throughout; the quote carries the depth.
+    assert "####" not in text
+    # The top-level reply is not quoted.
+    assert "\n### L. Haddad" in text
 
 
 def test_comments_come_after_the_body(content):

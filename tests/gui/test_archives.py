@@ -149,3 +149,29 @@ def test_item_count_zero_when_manifest_absent(tmp_path):
     _mk(tmp_path, "export-host-20260101-000000-aaaa")
     infos = list_archives(tmp_path)
     assert infos[0].item_count == 0
+
+
+def test_an_export_written_beside_the_archives_is_not_listed_as_one(tmp_path):
+    """Exports are written beside the archive they came from -- inside the
+    archives folder when the archive is there -- and a Hugo content folder,
+    Jekyll site or Obsidian vault is not an archive: listed, it looked like
+    one. A folder that does hold an archive is listed whatever its name."""
+    _mk(tmp_path, "export-host-20260101-000000-aaaa")
+    for suffix in ("-hugo-content", "-jekyll-site", "-obsidian-vault"):
+        (tmp_path / f"export-host-20260101-000000-aaaa{suffix}" / "content").mkdir(parents=True)
+    (tmp_path / "combined-2-archives-1a2b3c4d-hugo-content").mkdir()
+    oddly_named = tmp_path / "team-hugo-content"
+    oddly_named.mkdir()
+    (oddly_named / "manifest.jsonl").write_text("", encoding="utf-8")
+
+    names = {i.name for i in list_archives(tmp_path)}
+
+    assert names == {"export-host-20260101-000000-aaaa", "team-hugo-content"}
+
+
+def test_every_export_format_suffix_is_recognised_as_an_export():
+    """The listing's rule and the ingest route's folder names cannot drift."""
+    from connections_export.gui.archives import EXPORT_FOLDER_SUFFIXES
+    from connections_export.gui.routes.ingest import _FORMATS
+
+    assert {spec["suffix"] for spec in _FORMATS.values()} <= set(EXPORT_FOLDER_SUFFIXES)

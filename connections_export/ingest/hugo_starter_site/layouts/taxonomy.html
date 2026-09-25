@@ -1,0 +1,14 @@
+{{/*
+  Every tag used in the export, most-used first, with how many pages carry
+  it. The tags are the items' own, from Connections.
+*/}}
+{{ define "main" }}
+  <header class="page-header">
+    <h1>{{ .Title }}</h1>
+  </header>
+  <ul class="tag-cloud">
+    {{- range .Data.Terms.ByCount }}
+    <li><a href="{{ .Page.RelPermalink }}">{{ .Page.LinkTitle }}</a> <span class="count">{{ .Count }}</span></li>
+    {{- end }}
+  </ul>
+{{ end }}

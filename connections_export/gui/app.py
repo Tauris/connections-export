@@ -68,6 +68,7 @@ from connections_export.gui.requests import (  # noqa: F401 (public at this addr
     _StylePreviewRequest,
 )
 from connections_export.gui.routes import archives as routes_archives
+from connections_export.gui.routes import hugo as routes_hugo
 from connections_export.gui.routes import ingest as routes_ingest
 from connections_export.gui.routes import lookup as routes_lookup
 from connections_export.gui.routes import model as routes_model
@@ -149,6 +150,9 @@ def make_app(
     @asynccontextmanager
     async def _lifespan(_app: FastAPI):
         yield
+        # A Hugo preview is a process of its own; it goes when the console
+        # does, not whenever the person next thinks of it.
+        _app.state.hugo_preview.stop()
         # On shutdown: wake any open /events SSE stream so it exits its
         # loop cleanly before uvicorn cancels the task. Published through the
         # stream, not put on a queue of its own: a terminator delivered by
@@ -237,6 +241,7 @@ def make_app(
     routes_settings.register(app, **_route_kwargs)
     routes_pdf.register(app, **_route_kwargs)
     routes_ingest.register(app, **_route_kwargs)
+    routes_hugo.register(app, **_route_kwargs)
     routes_static.register(app, **_route_kwargs)
     routes_run.register(app, **_route_kwargs)
 

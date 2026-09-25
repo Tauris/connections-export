@@ -1,0 +1,11 @@
+{{/*
+  One tag: every page that carries it, whatever app it came from, newest
+  first.
+*/}}
+{{ define "main" }}
+  {{- partial "crumbs.html" . }}
+  <header class="page-header">
+    <h1>Tagged “{{ .Title }}”</h1>
+  </header>
+  {{- partial "entries.html" .Pages.ByDate.Reverse }}
+{{ end }}

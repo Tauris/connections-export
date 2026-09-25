@@ -90,6 +90,7 @@
         <button class="btn" id="select-superseded" type="button" title="Select every run that a later attempt at the same target has replaced">Select superseded</button>
         <button class="btn" id="repair-affected" type="button" disabled>Repair affected</button>
         <button class="btn" id="clear-selection" type="button">Clear selection</button>
+        <button class="btn" id="export-selected" type="button" disabled title="Write the selected archives as Hugo content, a Jekyll site or an Obsidian vault. Several are combined into one export: anything held twice appears once, from the most recent capture, and links between them point inside the export.">Export…</button>
         <input type="search" id="archive-filter" placeholder="Filter by name or content…" aria-label="Filter archives" />
         <span class="foot-note" id="selection-summary">Nothing selected.</span>
         <button class="btn danger" id="delete-selected" type="button" disabled>Delete selected</button>
@@ -519,22 +520,11 @@
           <button class="btn" id="r-live-pdf" title="Render from the live HCL system via browser.&#10;Works without a prior import — drag a page URL onto this button."><svg class="icon" aria-hidden="true"><use href="#i-globe"/></svg> Live PDF from source</button>
           <details class="dev-export" id="r-dev-export">
             <summary>Advanced — developer formats</summary>
-            <p class="dev-export-note">For re-homing the content into a tool you edit yourself. If a PDF is all you need, you can ignore this. Each writes a folder of Markdown next to the archive.</p>
-            <p class="dev-export-note"><a href="https://obsidian.md" target="_blank" rel="noopener noreferrer">Obsidian</a> is a local Markdown notes app — the vault opens as a linked, browsable knowledge base. <a href="https://jekyllrb.com" target="_blank" rel="noopener noreferrer">Jekyll</a> builds a static website from Markdown you can publish anywhere. <a href="https://gohugo.io" target="_blank" rel="noopener noreferrer">Hugo</a> is another static-site generator; the export is content only, to drop into a Hugo site you already have.</p>
-            <p class="dev-export-note">Obsidian, Jekyll and Hugo are independent, third-party applications, not part of this tool. These exporters are provided for convenience only and are not an endorsement; each application is governed by its own licence and terms.</p>
-            <label class="menu-field" for="r-dev-html-mode" title="How each page's text and layout is written. Markdown is easiest to edit but drops what it cannot express (merged table cells, colours, image sizes). &quot;Where needed&quot; keeps exactly those parts as HTML. &quot;As captured&quot; writes the HTML unchanged, scripts included: publishing it is then your responsibility. The default is Markdown for Obsidian, and Markdown with HTML where needed for Jekyll and Hugo.">Page content as
-              <select id="r-dev-html-mode" aria-label="How page content is written">
-                <option value="" selected>Default for the format</option>
-                <option value="markdown">Markdown</option>
-                <option value="mixed">Markdown with HTML where needed</option>
-                <option value="html">HTML</option>
-                <option value="raw">HTML as captured (not cleaned)</option>
-              </select>
-            </label>
-            <button class="btn" id="r-export-obsidian" title="Write an Obsidian vault (one Markdown note per page/post/topic) beside the archive."><svg class="icon" aria-hidden="true"><use href="#i-layers"/></svg> Export Obsidian vault</button>
-            <button class="btn" id="r-export-jekyll" title="Write a Jekyll site (dated Markdown posts and assets) beside the archive."><svg class="icon" aria-hidden="true"><use href="#i-globe"/></svg> Export Jekyll site</button>
-            <button class="btn" id="r-export-hugo" title="Write Hugo content (a content/ folder of sections and page bundles) beside the archive, for a Hugo site of your own."><svg class="icon" aria-hidden="true"><use href="#i-globe"/></svg> Export Hugo content</button>
-            <div class="dev-export-result" id="r-dev-export-result" hidden></div>
+            <p class="dev-export-note">For re-homing the content into a tool you edit yourself; if a PDF is all you need, ignore this. Each button opens the guided export for this archive with that format chosen.</p>
+            <button class="btn" id="r-export-obsidian" data-devx-format="obsidian" title="Export this archive as an Obsidian vault (one Markdown note per page/post/topic), through the guided export."><svg class="icon" aria-hidden="true"><use href="#i-layers"/></svg> Export Obsidian vault…</button>
+            <button class="btn" id="r-export-jekyll" data-devx-format="jekyll" title="Export this archive as a Jekyll site (dated Markdown posts and assets), through the guided export."><svg class="icon" aria-hidden="true"><use href="#i-globe"/></svg> Export Jekyll site…</button>
+            <button class="btn" id="r-export-hugo" data-devx-format="hugo" title="Export this archive as Hugo content (a content/ folder of sections and page bundles, with an optional starter site), through the guided export."><svg class="icon" aria-hidden="true"><use href="#i-globe"/></svg> Export Hugo content…</button>
+            <p class="dev-export-note"><a href="https://obsidian.md" target="_blank" rel="noopener noreferrer">Obsidian</a> is a local Markdown notes app; <a href="https://jekyllrb.com" target="_blank" rel="noopener noreferrer">Jekyll</a> and <a href="https://gohugo.io" target="_blank" rel="noopener noreferrer">Hugo</a> build static websites from Markdown. Obsidian, Jekyll and Hugo are independent, third-party applications, not part of this tool. These exporters are provided for convenience only and are not an endorsement; each application is governed by its own licence and terms.</p>
           </details>
         </div>
       </details>
@@ -563,6 +553,85 @@
       <div class="modal-actions">
         <button class="btn" id="modal-cancel" type="button">Cancel</button>
         <button class="btn danger" id="modal-ok" type="button">Confirm</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- The guided export, one step at a time: which archives, which format
+       and how page content is written, a Check from the server of exactly
+       what will be written and where, and only then the export. One archive
+       is an ordinary export; several are combined into one. The footer
+       stays in view on every step; only the step's own body scrolls, and
+       only when its content is genuinely long. -->
+  <div class="modal-scrim" id="devx-scrim" hidden>
+    <div class="modal devx" role="dialog" aria-modal="true" aria-labelledby="devx-title">
+      <div class="devx-head">
+        <h2 id="devx-title">Export for another tool</h2>
+        <ol class="devx-stepper" id="devx-stepper" aria-label="Steps">
+          <li data-step="1" aria-current="step"><span class="devx-stepno">1</span> <span class="devx-steplabel">Archives</span></li>
+          <li data-step="2"><span class="devx-stepno">2</span> <span class="devx-steplabel">Format</span></li>
+          <li data-step="3"><span class="devx-stepno">3</span> <span class="devx-steplabel">Check</span></li>
+          <li data-step="4"><span class="devx-stepno">4</span> <span class="devx-steplabel">Export</span></li>
+        </ol>
+      </div>
+      <div class="devx-body" id="devx-body">
+        <section class="devx-pane" data-step="1" aria-labelledby="devx-h1">
+          <h3 id="devx-h1" tabindex="-1">Archives</h3>
+          <ul class="devx-archives" id="devx-archives"></ul>
+          <div class="devx-add">
+            <select id="devx-add-select" aria-label="Another archive to add"></select>
+            <button class="btn" id="devx-add" type="button">Add</button>
+          </div>
+          <p class="dev-export-note" id="devx-archives-note"></p>
+        </section>
+        <section class="devx-pane" data-step="2" aria-labelledby="devx-h2" hidden>
+          <h3 id="devx-h2" tabindex="-1">Format &amp; options</h3>
+          <div class="devx-formats" role="radiogroup" aria-label="Export format">
+            <label class="devx-format"><input type="radio" name="devx-format" value="hugo" checked /> <b>Hugo content</b> <span>Hugo is a static-site generator; this is the <code>content/</code> folder to drop into a Hugo site — with a starter site beside it, if you want one, to view it on its own.</span></label>
+            <div class="devx-hugo-only" id="devx-starter-row">
+              <label class="devx-starter"><input type="checkbox" id="devx-starter" checked /> Add a starter site (templates to view it with <code>hugo server</code>)</label>
+              <p class="devx-hugo-status" id="devx-hugo-status" aria-live="polite"></p>
+            </div>
+            <label class="devx-format"><input type="radio" name="devx-format" value="jekyll" /> <b>Jekyll site</b> <span>Jekyll builds a static website from Markdown you can publish anywhere; this is dated posts and their assets.</span></label>
+            <label class="devx-format"><input type="radio" name="devx-format" value="obsidian" /> <b>Obsidian vault</b> <span>Obsidian is a local Markdown notes app; the vault opens as a linked, browsable knowledge base.</span></label>
+          </div>
+          <div class="devx-mode">
+            <label class="menu-field" for="devx-html-mode">Page content as
+              <select id="devx-html-mode" aria-label="How page content is written">
+                <option value="" selected>Default for the format</option>
+                <option value="markdown">Markdown</option>
+                <option value="mixed">Markdown with HTML where needed</option>
+                <option value="html">HTML</option>
+                <option value="raw">HTML as captured (not cleaned)</option>
+              </select>
+            </label>
+            <p class="dev-export-note" id="devx-mode-note"></p>
+          </div>
+          <p class="dev-export-note devx-thirdparty">Obsidian, Jekyll and Hugo are independent, third-party applications, not part of this tool. These exporters are provided for convenience only and are not an endorsement; each application is governed by its own licence and terms.</p>
+        </section>
+        <section class="devx-pane" data-step="3" aria-labelledby="devx-h3" hidden>
+          <h3 id="devx-h3" tabindex="-1">Check</h3>
+          <div class="devx-check" id="devx-check" aria-live="polite">Nothing is written until you press Export. Check first to see what the export will hold and where it goes.</div>
+        </section>
+        <section class="devx-pane" data-step="4" aria-labelledby="devx-h4" hidden>
+          <h3 id="devx-h4" tabindex="-1">Export</h3>
+          <div class="dev-export-result" id="devx-result" aria-live="polite"></div>
+          <div class="devx-hugo" id="devx-hugo" hidden>
+            <div class="dev-export-note" id="devx-hugo-note" aria-live="polite"></div>
+            <div class="devx-hugo-actions">
+              <button class="btn primary" id="devx-hugo-preview" type="button" hidden>Preview with Hugo</button>
+              <button class="btn" id="devx-hugo-stop" type="button" hidden>Stop preview</button>
+            </div>
+          </div>
+        </section>
+      </div>
+      <div class="modal-actions devx-foot">
+        <button class="btn" id="devx-close" type="button">Close</button>
+        <span class="devx-foot-gap"></span>
+        <button class="btn" id="devx-back" type="button" hidden>Back</button>
+        <button class="btn primary" id="devx-next" type="button">Next</button>
+        <button class="btn primary" id="devx-check-btn" type="button" hidden>Check</button>
+        <button class="btn primary" id="devx-export-btn" type="button" disabled hidden title="Check first: the export writes exactly what the check shows.">Export</button>
       </div>
     </div>
   </div>

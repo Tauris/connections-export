@@ -3,7 +3,9 @@
 The output is deliberately a site fragment rather than a complete site:
 ``_posts/`` contains dated Markdown posts and body images are placed below
 ``assets/images/imported/``.  A site's own ``_config.yml`` remains its
-responsibility, including ``url``, ``baseurl`` and layout choices.
+responsibility, including ``url`` and ``baseurl``. Each post names
+``layout: post``, which Jekyll's starter site and most themes provide, so a
+post shows its title, author and a UTF-8 page head out of the box.
 
 Liquid runs over every page before kramdown does, and the content is its
 authors' -- so ``{{ site | jsonify }}`` in a post would publish the site's
@@ -24,6 +26,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import quote, unquote, urlsplit
 
+from connections_export.derive.combine import CombineReport
 from connections_export.derive.model import DerivedItem, Interchange
 from connections_export.ingest._bodies import (
     BlockCounts,
@@ -33,11 +36,14 @@ from connections_export.ingest._bodies import (
     render_body,
     rewrite_tree,
 )
+from connections_export.ingest._combined import combined_section, several
 from connections_export.ingest._markdown import (
     BRACKET_TEXT,
     code_span,
     escape_inline,
     html_to_text,
+    quote_block,
+    readable_time,
 )
 from connections_export.ingest.obsidian import (
     BlobReader,
@@ -332,7 +338,14 @@ def _rewrite_body(
     return body.finish_markdown(markdown)
 
 
-def _frontmatter(item: DerivedItem, *, kind: str, date_value: str, tags: list[str]) -> str:
+def _frontmatter(
+    item: DerivedItem,
+    *,
+    kind: str,
+    date_value: str,
+    tags: list[str],
+    source_archive: str | None = None,
+) -> str:
     lines = ["---", f"title: {_yaml_scalar(item.title or item.id)}", f"date: {date_value}"]
     if item.provenance.source_url:
         lines.append(f"source_url: {_yaml_scalar(item.provenance.source_url)}")
@@ -341,6 +354,16 @@ def _frontmatter(item: DerivedItem, *, kind: str, date_value: str, tags: list[st
     if tags:
         lines.append("tags: [" + ", ".join(_yaml_scalar(tag) for tag in tags) + "]")
     lines.append(f"kind: {kind}")
+    if source_archive:
+        # Only in a site combined from several archives: which one this
+        # post's copy came from.
+        lines.append(f"source_archive: {_yaml_scalar(source_archive)}")
+    # Without a layout Jekyll renders the post bare: no title or author (only
+    # a layout prints front matter), and no page head, so no <meta charset> --
+    # the browser guesses the encoding and a "‘" shows as "â€˜". `post` is the
+    # layout Jekyll's own starter site and most themes provide; a site that
+    # wants another changes it here or overrides it per path in _config.yml.
+    lines.append("layout: post")
     lines.extend(["---", ""])
     return "\n".join(lines)
 
@@ -366,6 +389,52 @@ def _comments(item: DerivedItem) -> str:
 
     render(None, 0)
     return "\n".join(lines) + "\n"
+
+
+def _replies(
+    topic,
+    store: _AssetStore,
+    id_to_permalink: dict[str, str],
+    file_targets: dict[str, str],
+    *,
+    mode: str,
+    counts: BlockCounts,
+) -> str:
+    """The reply tree beneath a forum topic. Each reply goes through the same
+    conversion as the topic -- body, images and links, escaped for Markdown
+    and Liquid -- under a heading of its own; a reply to a reply goes one
+    blockquote deeper per level, which a rendered page indents."""
+    replies = getattr(topic, "replies", None) or {}
+    if not replies:
+        return ""
+    lines: list[str] = ["", "## Replies", ""]
+    rendered: set[str] = set()
+
+    def render(reply_id: str, depth: int) -> None:
+        reply = replies.get(reply_id)
+        if reply is None or reply_id in rendered:
+            return
+        rendered.add(reply_id)
+        who = _text(reply.author or "Unknown")
+        when = f" · {_text(readable_time(reply.created))}" if reply.created else ""
+        answer = " · *answer*" if "answer" in (reply.flags or []) else ""
+        body = _rewrite_body(
+            reply, store, id_to_permalink, file_targets, mode=mode, counts=counts
+        ).strip()
+        block = [f"### {who}{when}{answer}", "", body if body else "*(no text)*", ""]
+        attachments = _attachments(reply, store).strip()
+        if attachments:
+            block.extend([attachments, ""])
+        lines.extend(quote_block("\n".join(block), depth))
+        for child in reply.child_ids:
+            render(child, depth + 1)
+
+    for reply_id in topic.reply_ids:
+        render(reply_id, 0)
+    # A reply whose parent never made it into the tree is still a reply.
+    for reply_id in replies:
+        render(reply_id, 0)
+    return "\n".join(lines).rstrip() + "\n"
 
 
 def _attachments(item: DerivedItem, store: _AssetStore) -> str:
@@ -451,11 +520,16 @@ def write_jekyll_site(
     out_dir: Path | str,
     *,
     html_mode: str = "mixed",
+    combined: CombineReport | None = None,
 ) -> JekyllStats:
     """Write a generic Jekyll site fragment under ``out_dir``. ``html_mode``
     is how bodies are written (``_bodies.HTML_MODES``); an HTML block reaches
-    the built page because kramdown passes block-level HTML through."""
+    the built page because kramdown passes block-level HTML through.
+    ``combined`` is the report of combining several archives into
+    ``interchange`` (``derive.combine``): every post then names the archive it
+    came from, and a ``sources.md`` page lists them."""
     mode = html_mode_for("jekyll", html_mode)
+    combined = several(combined)
     counts = BlockCounts()
     root = Path(out_dir)
     posts_dir = root / "_posts"
@@ -493,14 +567,29 @@ def write_jekyll_site(
         body = _rewrite_body(
             item, store, id_to_permalink, file_targets, mode=mode, counts=counts
         ).strip()
-        content = _frontmatter(item, kind=kind, date_value=date_value, tags=tags)
+        content = _frontmatter(
+            item,
+            kind=kind,
+            date_value=date_value,
+            tags=tags,
+            source_archive=combined.origins.get(item.id) if combined else None,
+        )
         content += body + "\n" if body else ""
         content += _attachments(item, store) + _comments(item)
+        if kind == "forum":
+            content += _replies(
+                item, store, id_to_permalink, file_targets, mode=mode, counts=counts
+            )
         path.write_text(content.rstrip() + "\n", encoding="utf-8")
 
     stats.posts = len(paths)
     stats.markdown_blocks, stats.html_blocks = counts.markdown, counts.html
     _write_files_index(root, interchange, file_targets, stats)
+    if combined is not None:
+        # A page of the site rather than a README: Jekyll publishes every
+        # Markdown file with front matter, and this is worth publishing.
+        page = ["---", "title: Sources", "---", "", *combined_section(combined, _text)[1:]]
+        (root / "sources.md").write_text("\n".join(page) + "\n", encoding="utf-8")
     return stats
 
 
@@ -514,4 +603,10 @@ def from_source(source, out_dir: Path | str, *, html_mode: str = "mixed") -> Jek
         result = source.get_blob(blob_hash)
         return result[0] if result is not None else None
 
-    return write_jekyll_site(interchange, blob_reader, out_dir, html_mode=html_mode)
+    return write_jekyll_site(
+        interchange,
+        blob_reader,
+        out_dir,
+        html_mode=html_mode,
+        combined=getattr(source, "combine_report", None),
+    )

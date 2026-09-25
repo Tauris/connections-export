@@ -27,7 +27,16 @@ Markdown with `markdownify` and lays the content out as an Obsidian vault:
   frontmatter, so every tag is searchable and filterable in the vault; the
   key is omitted only when the page has no tags;
 - YAML frontmatter also carries title/author/dates and the source
-  provenance (`hcl_id`) for traceability.
+  provenance (`hcl_id`) for traceability;
+- **one name, one thing**: two different containers or items whose names
+  would be the same file -- equal titles, titles equal but for case or
+  Unicode normalisation, or equal once made safe for a filesystem -- never
+  share a folder or overwrite a note. The first, in the model's order, keeps
+  the plain name; each later one is tagged with a short hash of its
+  Connections id (`Handbook (1a2b3c)`), the rule `interchange.filenames`
+  applies to library files, so the same capture always yields the same
+  vault. Links name a note's folder too when its name is held more than
+  once in the vault, since Obsidian resolves a bare `[[Name]]` vault-wide.
 
 Loss, if any, happens *here* -- in this writer, mapping onto Obsidian's
 model -- against a package that still has the data (§7 step 6). The
@@ -40,9 +49,10 @@ import posixpath
 import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from urllib.parse import quote, urlsplit
 
+from connections_export.derive.combine import CombineReport
 from connections_export.derive.model import (
     DerivedForumTopic,
     DerivedItem,
@@ -58,14 +68,22 @@ from connections_export.ingest._bodies import (
     render_body,
     rewrite_tree,
 )
+from connections_export.ingest._combined import combined_section, several
 from connections_export.ingest._markdown import (
     BRACKET_TEXT,
     code_span,
     escape_inline,
     html_to_text,
+    quote_block,
+    readable_time,
     to_markdown,
 )
-from connections_export.interchange.filenames import MAX_STEM, unreserve
+from connections_export.interchange.filenames import (
+    MAX_STEM,
+    collision_key,
+    disambiguator,
+    unreserve,
+)
 
 #: `blob_hash -> bytes` (or None when a referenced blob isn't present).
 #: `interchange.open_blob`-backed in production; injectable for tests.
@@ -92,6 +110,19 @@ _CONTENT_EXT = {
 }
 
 
+@dataclass(frozen=True)
+class Disambiguation:
+    """A note or folder written under a tagged name, because a different
+    item or container already held its plain one."""
+
+    #: `wiki`, `page`, `blog`, `post`, `forum` or `topic`.
+    kind: str
+    #: The name it would have had -- the one another item holds.
+    name: str
+    #: Where it was written instead, relative to the vault.
+    path: str
+
+
 @dataclass
 class VaultStats:
     wikis: int = 0
@@ -110,6 +141,8 @@ class VaultStats:
     html_mode: str = "markdown"
     markdown_blocks: int = 0
     html_blocks: int = 0
+    #: Every note and folder whose name had to be told apart from another's.
+    disambiguated: list[Disambiguation] = field(default_factory=list)
 
     @property
     def items(self) -> int:
@@ -214,16 +247,17 @@ class _AssetStore:
             name = Path(name).stem + sniffed
         elif "." not in Path(name).name:
             name += _ext_for(content_type=content_type, href=preferred_name)
-        # keep it unique if two different blobs want the same name
+        # keep it unique if two different blobs want the same name -- compared
+        # as Windows and macOS compare names, where `Logo.png` IS `logo.png`
         stem, dot, suffix = name.rpartition(".")
         base = stem if dot else name
         candidate, i = name, 1
-        while candidate in self._used:
+        while collision_key(candidate) in self._used:
             candidate = f"{base}-{i}{('.' + suffix) if dot else ''}"
             i += 1
         self._dir.mkdir(parents=True, exist_ok=True)
         (self._dir / candidate).write_bytes(data)
-        self._used.add(candidate)
+        self._used.add(collision_key(candidate))
         self._by_hash[blob_hash] = candidate
         self._stats.assets_written += 1
         return candidate
@@ -255,7 +289,9 @@ def _label(item: DerivedItem) -> str | None:
     return getattr(item, "label", None)
 
 
-def _frontmatter(page: DerivedItem, *, kind: str | None = None) -> str:
+def _frontmatter(
+    page: DerivedItem, *, kind: str | None = None, source_archive: str | None = None
+) -> str:
     lines = ["---", f"title: {_yaml_scalar(page.title or _label(page) or page.id)}"]
     if kind:
         # So a vault search can tell a post from a page from a topic; a wiki
@@ -281,6 +317,10 @@ def _frontmatter(page: DerivedItem, *, kind: str | None = None) -> str:
         lines.append(f"hcl_id: {_yaml_scalar(page.provenance.hcl_id)}")
     if page.provenance and page.provenance.source_url:
         lines.append(f"source_url: {_yaml_scalar(page.provenance.source_url)}")
+    if source_archive:
+        # Only in a vault combined from several archives: which one this
+        # note's copy came from.
+        lines.append(f"source_archive: {_yaml_scalar(source_archive)}")
     lines.append("---\n")
     return "\n".join(lines)
 
@@ -437,8 +477,7 @@ def _apply_sentinels(
 
     def _link(match: re.Match) -> str:
         text, target = match.group(1), match.group(2)
-        title = id_to_title.get(target) or _safe(target, "link")
-        return f"[[{title}|{text}]]" if text and text != title else f"[[{title}]]"
+        return _wikilink(id_to_title.get(target) or _safe(target, "link"), text)
 
     # [text](obsidian-link:ID) -> [[Title|text]]
     markdown = re.sub(
@@ -530,9 +569,9 @@ def _replies_md(
 
     A reply is not a comment: it carries a body with assets and links of
     its own, so it goes through the same conversion as the topic rather
-    than being stripped to a line of text. Each reply is a heading at its
-    depth, which is what keeps a long thread readable in a vault and
-    keeps every reply's images embedded where they were.
+    than being stripped to a line of text. Each reply is a heading, a reply
+    to a reply one blockquote deeper per level -- which keeps a long thread
+    readable in a vault and every reply's images embedded where they were.
     """
     if not topic.replies:
         return ""
@@ -543,16 +582,18 @@ def _replies_md(
         if reply is None:
             return
         who = escape_inline(reply.author or "Unknown")
-        when = f" · {escape_inline(reply.created)}" if reply.created else ""
+        when = f" · {escape_inline(readable_time(reply.created))}" if reply.created else ""
         answer = " · *answer*" if "answer" in (reply.flags or []) else ""
-        lines.append(f"{'#' * min(3 + depth, 6)} {who}{when}{answer}")
-        lines.append("")
+        block = [f"### {who}{when}{answer}", ""]
         body = _rewrite_body(reply, store, id_to_title, file_targets, context).strip()
-        lines.append(body if body else "*(no text)*")
+        block.append(body if body else "*(no text)*")
         attachments = _attachments_md(reply, store)
         if attachments:
-            lines.append(attachments.replace("\n## Attachments\n", "\n**Attachments**\n"))
-        lines.append("")
+            block.append(attachments.replace("\n## Attachments\n", "\n**Attachments**\n"))
+        block.append("")
+        # One heading level for every reply; a reply to a reply goes one
+        # blockquote deeper per level, which a rendered note indents.
+        lines.extend(quote_block("\n".join(block), depth))
         for child in reply.child_ids:
             render(child, depth + 1)
 
@@ -589,12 +630,164 @@ def _ancestors(page: DerivedPage, pages: dict[str, DerivedPage]) -> list[Derived
     return chain
 
 
-def _note_path(
-    vault: Path, wiki_dir: str, page: DerivedPage, pages: dict[str, DerivedPage]
-) -> Path:
-    parts = [wiki_dir] + [_safe(a.title or a.label or a.id, a.id) for a in _ancestors(page, pages)]
-    directory = vault.joinpath(*parts)
-    return directory / (_safe(page.title or page.label or page.id, page.id) + ".md")
+class _Names:
+    """Hands out every folder and note name in the vault, one owner per name.
+
+    A name is claimed in its directory for one container or item. A later,
+    different claimant whose name is the same *file* -- compared as Windows
+    and macOS compare names (`filenames.collision_key`) -- gets the name
+    tagged with `filenames.disambiguator` of its own id, so the tag depends on
+    what it is, not on what came before it; claims are made in the model's
+    order, so which one keeps the plain name is the same on every export.
+    """
+
+    def __init__(self) -> None:
+        self._owners: dict[tuple[PurePosixPath, str], str] = {}
+        self.disambiguated: list[Disambiguation] = []
+
+    def reserve(self, directory: PurePosixPath, name: str) -> None:
+        """Hold `name` for the exporter's own use (no container may take it)."""
+        self._owners[(directory, collision_key(name))] = ""
+
+    def claim(
+        self,
+        directory: PurePosixPath,
+        name: str,
+        *,
+        kind: str,
+        item_id: str,
+        suffixes: tuple[str, ...],
+    ) -> str:
+        """The name `item_id` is written under in `directory`: `name`, or
+        `name` tagged when another owner holds it. `suffixes` are the entries
+        the name stands for -- a page is both `Name.md` and the folder `Name`
+        its children live in, and neither may be someone else's."""
+        owner = f"{kind}:{item_id}"
+        candidate, seed = name, item_id
+
+        def taken(stem: str) -> bool:
+            return any(
+                self._owners.get((directory, collision_key(stem + suffix)), owner) != owner
+                for suffix in suffixes
+            )
+
+        while taken(candidate):
+            candidate = f"{name} ({disambiguator(seed)})"
+            # A tagged name that is itself taken is settled the way
+            # `filenames.plan` settles it: a tag of the id, salted.
+            seed += "!"
+        for suffix in suffixes:
+            self._owners[(directory, collision_key(candidate + suffix))] = owner
+        if candidate != name:
+            self.disambiguated.append(
+                Disambiguation(kind, name, (directory / (candidate + suffixes[0])).as_posix())
+            )
+        return candidate
+
+
+@dataclass
+class _Layout:
+    """Where everything in the vault is written, relative to it, and what a
+    wikilink to each note says."""
+
+    #: `(kind, container id)` -> the container's folder.
+    folders: dict[tuple[str, str], PurePosixPath]
+    #: Item id -> its note.
+    notes: dict[str, PurePosixPath]
+    disambiguated: list[Disambiguation]
+    #: Item id -> what a wikilink to its note says.
+    targets: dict[str, str] = field(init=False)
+
+    def __post_init__(self) -> None:
+        # Obsidian resolves `[[Name]]` by note name across the whole vault, so
+        # a name more than one note holds -- a "Home" in each of two wikis --
+        # is linked by its path from the vault root, which names exactly one.
+        # A name held once is linked by name alone.
+        held: dict[str, int] = {}
+        for note in self.notes.values():
+            held[collision_key(note.stem)] = held.get(collision_key(note.stem), 0) + 1
+        self.targets = {
+            item_id: (
+                note.stem
+                if held[collision_key(note.stem)] == 1
+                else note.with_suffix("").as_posix()
+            )
+            for item_id, note in self.notes.items()
+        }
+
+
+def _in_order(ids: list[str], items: dict) -> list:
+    """`items` in the order `ids` gives, then any it leaves out."""
+    ordered = [items[item_id] for item_id in ids if item_id in items]
+    return ordered + [item for item_id, item in items.items() if item_id not in ids]
+
+
+def _layout(interchange: Interchange) -> _Layout:
+    """Every folder and note path, allocated once through `_Names` -- so the
+    notes written, the links between them, the embeds' HTML paths and the
+    README all agree on the name each thing actually got."""
+    names = _Names()
+    root = PurePosixPath()
+    names.reserve(root, "attachments")
+    folders: dict[tuple[str, str], PurePosixPath] = {}
+    notes: dict[str, PurePosixPath] = {}
+
+    def folder(kind: str, container_id: str, title: str) -> PurePosixPath:
+        name = _safe(title, container_id)
+        path = root / names.claim(root, name, kind=kind, item_id=container_id, suffixes=("",))
+        folders[(kind, container_id)] = path
+        return path
+
+    for wiki in interchange.wikis:
+        wiki_dir = folder("wiki", wiki.id, wiki.title or wiki.label)
+        # Parents before children, since a page's folder is named as its
+        # note is; siblings keep the model's order among themselves.
+        depth = {pid: len(_ancestors(page, wiki.pages)) for pid, page in wiki.pages.items()}
+        for page in sorted(wiki.pages.values(), key=lambda page: depth[page.id]):
+            directory = wiki_dir.joinpath(
+                *(
+                    notes[a.id].stem if a.id in notes else _safe(a.title or a.label or a.id, a.id)
+                    for a in _ancestors(page, wiki.pages)
+                )
+            )
+            stem = names.claim(
+                directory,
+                _safe(page.title or page.label or page.id, page.id),
+                kind="page",
+                item_id=page.id,
+                suffixes=(".md", ""),
+            )
+            notes[page.id] = directory / f"{stem}.md"
+    for blog in interchange.blogs:
+        blog_dir = folder("blog", blog.id, blog.title or blog.handle or blog.id)
+        for post in _in_order(blog.post_ids, blog.posts):
+            stem = names.claim(
+                blog_dir,
+                _safe(post.title or post.id, post.id),
+                kind="post",
+                item_id=post.id,
+                suffixes=(".md",),
+            )
+            notes[post.id] = blog_dir / f"{stem}.md"
+    for forum in interchange.forums:
+        forum_dir = folder("forum", forum.id, forum.title or forum.id)
+        for topic in _in_order(forum.topic_ids, forum.topics):
+            stem = names.claim(
+                forum_dir,
+                _safe(topic.title or topic.id, topic.id),
+                kind="topic",
+                item_id=topic.id,
+                suffixes=(".md",),
+            )
+            notes[topic.id] = forum_dir / f"{stem}.md"
+    return _Layout(folders, notes, names.disambiguated)
+
+
+def _wikilink(target: str, text: str | None = None) -> str:
+    """`[[target|text]]`, or `[[target]]` when the text would say the same.
+    A link by path shows the note's own name rather than the path."""
+    shown = text or PurePosixPath(target).name
+    return f"[[{target}|{shown}]]" if shown != target else f"[[{target}]]"
 
 
 def _store_library_files(interchange: Interchange, store: _AssetStore) -> dict[str, str]:
@@ -645,42 +838,33 @@ def _write_files_index(
     (vault / "Files.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
-def _note_paths(vault: Path, interchange: Interchange) -> dict[str, Path]:
-    """Every note's path by item id, as `write_obsidian_vault` lays them out --
-    what a link in an HTML block points at."""
-    paths: dict[str, Path] = {}
-    for wiki in interchange.wikis:
-        wiki_dir = _safe(wiki.title or wiki.label, wiki.id)
-        for page in wiki.pages.values():
-            paths[page.id] = _note_path(vault, wiki_dir, page, wiki.pages)
-    for blog in interchange.blogs:
-        blog_dir = vault / _safe(blog.title or blog.handle or blog.id, blog.id)
-        for post in blog.posts.values():
-            paths[post.id] = blog_dir / (_safe(post.title or post.id, post.id) + ".md")
-    for forum in interchange.forums:
-        forum_dir = vault / _safe(forum.title or forum.id, forum.id)
-        for topic in forum.topics.values():
-            paths[topic.id] = forum_dir / (_safe(topic.title or topic.id, topic.id) + ".md")
-    return paths
-
-
 def write_obsidian_vault(
     interchange: Interchange,
     blob_reader: BlobReader,
     out_dir: Path | str,
     *,
     html_mode: str = "markdown",
+    combined: CombineReport | None = None,
 ) -> VaultStats:
     """Write `interchange`'s wikis, blogs and forums as an Obsidian vault
     under `out_dir`. `blob_reader` resolves an asset/attachment `blob_hash`
     to bytes (or `None` if absent). `html_mode` is how bodies are written
-    (`_bodies.HTML_MODES`). Returns what was written."""
+    (`_bodies.HTML_MODES`). `combined` is the report of combining several
+    archives into `interchange` (`derive.combine`): every note then names the
+    archive it came from, and the README lists them. Returns what was written."""
     mode = html_mode_for("obsidian", html_mode)
+    combined = several(combined)
+
+    def origin(item_id: str) -> str | None:
+        return combined.origins.get(item_id) if combined else None
+
     vault = Path(out_dir)
     vault.mkdir(parents=True, exist_ok=True)
     stats = VaultStats(html_mode=mode)
     counts = BlockCounts()
-    id_to_note = _note_paths(vault, interchange) if mode != "markdown" else {}
+    layout = _layout(interchange)
+    stats.disambiguated = list(layout.disambiguated)
+    id_to_note = {item_id: vault / note for item_id, note in layout.notes.items()}
 
     def context(note: Path) -> _HtmlContext | None:
         if mode == "markdown":
@@ -689,32 +873,14 @@ def write_obsidian_vault(
 
     store = _AssetStore(vault / "attachments", blob_reader, stats)
 
-    # Obsidian resolves [[Title]] by note name across the whole vault, so
-    # one id->title map spans every container of every app: a post linking
-    # to a wiki page resolves the same way a page linking to a page does (a
-    # caveat when titles collide).
+    # Obsidian resolves [[Name]] by note name across the whole vault, so one
+    # id->target map spans every container of every app: a post linking to a
+    # wiki page resolves the same way a page linking to a page does.
     #
-    # The target is the note's own file name (`_safe`), which is both what
+    # The target is the note's own file name as `_layout` allocated it (or its
+    # vault path, when another note holds that name too), which is both what
     # Obsidian resolves and something a title cannot use to close the link.
-    id_to_title = {
-        pid: _safe(p.title or p.label or pid, pid)
-        for wiki in interchange.wikis
-        for pid, p in wiki.pages.items()
-    }
-    id_to_title.update(
-        {
-            pid: _safe(post.title or pid, pid)
-            for blog in interchange.blogs
-            for pid, post in blog.posts.items()
-        }
-    )
-    id_to_title.update(
-        {
-            tid: _safe(topic.title or tid, tid)
-            for forum in interchange.forums
-            for tid, topic in forum.topics.items()
-        }
-    )
+    id_to_title = layout.targets
 
     # Files first, so a body link to one resolves to the copied file rather
     # than the dead deployment URL when the pages are written below.
@@ -722,14 +888,13 @@ def write_obsidian_vault(
 
     for wiki in interchange.wikis:
         stats.wikis += 1
-        wiki_dir = _safe(wiki.title or wiki.label, wiki.id)
         for page in wiki.pages.values():
-            note = _note_path(vault, wiki_dir, page, wiki.pages)
+            note = id_to_note[page.id]
             note.parent.mkdir(parents=True, exist_ok=True)
             body = _rewrite_body(page, store, id_to_title, file_targets, context(note))
             heading = f"# {escape_inline(page.title or page.label or page.id)}\n\n"
             note.write_text(
-                _frontmatter(page)
+                _frontmatter(page, source_archive=origin(page.id))
                 + heading
                 + body
                 + _attachments_md(page, store)
@@ -741,34 +906,32 @@ def write_obsidian_vault(
 
     for blog in interchange.blogs:
         stats.blogs += 1
-        blog_dir = vault / _safe(blog.title or blog.handle or blog.id, blog.id)
+        blog_dir = vault / layout.folders[("blog", blog.id)]
         blog_dir.mkdir(parents=True, exist_ok=True)
-        # Feed order is the blog's order; a post's ordinal in the name keeps
-        # a file listing in that order too, which a title alone would not.
-        ordered = [blog.posts[pid] for pid in blog.post_ids if pid in blog.posts]
-        ordered += [post for pid, post in blog.posts.items() if pid not in blog.post_ids]
-        for post in ordered:
-            note = blog_dir / (_safe(post.title or post.id, post.id) + ".md")
+        # Feed order is the blog's order.
+        for post in _in_order(blog.post_ids, blog.posts):
+            note = id_to_note[post.id]
             body = _rewrite_body(post, store, id_to_title, file_targets, context(note))
             heading = f"# {escape_inline(post.title or post.id)}\n\n"
             note.write_text(
-                _frontmatter(post, kind="post") + heading + body + _comments_md(post),
+                _frontmatter(post, kind="post", source_archive=origin(post.id))
+                + heading
+                + body
+                + _comments_md(post),
                 encoding="utf-8",
             )
             stats.posts += 1
 
     for forum in interchange.forums:
         stats.forums += 1
-        forum_dir = vault / _safe(forum.title or forum.id, forum.id)
+        forum_dir = vault / layout.folders[("forum", forum.id)]
         forum_dir.mkdir(parents=True, exist_ok=True)
-        ordered_topics = [forum.topics[tid] for tid in forum.topic_ids if tid in forum.topics]
-        ordered_topics += [t for tid, t in forum.topics.items() if tid not in forum.topic_ids]
-        for topic in ordered_topics:
-            note = forum_dir / (_safe(topic.title or topic.id, topic.id) + ".md")
+        for topic in _in_order(forum.topic_ids, forum.topics):
+            note = id_to_note[topic.id]
             body = _rewrite_body(topic, store, id_to_title, file_targets, context(note))
             heading = f"# {escape_inline(topic.title or topic.id)}\n\n"
             note.write_text(
-                _frontmatter(topic, kind="topic")
+                _frontmatter(topic, kind="topic", source_archive=origin(topic.id))
                 + heading
                 + body
                 + _attachments_md(topic, store)
@@ -779,11 +942,34 @@ def write_obsidian_vault(
 
     stats.markdown_blocks, stats.html_blocks = counts.markdown, counts.html
     _write_files_index(vault, interchange, file_targets, stats)
-    _write_readme(vault, interchange, stats)
+    _write_readme(vault, interchange, stats, layout.targets, combined)
     return stats
 
 
-def _write_readme(vault: Path, interchange: Interchange, stats: VaultStats) -> None:
+def _disambiguated_section(entries: list[Disambiguation]) -> list[str]:
+    """The README section naming every note and folder written under a tagged
+    name, and the name it shares with something else."""
+    lines = [
+        "## Disambiguated names",
+        "",
+        "These have the same name as a different note or folder -- the same title, "
+        "or one that is the same file on Windows and macOS, where case does not "
+        "count -- so each carries a short tag derived from its Connections id. "
+        "Links point at the note that was written.",
+        "",
+    ]
+    for entry in entries:
+        lines.append(f"- {code_span(entry.path)}: {entry.kind} named {code_span(entry.name)}")
+    return lines
+
+
+def _write_readme(
+    vault: Path,
+    interchange: Interchange,
+    stats: VaultStats,
+    targets: dict[str, str],
+    combined: CombineReport | None = None,
+) -> None:
     lines = [
         "# HCL export → Obsidian vault",
         "",
@@ -803,7 +989,7 @@ def _write_readme(vault: Path, interchange: Interchange, stats: VaultStats) -> N
             for root_id in wiki.root_page_ids:
                 page = wiki.pages.get(root_id)
                 if page:
-                    lines.append(f"- [[{_safe(page.title or page.label or root_id, root_id)}]]")
+                    lines.append(f"- {_wikilink(targets[root_id])}")
             lines.append("")
     if interchange.blogs:
         lines += ["## Blogs", ""]
@@ -812,7 +998,7 @@ def _write_readme(vault: Path, interchange: Interchange, stats: VaultStats) -> N
             for pid in blog.post_ids:
                 post = blog.posts.get(pid)
                 if post:
-                    lines.append(f"- [[{_safe(post.title or pid, pid)}]]")
+                    lines.append(f"- {_wikilink(targets[pid])}")
             lines.append("")
     if interchange.forums:
         lines += ["## Forums", ""]
@@ -821,10 +1007,14 @@ def _write_readme(vault: Path, interchange: Interchange, stats: VaultStats) -> N
             for tid in forum.topic_ids:
                 topic = forum.topics.get(tid)
                 if topic:
-                    lines.append(f"- [[{_safe(topic.title or tid, tid)}]]")
+                    lines.append(f"- {_wikilink(targets[tid])}")
             lines.append("")
     if interchange.file_libraries:
         lines += ["## Files", "", "- [[Files]] — every library and its documents", ""]
+    if combined is not None:
+        lines += [*combined_section(combined, escape_inline), ""]
+    if stats.disambiguated:
+        lines += [*_disambiguated_section(stats.disambiguated), ""]
     if stats.html_mode != "markdown":
         lines += [html_mode_note(stats.html_mode, stats.markdown_blocks, stats.html_blocks), ""]
     if stats.assets_missing:
@@ -852,7 +1042,13 @@ def from_source(source, out_dir: Path | str, *, html_mode: str = "markdown") -> 
         result = source.get_blob(blob_hash)
         return result[0] if result is not None else None
 
-    return write_obsidian_vault(interchange, blob_reader, out_dir, html_mode=html_mode)
+    return write_obsidian_vault(
+        interchange,
+        blob_reader,
+        out_dir,
+        html_mode=html_mode,
+        combined=getattr(source, "combine_report", None),
+    )
 
 
 def from_package(

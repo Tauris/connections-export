@@ -1,0 +1,189 @@
+/*
+  The starter site's one stylesheet. Plain CSS, nothing loaded from anywhere
+  else: the system's own fonts, no web fonts, no framework. Colours are the
+  custom properties below; dark mode swaps them when the reader's system
+  asks for it. Edit freely -- this is a starting point, not a theme.
+*/
+
+:root {
+  --bg: #ffffff;
+  --surface: #f6f7f9;
+  --ink: #1d232b;
+  --ink-soft: #56606d;
+  --line: #dde1e7;
+  --accent: #1f5fbf;
+  --accent-soft: #e6eefb;
+  --measure: 72ch;
+  --radius: 8px;
+  color-scheme: light dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #15181d;
+    --surface: #1d2127;
+    --ink: #e4e7ec;
+    --ink-soft: #a1a9b5;
+    --line: #313843;
+    --accent: #8ab4f8;
+    --accent-soft: #22324a;
+  }
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+
+html { -webkit-text-size-adjust: 100%; }
+
+/* A column, so the footer sits at the bottom of a short page. */
+body {
+  margin: 0;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  color: var(--ink);
+  font: 17px/1.6 system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+}
+
+a { color: var(--accent); text-underline-offset: 0.15em; }
+a:hover { text-decoration-thickness: 2px; }
+
+.wrap { width: min(1120px, 100%); margin: 0 auto; padding: 0 20px; }
+
+.skip { position: absolute; left: -999px; }
+.skip:focus { left: 12px; top: 12px; background: var(--bg); padding: 6px 10px; z-index: 1; }
+
+/* --- header and footer ---------------------------------------------------- */
+
+.site-header { border-bottom: 1px solid var(--line); background: var(--surface); }
+.site-header .wrap {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px 28px;
+  padding-top: 14px; padding-bottom: 14px;
+}
+.site-title { font-weight: 700; font-size: 1.1rem; color: var(--ink); text-decoration: none; }
+.site-header ul { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 4px 18px; }
+.site-header nav a { color: var(--ink-soft); text-decoration: none; padding: 4px 0; }
+.site-header nav a:hover, .site-header nav a[aria-current] {
+  color: var(--ink); box-shadow: inset 0 -2px 0 var(--accent);
+}
+
+main.wrap { flex: 1; padding-top: 32px; padding-bottom: 56px; }
+
+.site-footer { border-top: 1px solid var(--line); color: var(--ink-soft); font-size: 0.875rem; }
+.site-footer p { margin: 18px 0; }
+
+/* --- page furniture --------------------------------------------------------- */
+
+h1, h2, h3, h4, h5, h6 { line-height: 1.25; margin: 1.6em 0 0.5em; }
+h1 { font-size: 2rem; margin-top: 0.2em; }
+h2 { font-size: 1.45rem; }
+h3 { font-size: 1.2rem; }
+/* Forum replies nest as ever-deeper headings: keep the deep ones readable. */
+h4, h5, h6 { font-size: 1.05rem; }
+h5, h6 { color: var(--ink-soft); }
+
+.page-header { margin-bottom: 24px; }
+.lead { color: var(--ink-soft); font-size: 1.05rem; margin: 0 0 8px; }
+
+.crumbs ol { list-style: none; margin: 0 0 8px; padding: 0; display: flex; flex-wrap: wrap; font-size: 0.875rem; }
+.crumbs li + li::before { content: "/"; color: var(--ink-soft); margin: 0 8px; }
+.crumbs a { color: var(--ink-soft); }
+
+.byline { color: var(--ink-soft); font-size: 0.9rem; margin: 4px 0; display: flex; flex-wrap: wrap; gap: 0 14px; }
+
+.tags { list-style: none; margin: 10px 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px; }
+.tags a {
+  display: inline-block; padding: 1px 10px; border-radius: 999px; font-size: 0.8rem;
+  background: var(--accent-soft); text-decoration: none;
+}
+
+.facts { margin: 12px 0 0; display: flex; flex-wrap: wrap; gap: 4px 24px; font-size: 0.875rem; }
+.facts:empty { display: none; }
+.facts div { display: flex; gap: 6px; }
+.facts dt { color: var(--ink-soft); }
+.facts dd { margin: 0; }
+
+.flag {
+  font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em;
+  border: 1px solid var(--line); border-radius: 4px; padding: 0 6px;
+}
+
+/* --- the body of a page ---------------------------------------------------- */
+
+.content { max-width: var(--measure); overflow-wrap: break-word; }
+.content img, .content svg, .content video { max-width: 100%; height: auto; }
+.content figure { margin: 1.2em 0; }
+.content figcaption { color: var(--ink-soft); font-size: 0.875rem; }
+.content blockquote { margin: 1em 0; padding: 0.2em 1em; border-left: 3px solid var(--line); color: var(--ink-soft); }
+.content hr { border: 0; border-top: 1px solid var(--line); margin: 2em 0; }
+
+code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.9em; }
+code { background: var(--surface); padding: 0.1em 0.3em; border-radius: 4px; }
+pre { background: var(--surface); padding: 12px 14px; border-radius: var(--radius); overflow-x: auto; }
+pre code { background: none; padding: 0; }
+
+/* Exported tables are often wider than the text: they scroll on their own
+   rather than pushing the page sideways. */
+.content table {
+  display: block; max-width: 100%; overflow-x: auto;
+  border-collapse: collapse; margin: 1.2em 0; font-size: 0.925rem;
+}
+.content th, .content td { border: 1px solid var(--line); padding: 6px 10px; text-align: left; vertical-align: top; }
+.content th { background: var(--surface); }
+.content tr:nth-child(even) td { background: color-mix(in srgb, var(--surface) 60%, transparent); }
+
+/* --- lists of things -------------------------------------------------------- */
+
+.cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 18px; }
+.card { border: 1px solid var(--line); border-radius: var(--radius); padding: 16px 20px; background: var(--surface); }
+.card h2 { margin: 0 0 8px; font-size: 1.2rem; }
+.card ul { list-style: none; margin: 0; padding: 0; }
+.card li { display: flex; justify-content: space-between; gap: 12px; padding: 4px 0; border-top: 1px solid var(--line); }
+.card li:first-child { border-top: 0; }
+.count { color: var(--ink-soft); font-size: 0.875rem; white-space: nowrap; }
+
+.containers, .entries { list-style: none; margin: 0; padding: 0; max-width: var(--measure); }
+.containers li, .entries li { padding: 14px 0; border-top: 1px solid var(--line); }
+.containers h2, .entries h3 { margin: 0; font-size: 1.15rem; }
+.summary { margin: 6px 0 0; color: var(--ink-soft); }
+/* In a list the whole line is plainly a link; underline only on hover. */
+.card a, .containers a, .entries a { text-decoration: none; }
+.card a:hover, .containers a:hover, .entries a:hover { text-decoration: underline; }
+
+.tag-cloud { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 8px; }
+.tag-cloud li { border: 1px solid var(--line); border-radius: 999px; padding: 2px 12px; }
+
+.files ul { padding-left: 1.2em; }
+
+/* --- a wiki: the page tree beside the page --------------------------------- */
+
+.with-tree { display: grid; grid-template-columns: 260px minmax(0, 1fr); gap: 40px; align-items: start; }
+.tree { font-size: 0.925rem; }
+.with-tree .tree {
+  position: sticky; top: 16px; max-height: calc(100vh - 32px); overflow-y: auto;
+  border-right: 1px solid var(--line); padding-right: 16px;
+}
+.tree-title { font-weight: 600; margin: 0 0 8px; }
+.tree-title a { color: var(--ink); text-decoration: none; }
+.tree ul { list-style: none; margin: 0; padding-left: 14px; border-left: 1px solid var(--line); }
+.tree > ul { padding-left: 0; border-left: 0; }
+.tree li { margin: 3px 0; }
+.tree a { text-decoration: none; }
+.tree a:hover { text-decoration: underline; }
+.tree a[aria-current] { color: var(--ink); font-weight: 600; }
+.wiki-index { font-size: 1rem; max-width: var(--measure); }
+
+.children { margin-top: 36px; border-top: 1px solid var(--line); max-width: var(--measure); }
+.children h2 { font-size: 1.1rem; }
+
+/* Narrow screens: the page first, its wiki's tree below it -- a reader
+   arriving on a phone came for the page, not the navigation. */
+@media (max-width: 800px) {
+  body { font-size: 16px; }
+  h1 { font-size: 1.6rem; }
+  .with-tree { grid-template-columns: 1fr; gap: 20px; }
+  .with-tree .tree {
+    order: 1; position: static; max-height: none; border-right: 0; padding: 16px 0 0;
+    border-top: 1px solid var(--line);
+  }
+}

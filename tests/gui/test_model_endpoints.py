@@ -373,3 +373,28 @@ def test_api_version_reports_the_running_build():
     assert set(info) >= {"version", "commit", "ref", "channel", "label"}
     assert info["label"].startswith("v")
     assert info["channel"] in {"dev", "test", "release"}
+
+
+def test_current_archive_names_an_archive_from_the_archives_folder(tmp_path, monkeypatch):
+    """The guided export addresses the open archive by the name the Archives
+    screen lists it under, when it is one of those; one opened from
+    elsewhere has no such name, and is exported as 'the open archive'."""
+    from connections_export.gui import support
+    from connections_export.gui.demo import run_demo
+
+    filed = tmp_path / "archives"
+    elsewhere = tmp_path / "dropped"
+    filed.mkdir()
+    elsewhere.mkdir()
+    monkeypatch.setattr(support, "ARCHIVES_BASE", filed)
+    run_demo((lambda _e: None), archive_dir=filed / "RUN-A", delay=0)
+    run_demo((lambda _e: None), archive_dir=elsewhere / "RUN-B", delay=0)
+
+    inside = _run(_get(make_app(demo=True, archive_dir=filed / "RUN-A"), "/api/current-archive"))
+    outside = _run(
+        _get(make_app(demo=True, archive_dir=elsewhere / "RUN-B"), "/api/current-archive")
+    )
+
+    assert inside.json()["archive_name"] == "RUN-A"
+    assert outside.json()["name"] == "RUN-B"
+    assert outside.json()["archive_name"] is None

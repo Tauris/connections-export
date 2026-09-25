@@ -1,0 +1,36 @@
+{{/*
+  What a reader wants to know about a page besides its text: who wrote it
+  and when, its tags, where it belongs, and the way back to the original.
+
+  The fields are the ones the exporter writes under `params:` (the README
+  beside `content/` lists them all). Only the reader-facing ones are shown;
+  identifiers and counts stay in the front matter for templates of your own.
+  `source_url` goes through html/template's URL escaping, so an address that
+  is not http(s) is neutralised rather than linked.
+*/}}
+{{- $p := .Params }}
+<p class="byline">
+  {{- with $p.author }}<span>By {{ . }}</span>{{ end }}
+  {{- /* A container has no date of its own; Hugo gives a section its newest
+         page's, which would read as the wiki's or blog's own. */}}
+  {{- if and (not .Date.IsZero) (or .IsPage (eq .Params.kind "wiki_page")) }}
+  <span><time datetime="{{ .Date.Format "2006-01-02T15:04:05Z07:00" }}">{{ .Date.Format "2 January 2006" }}</time></span>
+  {{- if and (not .Lastmod.IsZero) (ne (.Lastmod.Format "2006-01-02") (.Date.Format "2006-01-02")) }}
+  <span>updated <time datetime="{{ .Lastmod.Format "2006-01-02T15:04:05Z07:00" }}">{{ .Lastmod.Format "2 January 2006" }}</time></span>
+  {{- end }}
+  {{- end }}
+</p>
+{{- with .GetTerms "tags" }}
+<ul class="tags" aria-label="Tags">
+  {{- range . }}
+  <li><a href="{{ .RelPermalink }}">{{ .LinkTitle }}</a></li>
+  {{- end }}
+</ul>
+{{- end }}
+<dl class="facts">
+  {{- with $p.community }}<div><dt>Community</dt><dd>{{ . }}</dd></div>{{ end -}}
+  {{- with $p.contributors }}<div><dt>Also edited by</dt><dd>{{ delimit . ", " }}</dd></div>{{ end -}}
+  {{- with $p.flags }}<div><dt>Status</dt><dd>{{ delimit . ", " }}</dd></div>{{ end -}}
+  {{- with $p.source_archive }}<div><dt>From archive</dt><dd>{{ . }}</dd></div>{{ end -}}
+  {{- with $p.source_url }}<div><dt>Original</dt><dd><a href="{{ . }}" rel="noopener noreferrer">View in Connections</a></dd></div>{{ end -}}
+</dl>

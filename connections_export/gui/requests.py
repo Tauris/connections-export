@@ -149,10 +149,26 @@ class _BulkRepairRequest(BaseModel):
 class _IngestRequest(BaseModel):
     """Which developer format to reconstruct the open archive into, and how
     its page content is written (`ingest._bodies.HTML_MODES`; the format's
-    own default when absent)."""
+    own default when absent).
+
+    `archives` names archives on the Archives screen to export instead of the
+    open one -- several are combined into one export (`derive.combine`).
+    `dry_run` reports what the export would hold and where it would go, and
+    writes nothing. `starter_site` (Hugo only) adds the starter site beside
+    `content/`, so the export can be viewed with `hugo server`."""
 
     format: str
     html_mode: str | None = None
+    archives: list[str] | None = None
+    dry_run: bool = False
+    starter_site: bool = False
+
+
+class _HugoPreviewRequest(BaseModel):
+    """The Hugo export folder to preview: a path the console's own export
+    reported."""
+
+    path: str
 
 
 class _ArchiveZipRequest(BaseModel):

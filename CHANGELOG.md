@@ -23,11 +23,93 @@ version is recorded inside every archive.
   captured, not cleaned. Links, images and template-syntax escaping are handled
   in every mode.
 
+- **Combine several archives into one export.** `connections-export ingest
+  --format hugo|jekyll|obsidian` accepts `--archive` (and `--package`) more
+  than once and writes one Hugo content folder, Jekyll site or Obsidian vault.
+  Anything held by more than one archive appears once, taken from the most
+  recent capture — item by item, so a wiki holds every page any archive
+  captured, each in its newest version; comments and replies travel with the
+  copy kept. Links from one archive to content another holds become internal
+  links. Every page records its `source_archive`, and the README (Jekyll:
+  `sources.md`) lists the archives and, for each container held more than
+  once, whose copy was kept. The same id from two different deployments is
+  kept apart and reported. A single archive's export is unchanged.
+- **Guided export on the Archives screen.** Tick one or more archives and
+  press **Export…**: choose the archives, the format and how page content is
+  written, preview exactly what will be written — counts, duplicates and whose
+  copy wins, links that become internal, and the output folder — then export,
+  with progress and what to do next.
+
+- **Hugo starter site.** `connections-export ingest --format hugo --starter-site`
+  (console: "Add a starter site", on by default in the export dialog) also
+  writes a `hugo.toml`, a small set of templates and one stylesheet beside
+  `content/`, so the export can be viewed with `hugo server`: a home page with
+  every section, each wiki's page tree in its own order, blog posts and forum
+  topics newest first, the file libraries, pages with author, date, tags and a
+  link to the original, and a page per tag. Raw HTML is allowed only when the
+  page content includes HTML. Off by default on the command line; `content/`
+  alone is still what goes into an existing site.
+- **Preview with Hugo.** When Hugo is installed, the export dialog can show a
+  Hugo export with its starter site straight away: it runs your own
+  `hugo server` on a separate local address, never through the console, and
+  opens it in a new tab; "Stop preview" (or closing the console) ends it.
+  Without Hugo the dialog says so and links to Hugo's installation guide —
+  nothing is downloaded or installed.
+
 ### Changed
+- **The export dialog goes step by step.** Archives, Format & options, Check,
+  Export — one short step at a time, with the step shown at the top and Back,
+  Next and Close always in view, so the dialog fits a laptop screen and the
+  result is never below the fold. The dry run is called **Check**, so it is
+  not confused with **Preview with Hugo**, the result's main button after a
+  Hugo export with its starter site.
+- **One way to export a developer format.** The Reader's "Export Obsidian
+  vault… / Jekyll site… / Hugo content…" buttons open the same dialog for the
+  archive you are reading, with that format chosen — so the Hugo starter
+  site, the page-content choice and the Check are there too.
+- **Hugo is looked for as soon as you choose it.** The dialog says which Hugo
+  it found; or that Hugo is not on this computer's PATH (restart the console
+  if you installed Hugo after starting it), with a link to Hugo's
+  installation guide; or that Hugo was found but did not answer. The console
+  gives `hugo version` 15 seconds — a first run on Windows can be slow while
+  antivirus checks it — and remembers a Hugo that answered.
 - The Jekyll exporter now defaults to `mixed`: tables with merged or coloured
   cells, sized images, figures and coloured text keep their layout as HTML
   instead of being flattened. `--html markdown` gives the previous output.
   Obsidian still defaults to Markdown, unchanged.
+
+### Fixed
+- **Exports are not listed as archives.** Hugo content folders, Jekyll sites
+  and Obsidian vaults written beside the archives no longer appear on the
+  Archives screen as if they were archives.
+- The Reader's Export menu no longer runs off the bottom of the window when
+  the developer formats are open; it scrolls.
+- **Obsidian names no longer collide.** Two different wikis, blogs or forums
+  with the same title — including the same community captured from two
+  deployments and combined — now get a folder each, and two pages, posts or
+  topics with the same title get a note each instead of overwriting one
+  another. Names that are the same file on Windows and macOS (differing only
+  in case or Unicode form), titles that become equal once made safe for a
+  filesystem, and attachment names count as the same name. The first keeps its
+  plain name; each other one is tagged with a short code derived from its
+  Connections id, e.g. "Handbook (1a2b3c)", so the same capture always
+  produces the same vault. Links point at the note that was written; the
+  summary counts disambiguated names and the vault README lists them.
+- **Forum threads keep their replies, nested, in every export.** The Jekyll
+  export wrote a forum topic without its replies; it now writes every reply
+  with its body, images and links. In Jekyll, Obsidian and Hugo a reply to a
+  reply goes one blockquote deeper per level, so a rendered page indents it
+  under the reply it answers (deeper headings only showed in the Markdown),
+  and reply times read `YYYY-MM-DD HH:MM UTC`.
+- **Jekyll posts render with their title, author and correct characters.**
+  Exported posts named no layout, so Jekyll rendered them bare: no title, no
+  author, and no page head declaring UTF-8 — a browser then guessed the
+  encoding and showed `‘` as `â€˜`. Every post now names `layout: post`.
+  Reported by Christoph Stoettner (issues #3 and #4).
+- **Content discovery in the console uses the sign-in method chosen in
+  Settings.** With Username and password chosen, discovery still asked with
+  Windows sign-in from the configuration, and found no feeds. Found and fixed
+  by Christoph Stoettner (pull request #2).
 
 ## 0.1.11 — 2026-09-25
 

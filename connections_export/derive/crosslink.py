@@ -25,7 +25,7 @@ from __future__ import annotations
 
 from connections_export.crawler.assets import document_id_from_link
 from connections_export.derive.links import _path_key, build_page_lookup
-from connections_export.derive.model import Interchange
+from connections_export.derive.model import Interchange, LinkRef
 
 
 def _entities(interchange: Interchange):
@@ -78,26 +78,38 @@ def crosslink(interchange: Interchange) -> int:
     upgraded = 0
     for entity, _entity_id, _url, _label in _entities(interchange):
         for link in getattr(entity, "links", []) or []:
-            if link.scope != "hcl_deployment":
-                continue
-            document_id = document_id_from_link(link.original_href) or document_id_from_link(
-                link.resolved_url or ""
-            )
-            if document_id and document_id in files:
-                # The bytes are in this archive, so the link can be answered
-                # after the deployment is gone -- which is the whole reason
-                # the document was captured.
-                link.scope = "in_export"
-                link.target_file_id = files[document_id]
-                upgraded += 1
-                continue
-            target = (
-                lookup.get(link.resolved_url or "")
-                or lookup.get(link.original_href)
-                or lookup.get(_path_key(link.resolved_url or "") or "")
-            )
-            if target:
-                link.scope = "in_export"
-                link.target_page_id = target
+            if upgrade_link(link, lookup=lookup, files=files):
                 upgraded += 1
     return upgraded
+
+
+def upgrade_link(link: LinkRef, *, lookup: dict[str, str], files: dict[str, str]) -> bool:
+    """Make one `hcl_deployment` link in-export when `lookup` (a
+    `build_page_lookup` result) or `files` (document id -> file id) holds its
+    target. Returns whether it did. Anything else is left exactly as it is.
+
+    Shared with `derive.combine`, which runs the same resolution across the
+    archives it combines: a link that left one archive may land in another.
+    """
+    if link.scope != "hcl_deployment":
+        return False
+    document_id = document_id_from_link(link.original_href) or document_id_from_link(
+        link.resolved_url or ""
+    )
+    if document_id and document_id in files:
+        # The bytes are in this export, so the link can be answered after the
+        # deployment is gone -- which is the whole reason the document was
+        # captured.
+        link.scope = "in_export"
+        link.target_file_id = files[document_id]
+        return True
+    target = (
+        lookup.get(link.resolved_url or "")
+        or lookup.get(link.original_href)
+        or lookup.get(_path_key(link.resolved_url or "") or "")
+    )
+    if target:
+        link.scope = "in_export"
+        link.target_page_id = target
+        return True
+    return False

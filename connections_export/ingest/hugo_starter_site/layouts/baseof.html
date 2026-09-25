@@ -1,0 +1,48 @@
+<!doctype html>
+{{/*
+  The frame every page is drawn in: a header naming the site and linking to
+  each top-level section (Wikis, Blogs, Forums, Files, Highlights -- only the
+  ones this export holds), the page's own "main" block, and a footer saying
+  where the content came from.
+
+  Every value from the content passes through Go's html/template, which
+  escapes it for where it lands -- text, attribute or URL. `.Content` is the
+  one thing written as HTML, and it is the page body Hugo rendered.
+*/}}
+<html lang="{{ or site.Language.Lang "en" }}">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ if .IsHome }}{{ site.Title }}{{ else }}{{ .Title }} · {{ site.Title }}{{ end }}</title>
+  <link rel="stylesheet" href="{{ "css/site.css" | relURL }}">
+</head>
+<body>
+  <a class="skip" href="#main">Skip to content</a>
+  <header class="site-header">
+    <div class="wrap">
+      <a class="site-title" href="{{ "" | relURL }}">{{ site.Title }}</a>
+      <nav aria-label="Sections">
+        <ul>
+          {{- $here := .Section }}
+          {{- range site.Sections.ByWeight }}
+          <li><a href="{{ .RelPermalink }}"{{ if eq .Section $here }} aria-current="true"{{ end }}>{{ .Title }}</a></li>
+          {{- end }}
+          {{- with site.GetPage "/tags" }}
+          {{- if .Data.Terms }}
+          <li><a href="{{ .RelPermalink }}"{{ if eq .Section $here }} aria-current="true"{{ end }}>Tags</a></li>
+          {{- end }}
+          {{- end }}
+        </ul>
+      </nav>
+    </div>
+  </header>
+  <main id="main" class="wrap">
+    {{- block "main" . }}{{ end }}
+  </main>
+  <footer class="site-footer">
+    <div class="wrap">
+      <p>Content exported from HCL Connections with connections-export. Each page links to its original where the address is known.</p>
+    </div>
+  </footer>
+</body>
+</html>

@@ -1,0 +1,7 @@
+{{/*
+  A single item: a wiki page without sub-pages, a blog post, a forum topic
+  (its replies are part of the body the exporter wrote) or a Highlights page.
+*/}}
+{{ define "main" }}
+  {{- partial "article.html" . }}
+{{ end }}

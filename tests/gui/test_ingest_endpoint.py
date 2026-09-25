@@ -138,6 +138,31 @@ def test_ingest_takes_the_html_mode_or_the_formats_default(tmp_path):
     assert chosen["markdown_blocks"] == 0 and chosen["html_blocks"] > 0
 
 
+def test_the_open_archive_is_checked_then_exported_with_every_option(tmp_path):
+    """What the Reader's buttons do for an archive opened from outside the
+    archives folder: no `archives` in the request, a check first, then the
+    export -- with the starter site and the page-content choice, exactly as
+    for an archive picked by name."""
+    archive_dir = tmp_path / "dropped" / "archive"
+    run_demo((lambda _e: None), archive_dir=archive_dir, delay=0)
+    app = make_app(demo=True, archive_dir=archive_dir)
+    body = {"format": "hugo", "html_mode": "html", "starter_site": True}
+
+    folder = archive_dir.parent / "archive-hugo-content"
+
+    checked = _post(app, {**body, "dry_run": True}).json()
+
+    assert checked["ok"] and checked["dry_run"] and checked["path"] == str(folder)
+    assert checked["counts"]["pages"] > 0 and checked["starter_site"] is True
+    assert not folder.exists(), "the check writes nothing"
+
+    written = _post(app, body).json()
+
+    assert written["ok"] and written["path"] == str(folder)
+    assert written["html_mode"] == "html" and written["starter_site"] is True
+    assert (folder / "hugo.toml").is_file() and (folder / "layouts").is_dir()
+
+
 def test_an_unknown_html_mode_is_rejected(tmp_path):
     archive_dir = tmp_path / "archive"
     run_demo((lambda _e: None), archive_dir=archive_dir, delay=0)
@@ -151,8 +176,9 @@ def test_an_unknown_html_mode_is_rejected(tmp_path):
 
 
 def test_the_console_offers_hugo_and_the_page_content_choice():
-    """The developer-formats section has the Hugo button, the four content
-    choices plus the format's default, and sends the choice with the export."""
+    """The developer-formats section has the Hugo button, which opens the
+    guided export; the dialog has the four content choices plus the format's
+    default, and sends the choice with the export."""
     from pathlib import Path
 
     static = Path(__file__).resolve().parents[2] / "connections_export" / "gui" / "static"
@@ -160,7 +186,7 @@ def test_the_console_offers_hugo_and_the_page_content_choice():
     script = (static / "console.js").read_text(encoding="utf-8")
 
     assert 'id="r-export-hugo"' in html and "Export Hugo content" in html
-    assert 'id="r-dev-html-mode"' in html
+    assert 'id="devx-html-mode"' in html
     for value, label in (
         ("", "Default for the format"),
         ("markdown", "Markdown"),
@@ -170,5 +196,5 @@ def test_the_console_offers_hugo_and_the_page_content_choice():
     ):
         assert f'<option value="{value}"' in html and f">{label}</option>" in html
     assert "Obsidian, Jekyll and Hugo are independent, third-party applications" in html
-    assert "html_mode: htmlMode" in script
-    assert 'exportDevFormat("hugo"' in script
+    assert "html_mode: mode || null" in script
+    assert 'data-devx-format="hugo"' in html and "openDevExportForReader" in script

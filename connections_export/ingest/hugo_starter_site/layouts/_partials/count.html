@@ -1,0 +1,21 @@
+{{/*
+  How much a container holds, as words: "8 pages", "1 post", "3 files".
+
+  The exporter writes the number into the container's front matter
+  (`params.page_count`, `post_count`, `topic_count`, `file_count`), so it is
+  the count of what was captured -- a wiki page with sub-pages is a section
+  to Hugo, not a regular page, and counting Hugo's pages would miss it. A
+  Highlights area carries no count and is counted from its pages.
+*/}}
+{{- $kind := .Params.kind }}
+{{- $n := 0 }}
+{{- $noun := "item" }}
+{{- if eq $kind "wiki" }}{{ $n = .Params.page_count }}{{ $noun = "page" }}
+{{- else if in (slice "blog" "ideation_blog") $kind }}{{ $n = .Params.post_count }}{{ $noun = "post" }}
+{{- else if eq $kind "forum" }}{{ $n = .Params.topic_count }}{{ $noun = "topic" }}
+{{- else if eq $kind "file_library" }}{{ $n = .Params.file_count }}{{ $noun = "file" }}
+{{- else }}{{ $n = len .RegularPages }}{{ $noun = "page" }}
+{{- end }}
+{{- $n = int (or $n 0) }}
+{{- if ne $n 1 }}{{ $noun = pluralize $noun }}{{ end }}
+{{- return printf "%d %s" $n $noun }}
