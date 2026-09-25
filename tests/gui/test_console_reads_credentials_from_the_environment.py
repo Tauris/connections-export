@@ -66,15 +66,15 @@ def test_feed_info_uses_the_saved_ui_auth_mode(tmp_path, monkeypatch):
     monkeypatch.setenv("CONNECTIONS_EXPORT_USER", "reader")
     seen = _capture(monkeypatch)
     app = make_app()
+    url = "https://connections.example.corp/wikis/home/wiki/eng-handbook"
 
     async def _do():
         transport = httpx.ASGITransport(app=app)
         async with httpx.AsyncClient(transport=transport, base_url="http://127.0.0.1") as client:
             await client.put("/api/settings", json={"auth_mode": "basic"})
-            await client.get(
-                "/api/feed-info",
-                params={"url": "https://connections.example.corp/wikis/home/wiki/eng-handbook"},
-            )
+            # Lookups only reach a deployment the user chose (dropped a URL from).
+            await client.post("/api/identify", json={"url": url})
+            await client.get("/api/feed-info", params={"url": url})
 
     asyncio.run(_do())
 
