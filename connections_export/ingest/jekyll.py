@@ -40,8 +40,9 @@ from connections_export.ingest._combined import combined_section, several
 from connections_export.ingest._markdown import (
     BRACKET_TEXT,
     code_span,
+    comment_lines,
     escape_inline,
-    html_to_text,
+    paragraphs_from_plain_text,
     quote_block,
     readable_time,
 )
@@ -379,12 +380,16 @@ def _comments(item: DerivedItem) -> str:
 
     def render(parent_id: str | None, depth: int) -> None:
         for comment in children.get(parent_id, []):
-            # The commenter's text on one list line: parsed rather than
-            # regex-stripped (which left an unclosed `<img ... onerror=`), and
-            # escaped for Markdown, kramdown and Liquid alike.
-            body = _text(html_to_text(comment.content_html))
-            when = f" ({_text(comment.created)})" if comment.created else ""
-            lines.append(f"{'  ' * depth}- **{_text(comment.author or 'Unknown')}**{when}: {body}")
+            # The commenter's text, parsed rather than regex-stripped (which
+            # left an unclosed `<img ... onerror=`) and escaped for Markdown,
+            # kramdown and Liquid alike -- its paragraphs and line breaks
+            # indented under the list item, where one line lost every break.
+            when = f" ({_text(readable_time(comment.created))})" if comment.created else ""
+            pad = "  " * depth
+            head = f"{pad}- **{_text(comment.author or 'Unknown')}**{when}:"
+            lines.extend(
+                comment_lines(head, comment.content_html, _text, content_indent=pad + "    ")
+            )
             render(comment.id, depth + 1)
 
     render(None, 0)
@@ -418,8 +423,12 @@ def _replies(
         who = _text(reply.author or "Unknown")
         when = f" · {_text(readable_time(reply.created))}" if reply.created else ""
         answer = " · *answer*" if "answer" in (reply.flags or []) else ""
+        # Plain-text replies' line breaks become paragraphs and breaks first.
+        shaped = reply.model_copy(
+            update={"content_html": paragraphs_from_plain_text(reply.content_html)}
+        )
         body = _rewrite_body(
-            reply, store, id_to_permalink, file_targets, mode=mode, counts=counts
+            shaped, store, id_to_permalink, file_targets, mode=mode, counts=counts
         ).strip()
         block = [f"### {who}{when}{answer}", "", body if body else "*(no text)*", ""]
         attachments = _attachments(reply, store).strip()

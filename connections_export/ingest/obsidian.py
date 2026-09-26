@@ -72,8 +72,9 @@ from connections_export.ingest._combined import combined_section, several
 from connections_export.ingest._markdown import (
     BRACKET_TEXT,
     code_span,
+    comment_lines,
     escape_inline,
-    html_to_text,
+    paragraphs_from_plain_text,
     quote_block,
     readable_time,
     to_markdown,
@@ -508,13 +509,21 @@ def _comments_md(page: DerivedItem) -> str:
 
     def render(parent_id: str | None, depth: int, out: list[str]) -> None:
         for comment in children.get(parent_id, []):
-            # Every part is the commenter's text on one list line: parsed, not
-            # regex-stripped (which left an unclosed `<img ... onerror=`), and
-            # escaped so none of it becomes Markdown or HTML.
+            # The commenter's text, parsed rather than regex-stripped (which
+            # left an unclosed `<img ... onerror=`) and escaped so none of it
+            # becomes HTML -- its paragraphs and line breaks indented under
+            # the list item, where one line lost every break.
             who = escape_inline(comment.author or "Unknown")
-            when = f" · {escape_inline(comment.created)}" if comment.created else ""
-            body = escape_inline(html_to_text(comment.content_html))
-            out.append(f"{'    ' * depth}- **{who}**{when}: {body}")
+            when = f" · {escape_inline(readable_time(comment.created))}" if comment.created else ""
+            pad = "    " * depth
+            out.extend(
+                comment_lines(
+                    f"{pad}- **{who}**{when}:",
+                    comment.content_html,
+                    escape_inline,
+                    content_indent=pad + "    ",
+                )
+            )
             render(comment.id, depth + 1, out)
 
     lines: list[str] = []
@@ -585,7 +594,11 @@ def _replies_md(
         when = f" · {escape_inline(readable_time(reply.created))}" if reply.created else ""
         answer = " · *answer*" if "answer" in (reply.flags or []) else ""
         block = [f"### {who}{when}{answer}", ""]
-        body = _rewrite_body(reply, store, id_to_title, file_targets, context).strip()
+        # Plain-text replies' line breaks become paragraphs and breaks first.
+        shaped = reply.model_copy(
+            update={"content_html": paragraphs_from_plain_text(reply.content_html)}
+        )
+        body = _rewrite_body(shaped, store, id_to_title, file_targets, context).strip()
         block.append(body if body else "*(no text)*")
         attachments = _attachments_md(reply, store)
         if attachments:

@@ -21,6 +21,7 @@ dangerous -- ordinary prose converts exactly as before.
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 
 from markdownify import MarkdownConverter
 
@@ -192,3 +193,72 @@ def quote_block(text: str, depth: int) -> list[str]:
         return text.split("\n")
     marker = ">" * depth
     return [f"{marker} {line}".rstrip() for line in text.split("\n")] + [""]
+
+
+#: Tags that already give a fragment its structure: with any of them the
+#: fragment is HTML as written, and its line breaks are just source layout.
+_STRUCTURE = re.compile(r"<\s*(p|div|br|li|ul|ol|h[1-6]|table|pre|blockquote)\b", re.IGNORECASE)
+_BLANK_LINE = re.compile(r"\n[ \t]*\n+")
+
+
+def paragraphs_from_plain_text(html: str | None) -> str:
+    """A comment or reply given as plain text, as paragraphs.
+
+    Connections often delivers comment and reply text with bare line breaks
+    and no markup -- the PDF turns them into breaks for the same reason.
+    Converted as HTML, those breaks are whitespace: a reply's paragraphs run
+    together. A blank line becomes a paragraph, a single break a `<br>`;
+    a fragment that has structure of its own is returned as it came."""
+    text = html or ""
+    if "\n" not in text or _STRUCTURE.search(text):
+        return text
+    paragraphs = [part.strip() for part in _BLANK_LINE.split(text.replace("\r\n", "\n"))]
+    return "".join(f"<p>{part.replace(chr(10), '<br>')}</p>" for part in paragraphs if part)
+
+
+def text_paragraphs(html: str | None) -> list[list[str]]:
+    """The text of a comment as paragraphs of lines, as a reader sees it:
+    `<p>`, `<div>`, list items and headings end a paragraph, `<br>` and a
+    plain-text line break end a line. Parsed, not regex-stripped."""
+    from bs4 import BeautifulSoup  # noqa: PLC0415 - ships with markdownify
+
+    soup = BeautifulSoup(paragraphs_from_plain_text(html), "html.parser")
+    for br in soup.find_all("br"):
+        br.replace_with("\n")
+    for block in soup.find_all(
+        ["p", "div", "li", "h1", "h2", "h3", "h4", "h5", "h6", "blockquote", "pre", "tr"]
+    ):
+        block.insert_before("\n\n")
+        block.insert_after("\n\n")
+    result = []
+    for part in _BLANK_LINE.split(soup.get_text()):
+        lines = [re.sub(r"[ \t]+", " ", line).strip() for line in part.split("\n")]
+        lines = [line for line in lines if line]
+        if lines:
+            result.append(lines)
+    return result
+
+
+def comment_lines(
+    head: str, html: str | None, escape: Callable[[str], str], *, content_indent: str
+) -> list[str]:
+    """A comment as a list item: `head` on the item's line, then its text --
+    on the same line when it is one line, otherwise as paragraphs indented
+    beneath it (four spaces past the item's own indent:
+    enough for every Markdown dialect to keep them inside the item), lines
+    kept with a hard break (two trailing spaces, read by all of them).
+    Each line goes through `escape`, the exporter's own escaping."""
+    paragraphs = text_paragraphs(html)
+    if len(paragraphs) == 1 and len(paragraphs[0]) == 1:
+        # One line of text stays on the item's own line, as short comments
+        # always read; only a comment with breaks needs the room below.
+        return [f"{head} {escape(paragraphs[0][0])}"]
+    lines = [head]
+    for paragraph in paragraphs:
+        lines.append("")
+        escaped = [escape(line) for line in paragraph]
+        lines.extend(
+            f"{content_indent}{line}{'  ' if i < len(escaped) - 1 else ''}"
+            for i, line in enumerate(escaped)
+        )
+    return lines

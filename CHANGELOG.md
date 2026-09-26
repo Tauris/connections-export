@@ -5,6 +5,18 @@ Notable changes to `connections-export`, newest first. Versions follow
 the archive format may still change between minor versions — the format's own
 version is recorded inside every archive.
 
+## 0.1.14 — 2026-09-26
+
+### Fixed
+- **Comments and replies keep their paragraphs and line breaks in the Hugo,
+  Jekyll and Obsidian exports.** Connections often delivers comment and reply
+  text as plain text with line breaks — the reason the PDF already turns them
+  into breaks. The Markdown exports squashed a comment onto one list line and
+  ran a reply's paragraphs together. A comment's text now sits under its list
+  entry with its paragraphs and line breaks (a one-line comment stays on the
+  line, as before), a reply keeps its paragraphs, and comment times read
+  `YYYY-MM-DD HH:MM UTC` like reply times.
+
 ## 0.1.13 — 2026-09-25
 
 ### Added
