@@ -233,7 +233,7 @@ wheels = [
 
 [[package]]
 name = "connections-export"
-version = "0.1.15"
+version = "0.1.16"
 source = { editable = "." }
 dependencies = [
     { name = "cryptography", marker = "platform_machine == 'x86_64' and sys_platform == 'darwin'" },

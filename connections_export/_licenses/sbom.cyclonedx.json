@@ -6,8 +6,8 @@
     "component": {
       "type": "application",
       "name": "connections-export",
-      "version": "0.1.15",
-      "purl": "pkg:pypi/connections-export@0.1.15",
+      "version": "0.1.16",
+      "purl": "pkg:pypi/connections-export@0.1.16",
       "licenses": [
         {
           "license": {

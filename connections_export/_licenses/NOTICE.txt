@@ -1,4 +1,4 @@
-connections-export 0.1.15
+connections-export 0.1.16
 Licensed under BSD-3-Clause. See connections-export/LICENSE.
 
 This is the connections-export Python package.

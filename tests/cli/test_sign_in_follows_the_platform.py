@@ -64,3 +64,20 @@ def test_probe_sign_in_without_a_ticket_says_how_to_get_one(monkeypatch, capsys)
 
     assert cli.probe_main(["sign-in"]) == 0
     assert "kinit" in capsys.readouterr().out
+
+
+def test_inside_an_executable_it_does_not_send_you_to_pip(monkeypatch, capsys):
+    """An executable carries its sign-in; when it does not load, installing a
+    package is no fix -- the message said so anyway, beside a glibc error."""
+    monkeypatch.setattr(cli.sys, "platform", "linux")
+    monkeypatch.setattr(cli.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(
+        cli, "_sign_in_modules_load", lambda names: (False, "gssapi: GLIBC_2.38 not found")
+    )
+
+    assert cli.probe_main(["sign-in"]) == 2
+    out = capsys.readouterr()
+    text = out.out + out.err
+    assert "GLIBC_2.38" in text
+    assert "pip install" not in text
+    assert "executable" in text

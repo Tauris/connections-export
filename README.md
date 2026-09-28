@@ -71,7 +71,8 @@ and Windows).
 **No Python?** Each release also ships a single-file executable for Linux,
 macOS (Intel and Apple silicon) and Windows — download it from the
 [Releases](https://github.com/Tauris/connections-export/releases) page, make it executable, and run it. It needs no
-Python and no install. See *PDF export needs a browser* below for its one
+Python and no install. The Linux one runs on any distribution with glibc 2.28
+or newer — Ubuntu 20.04, Debian 10, RHEL 8 and later, WSL included. See *PDF export needs a browser* below for its one
 external requirement.
 
 **Signing in as yourself.** The default: the tool uses the sign-in you already

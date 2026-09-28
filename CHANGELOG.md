@@ -5,6 +5,23 @@ Notable changes to `connections-export`, newest first. Versions follow
 the archive format may still change between minor versions — the format's own
 version is recorded inside every archive.
 
+## 0.1.16 — 2026-09-28
+
+### Fixed
+- **The Linux executable signs in on older distributions.** It was built on
+  Ubuntu 24.04, and the Kerberos libraries it carries needed glibc 2.38: on
+  Ubuntu 22.04 — or a company WSL — the program started, but signing in failed
+  with "GLIBC_2.38 not found". It is now built on glibc 2.28 and runs on
+  Ubuntu 20.04, Debian 10, RHEL 8 and newer; every build is checked on a bare
+  AlmaLinux 8 with no Kerberos of its own installed, so the executable must
+  load the libraries it carries. glibc itself is never carried — the
+  executable uses the system's own; the Kerberos libraries it does carry are
+  brought to the distribution's latest security-patched release at every
+  build, and the build log names their versions.
+- `probe sign-in` inside an executable no longer suggests a `pip install` when
+  its sign-in libraries fail to load — there is nothing to install; it asks
+  for a report instead.
+
 ## 0.1.15 — 2026-09-28
 
 ### Added

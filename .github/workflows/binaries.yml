@@ -56,14 +56,6 @@ jobs:
           python-version: "3.13"
           enable-cache: true
 
-      # `requests-kerberos` pulls `krb5`, which builds against system Kerberos
-      # headers that the Linux runners do not ship -- `--all-extras` therefore
-      # fails at resolve time on Linux alone. Same wall a Linux user installing
-      # `connections-export[sspi]` hits, so the fix belongs in the docs too.
-      - name: Kerberos headers (Linux only, for the sspi extra)
-        if: runner.os == 'Linux'
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq libkrb5-dev
-
       # `--all-extras` is what puts markdownify in the environment, and so in
       # the bundle: the Obsidian ingester imports it lazily, which means a
       # bundle built without it still starts and still passes `--help`.
@@ -92,7 +84,58 @@ jobs:
       # `--locked`: a uv.lock that no longer matches pyproject.toml fails the
       # build instead of being silently re-resolved into a bundle nobody tested.
       - name: Build executable
+        if: runner.os != 'Linux'
         run: uv run --locked --all-extras --python 3.13 python tools/build_binary.py --dist dist
+
+      # Linux: built on an OLD glibc, because a program runs on newer ones and
+      # not older. Built on the runner's Ubuntu 24.04, the Kerberos libraries it
+      # carries needed glibc 2.38, and on Ubuntu 22.04 -- or a company WSL --
+      # sign-in failed with "GLIBC_2.38 not found". manylinux_2_28 (AlmaLinux
+      # 8, glibc 2.28) covers Ubuntu 20.04+, Debian 10+ and RHEL 8+. Kerberos
+      # compiles here against its headers; the image is pinned by digest. The
+      # build uses the managed interpreter, as on the other platforms:
+      # PyInstaller needs a shared libpython, which the image Pythons lack.
+      # The Kerberos libraries the executable carries are upgraded to the
+      # distribution's latest patched release first: the image is pinned for a
+      # reproducible build, and without this a security fix released after
+      # the pin would not reach a new executable. The versions are logged.
+      # Its virtual environment lives outside the mounted checkout: one left in
+      # it points at an interpreter inside the container, and the steps after
+      # this one, on the runner, trip over it.
+      # (No apostrophes inside the quoted script below -- one ends the quoting.)
+      - name: Build executable (Linux, on glibc 2.28)
+        if: runner.os == 'Linux'
+        run: |
+          docker run --rm -v "$PWD:/src" -w /src \
+            -e HOST_UID="$(id -u)" -e HOST_GID="$(id -g)" \
+            quay.io/pypa/manylinux_2_28_x86_64@sha256:407f771c51a2c3e83ebe5a7970b4289ead3a6db21d9b9c089168775cad11d328 \
+            bash -euo pipefail -c '
+              dnf upgrade -y -q krb5-libs libcom_err keyutils-libs
+              dnf install -y -q krb5-devel
+              echo "Kerberos libraries carried by this build:"
+              rpm -q krb5-libs libcom_err keyutils-libs
+              /opt/python/cp313-cp313/bin/python -m pip install -q "uv==0.11.26"
+              export UV_PYTHON_PREFERENCE=only-managed
+              export UV_PROJECT_ENVIRONMENT=/opt/build-venv
+              /opt/python/cp313-cp313/bin/uv run --locked --all-extras --python 3.13 \
+                python tools/build_binary.py --dist dist
+              chown -R "$HOST_UID:$HOST_GID" /src
+            '
+
+      # The proof the build above exists for: the executable on the oldest
+      # system it claims, with that system's own Kerberos libraries removed,
+      # must start and load the ones it carries. On the build machine the
+      # system copies would hide a missing or too-new one.
+      - name: Runs on a bare old Linux (glibc 2.28, no system Kerberos)
+        if: runner.os == 'Linux'
+        run: |
+          docker run --rm -v "$PWD/dist:/d:ro" \
+            almalinux:8-minimal@sha256:6cafa4a66d9a241a580cb6f2a20744f03ed1d1c4a882bb9eef81075c8131c8a8 \
+            sh -euc '
+            rm -f /usr/lib64/libgssapi_krb5.so* /usr/lib64/libkrb5.so*
+            /d/connections-export --version
+            /d/connections-export probe sign-in
+          ' 
 
       # The point of the executable is that a user with no Python and no
       # install can run it, so the smoke test uses the binary ALONE -- no uv,

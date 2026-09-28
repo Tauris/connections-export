@@ -2110,11 +2110,19 @@ def _probe_sign_in() -> int:
     ok, error = _sign_in_modules_load(_SSPI_MODULES if windows else _KERBEROS_MODULES)
     if not ok:
         print(f"  its libraries do NOT load: {error}", flush=True)
-        print(
-            "  a pip install needs them: pip install 'connections-export[sspi]' "
-            "(on Linux the Kerberos headers first: libkrb5-dev / krb5-devel)",
-            file=sys.stderr,
-        )
+        if getattr(sys, "frozen", False):
+            # An executable carries its sign-in; nothing a user installs fixes it.
+            print(
+                "  this executable should carry them; please report this, with the line "
+                "above, at https://github.com/Tauris/connections-export/issues",
+                file=sys.stderr,
+            )
+        else:
+            print(
+                "  a pip install needs them: pip install 'connections-export[sspi]' "
+                "(on Linux the Kerberos headers first: libkrb5-dev / krb5-devel)",
+                file=sys.stderr,
+            )
         return 2
     print("  its libraries load.", flush=True)
     if not windows:
