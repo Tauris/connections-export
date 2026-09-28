@@ -215,9 +215,11 @@ def _resolve_auth_strategy(config: Config, env: Mapping[str, str] | None) -> Aut
     # The deployment's other hosts may receive the sign-in when it is
     # redirected there -- an organisation's login server on another domain.
     sign_in_hosts = tuple(config.hcl_hosts)
-    if config.auth_mode == "kerberos":
+    # "sspi", the default, is signing in as yourself: SSPI on Windows, and on
+    # macOS and Linux -- which have no SSPI -- the same single sign-on through
+    # Kerberos, rather than failing on a Windows-only package.
+    if config.auth_mode == "kerberos" or sys.platform != "win32":
         return KerberosAuth(base_url=config.require_base_url(), sign_in_hosts=sign_in_hosts)
-    # config.auth_mode == "sspi", the default
     return SspiAuth(base_url=config.require_base_url(), sign_in_hosts=sign_in_hosts)
 
 
@@ -1220,6 +1222,13 @@ def pdf_main(
         "and listed with their original addresses on an External content page; whether "
         "you may reproduce them is for you to judge.",
     )
+    parser.add_argument(
+        "--open-bookmarks",
+        action="store_true",
+        help="Ask PDF viewers to open with the bookmarks panel showing. The bookmarks are "
+        "in the PDF either way; some viewers lay the panel over the page, so it stays "
+        "closed unless asked for.",
+    )
     args = parser.parse_args(argv)
 
     if args.demo and not (args.package or args.archive):
@@ -1259,6 +1268,7 @@ def pdf_main(
     render_kwargs = {
         **style_kwargs,
         "external_images": prepare_external_images(model, include=args.external_images),
+        "open_bookmarks": args.open_bookmarks,
     }
     try:
         # A renderer (browser fidelity, an injected one) need not accept
@@ -1326,9 +1336,16 @@ def _default_pdf_render(fidelity: str) -> Callable[..., bytes] | None:
         from connections_export.pdf import render_pdf_browser  # noqa: PLC0415
 
         return render_pdf_browser
-    from connections_export.pdf import render_pdf  # noqa: PLC0415
+    # The same paged renderer the console uses: running footer, page numbers
+    # in the table of contents, and bookmarks. The static-footer renderer is
+    # only the fallback for a build without the vendored paged.js.
+    from connections_export.pdf import (  # noqa: PLC0415
+        PAGED_AVAILABLE,
+        render_pdf,
+        render_pdf_paged,
+    )
 
-    return render_pdf
+    return render_pdf_paged if PAGED_AVAILABLE else render_pdf
 
 
 def serve_main(
@@ -2055,6 +2072,64 @@ def licenses_main(argv: Sequence[str] | None = None) -> int:
     return 0
 
 
+#: The modules signing in as yourself needs: SSPI on Windows, Kerberos elsewhere.
+_SSPI_MODULES = ("requests_negotiate_sspi", "win32api", "win32timezone")
+_KERBEROS_MODULES = ("requests_kerberos", "spnego", "gssapi")
+
+
+def _sign_in_modules_load(names: Sequence[str]) -> tuple[bool, str]:
+    """Whether every module in `names` imports; the first error if not."""
+    import importlib  # noqa: PLC0415
+
+    for name in names:
+        try:
+            importlib.import_module(name)
+        except Exception as exc:  # noqa: BLE001 - a native library failing to load is reported
+            return False, f"{name}: {exc}"
+    return True, ""
+
+
+def _kerberos_ticket() -> str | None:
+    """The principal of the Kerberos ticket this user holds, or None."""
+    try:
+        import gssapi  # noqa: PLC0415
+
+        return str(gssapi.Credentials(usage="initiate").name)
+    except Exception:  # noqa: BLE001 - no ticket, no credential cache, no library
+        return None
+
+
+def _probe_sign_in() -> int:
+    """`probe sign-in`: which single sign-on this installation uses, whether
+    its libraries load, and (off Windows) whether a Kerberos ticket is held.
+    Asks no deployment anything."""
+    windows = sys.platform == "win32"
+    method = "SSPI (your Windows sign-in)" if windows else "Kerberos (your system sign-in)"
+    print("connections-export probe sign-in", flush=True)
+    print(f"  signing in as yourself uses: {method}", flush=True)
+    ok, error = _sign_in_modules_load(_SSPI_MODULES if windows else _KERBEROS_MODULES)
+    if not ok:
+        print(f"  its libraries do NOT load: {error}", flush=True)
+        print(
+            "  a pip install needs them: pip install 'connections-export[sspi]' "
+            "(on Linux the Kerberos headers first: libkrb5-dev / krb5-devel)",
+            file=sys.stderr,
+        )
+        return 2
+    print("  its libraries load.", flush=True)
+    if not windows:
+        principal = _kerberos_ticket()
+        if principal:
+            print(f"  Kerberos ticket held for: {principal}", flush=True)
+        else:
+            print(
+                "  no Kerberos ticket found: sign in to your organisation's network, or run "
+                "`kinit you@YOUR.REALM`, then try again.",
+                flush=True,
+            )
+    return 0
+
+
 def probe_main(argv: Sequence[str] | None = None) -> int:
     """`connections-export probe files-since --community <uuid>`.
 
@@ -2080,7 +2155,7 @@ def probe_main(argv: Sequence[str] | None = None) -> int:
     )
     parser.add_argument(
         "question",
-        choices=["files-since", "search-reach", "proxy"],
+        choices=["files-since", "search-reach", "proxy", "sign-in"],
         help="which question to ask",
     )
     parser.add_argument(
@@ -2120,6 +2195,8 @@ def probe_main(argv: Sequence[str] | None = None) -> int:
     except ConfigError as exc:
         print(f"connections-export probe: {exc}", file=sys.stderr)
         return 2
+    if args.question == "sign-in":
+        return _probe_sign_in()
     if args.question == "proxy":
         # Answered first, and without a deployment being configured: the
         # question is what THIS MACHINE does, and the address is only an

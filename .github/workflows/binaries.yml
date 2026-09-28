@@ -107,6 +107,11 @@ jobs:
           exe="dist/connections-export"
           [ "${{ runner.os }}" = "Windows" ] && exe="dist/connections-export.exe"
           "$exe" --help > /dev/null
+          # Signing in as yourself -- SSPI on Windows, Kerberos on macOS and
+          # Linux -- must load inside the executable itself: a native library
+          # that did not come along fails here, not on a user's first request.
+          # (A runner holds no Kerberos ticket; the probe says so and passes.)
+          "$exe" probe sign-in
           "$exe" crawl --demo --output-dir demo-archive
           "$exe" pdf --demo --output smoke.pdf
           # A PDF header and a plausible size: the demo set renders ~100 pages,

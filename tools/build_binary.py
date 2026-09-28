@@ -66,6 +66,13 @@ REQUIRED_MODULES = {
 #: its cause.
 SSPI_RUNTIME_IMPORTS = ("win32timezone",)
 
+#: What Kerberos sign-in needs on macOS and Linux, where "sign in as
+#: yourself" is Kerberos: `requests_kerberos` hands the handshake to `spnego`,
+#: which loads `gssapi` and `krb5` only when a handshake starts -- imports an
+#: analysis may miss. Collected whole and then required, so an executable
+#: that could not sign in is never shipped.
+KERBEROS_RUNTIME_IMPORTS = ("requests_kerberos", "spnego", "gssapi", "krb5")
+
 
 class BuildError(Exception):
     """The build failed, or produced an executable that is missing something."""
@@ -216,7 +223,7 @@ def _frozen_distributions(source: Path, bundled: set[str], interpreter: str) -> 
     return json.loads(out.strip().splitlines()[-1])
 
 
-def _required_modules(importable) -> dict[str, str]:
+def _required_modules(importable, *, sign_in: bool = True) -> dict[str, str]:
     """Modules the executable must contain, and what each one breaks.
 
     On Windows that includes native authentication and everything it needs
@@ -228,6 +235,21 @@ def _required_modules(importable) -> dict[str, str]:
     """
     required = dict(REQUIRED_MODULES)
     if sys.platform != "win32":
+        # Off Windows, signing in as yourself is Kerberos. `sign_in=False` is
+        # only for a local check that the package freezes at all, on a machine
+        # without the Kerberos headers; every published build requires it.
+        if not sign_in:
+            return required
+        if not importable("requests_kerberos"):
+            raise BuildError(
+                "requests_kerberos is not installed in the build environment, so "
+                "this executable could not sign in with Kerberos -- which is what "
+                "the default auth mode uses on macOS and Linux.\n"
+                "  Install it before building: uv sync --all-extras "
+                "(on Linux the Kerberos headers first: libkrb5-dev / krb5-devel)"
+            )
+        for module in KERBEROS_RUNTIME_IMPORTS:
+            required[module] = "signing in as yourself (Kerberos) off Windows"
         return required
     if not importable("requests_negotiate_sspi"):
         raise BuildError(
@@ -259,6 +281,7 @@ def build(
     dist: Path,
     name: str = "connections-export",
     python: Path | None = None,
+    sign_in: bool = True,
 ) -> tuple[Path, dict[str, str]]:
     """Build the executable from `source`.
 
@@ -296,7 +319,7 @@ def build(
     # but the module only exists on Windows and only with the `sspi` extra --
     # so collect and require it exactly when the build environment has it,
     # rather than guessing from the platform.
-    required = _required_modules(lambda module: _importable(interpreter, module))
+    required = _required_modules(lambda module: _importable(interpreter, module), sign_in=sign_in)
     if sys.platform == "win32":
         collect_submodules.append("requests_negotiate_sspi")
     cmd = [
@@ -331,6 +354,11 @@ def build(
         # and no analysis of the source can see them.
         for module in SSPI_RUNTIME_IMPORTS:
             cmd += ["--hidden-import", module]
+    elif "requests_kerberos" in required:
+        # Kerberos loads its native libraries only when a handshake starts;
+        # collected whole, compiled extensions and all.
+        for module in KERBEROS_RUNTIME_IMPORTS:
+            cmd += ["--collect-all", module]
     cmd.append(str(entry))
     _run(cmd, cwd=source)
 

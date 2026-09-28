@@ -211,3 +211,9 @@ def test_the_manual_says_where_hugo_is_looked_for_and_when_to_restart():
     assert "shown as soon as you choose Hugo" in MANUAL
     assert "if you installed Hugo after starting the console, restart the console" in MANUAL
     assert "does not answer <code>hugo version</code>" in MANUAL
+
+
+def test_the_manual_describes_the_bookmarks_and_the_panel_choice():
+    assert 'id="man-pdf-bookmarks"' in MANUAL
+    assert "Open with bookmarks showing" in MANUAL
+    assert "--open-bookmarks" in MANUAL

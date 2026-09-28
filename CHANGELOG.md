@@ -5,6 +5,56 @@ Notable changes to `connections-export`, newest first. Versions follow
 the archive format may still change between minor versions — the format's own
 version is recorded inside every archive.
 
+## 0.1.15 — 2026-09-28
+
+### Added
+- **The PDF has bookmarks.** Every wiki, blog, forum, file library and
+  Highlights area, with its pages, posts and topics beneath it — a wiki's
+  page tree nested as it is — each leading to the page it starts on; the PDF
+  opens with them showing in the viewer's sidebar. Only the document's own
+  structure: no "Comments" or "Replies" labels, and none of the headings
+  authors wrote inside their pages.
+  Whether a viewer opens with the bookmarks panel showing is a choice — "Open
+  with bookmarks showing" in the export menu, `pdf --open-bookmarks` — off by
+  default, since some viewers lay the panel over the page.
+
+### Changed
+- **Signing in as yourself works out of the box, on every platform.**
+  *Why:* signing in with the session you already have is the default and
+  the way most people use the tool — but outside the Windows executable it
+  took extra steps. A `pip install` needed the `[sspi]` extra first; on a
+  Mac that meant a Kerberos library that some environments could only get
+  through a conda setup; and on macOS and Linux the default method still
+  asked for Windows' SSPI and failed at once ("SspiAuth requires
+  requests-negotiate-sspi"). An export tool for people who are not
+  administrators should not need any of that.
+  *What changes:*
+  - The default method, "sign in as yourself", uses your Windows session on
+    Windows and your Kerberos ticket on macOS and Linux — the same single
+    sign-on, through the system that has it.
+  - A plain `pip install connections-export` includes it on Windows and
+    macOS, where it installs from ready-built packages with nothing to
+    compile.
+  - Every executable includes it, the macOS and Linux ones too; their build
+    refuses to finish without it, and each executable proves it loads before
+    it is published.
+  - On Linux, `pip` users who sign in with Kerberos still add the `[sspi]`
+    extra: Kerberos has no ready-built packages there and compiles against
+    system headers, and making it a requirement would break the install for
+    everyone who does not need it. Existing `[sspi]` install commands keep
+    working everywhere.
+  - `connections-export probe sign-in` reports which sign-in an installation
+    uses, whether it loads, and — on macOS and Linux — whether a Kerberos
+    ticket is held.
+  - *If `pip install` on a Mac tries to compile Kerberos* — which happens
+    only where the package index offers no ready-built packages for it, such
+    as a restricted company mirror — use the macOS executable instead, or
+    install into an environment that already provides Kerberos (for example a
+    conda environment with `krb5`).
+- **`connections-export pdf` prints the same PDF as the console:** the paged
+  renderer with the running footer, page numbers in the table of contents and
+  bookmarks. It used the simpler renderer without them.
+
 ## 0.1.14 — 2026-09-26
 
 ### Fixed

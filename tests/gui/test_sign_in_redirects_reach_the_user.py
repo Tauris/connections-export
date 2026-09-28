@@ -40,6 +40,11 @@ class _Response:
 def handshake(monkeypatch):
     """A `requests` stand-in whose `/homepage/` redirects to `target`, and
     which records every URL the handshake was carried to."""
+    # The SSPI handshake is the Windows one; off Windows the same default
+    # auth mode signs in with Kerberos, so these tests stand on Windows.
+    import connections_export.cli as cli
+
+    monkeypatch.setattr(cli.sys, "platform", "win32")
     visited: list[str] = []
     state = {"target": FOREIGN_LOGIN}
 

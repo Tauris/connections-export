@@ -2515,6 +2515,8 @@
       if (!withComments) params.push("comments=0");
       // Third-party images: fetched and marked by default (?external_images=0 leaves them out).
       if ($("r-pdf-external") && !$("r-pdf-external").checked) params.push("external_images=0");
+      // Bookmarks are always in the PDF; opening with their panel is a choice.
+      if ($("r-pdf-open-bookmarks") && $("r-pdf-open-bookmarks").checked) params.push("open_bookmarks=1");
       // Scoped export: "one thread vs the whole". Only when the dropdown
       // is on "Current item" AND something is actually open.
       const sel = $("r-pdf-scope");
@@ -2766,10 +2768,13 @@
     return out;
   }
 
-  // The preview follows the export menu's "Include external images" choice.
+  // The preview and its Full PDF link follow the export menu's choices:
+  // "Include external images", and "Open with bookmarks showing".
   function externalImagesQuery() {
     const box = $("r-pdf-external");
-    return box && !box.checked ? "&external_images=0" : "";
+    const open = $("r-pdf-open-bookmarks");
+    return (box && !box.checked ? "&external_images=0" : "")
+      + (open && open.checked ? "&open_bookmarks=1" : "");
   }
 
   // Render one entity's bare PDF and append its page(s) as canvases. Returns
@@ -5392,7 +5397,7 @@
         $("field-auth-mode").value = "basic";
       }
       const authLabel = {
-        sspi: "Windows sign-in", kerberos: "Kerberos",
+        sspi: "Signed in as yourself", kerberos: "Kerberos",
         basic: "Username and password", paste_token: "Pasted token",
       }[($("field-auth-mode") || {}).value || "sspi"];
       showIdentityStrip({

@@ -849,7 +849,7 @@ def test_the_ui_does_not_speak_in_config_identifiers():
     """
     import re
 
-    assert '<option value="sspi">Windows sign-in (SSPI)</option>' in HTML
+    assert '<option value="sspi">Sign in as yourself (Windows sign-in / Kerberos)</option>' in HTML
     assert '<option value="paste_token">Paste a token</option>' in HTML
 
     labels = {label.strip() for label in re.findall(r"<option[^>]*>([^<]*)</option>", HTML)}
@@ -992,3 +992,12 @@ def test_a_pdf_render_shows_its_progress_where_it_can_be_seen():
     assert '"⏳ Rendering PDF… "' in JS
     assert "clearInterval(ticker)" in JS
     assert '"PDF ready"' in JS
+
+
+def test_opening_with_the_bookmarks_panel_is_a_choice_off_by_default():
+    """The PDF always has bookmarks; some viewers lay an opened panel over the
+    page, so the export menu offers it unticked, and both the export and the
+    preview's Full PDF link send it only when ticked."""
+    assert '<input type="checkbox" id="r-pdf-open-bookmarks" />' in HTML
+    assert 'params.push("open_bookmarks=1")' in JS
+    assert '"&open_bookmarks=1"' in JS

@@ -108,6 +108,7 @@ def register(
         include: Annotated[list[str] | None, Query()] = None,
         chrome: bool = True,
         external_images: bool = True,
+        open_bookmarks: bool = False,
     ) -> Response:
         """Render the current derived model to a PDF and return it as a
         download (the `pdf` capability). `fidelity=portable` is Path A
@@ -244,6 +245,10 @@ def register(
                     render_kwargs["pdf_timeout"] = float(
                         app.state.editable_settings.get("pdf_timeout", 120.0)
                     )
+                    # The bookmarks are always written; whether viewers open
+                    # with the panel showing is the reader's choice.
+                    if open_bookmarks:
+                        render_kwargs["open_bookmarks"] = True
             from connections_export.pdf.external import (  # noqa: PLC0415
                 prepare_external_images,
             )

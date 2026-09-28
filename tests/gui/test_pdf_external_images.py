@@ -69,3 +69,16 @@ def test_the_small_image_setting_reaches_the_renderer(tmp_path, monkeypatch):
 
     assert _get(app, "/api/pdf").status_code == 200
     assert seen["small_image_px"] == 24
+
+
+def test_the_bookmarks_panel_opens_only_when_asked(tmp_path, monkeypatch):
+    """`?open_bookmarks=1` reaches the paged renderer; without it the option
+    is not sent at all, so the PDF opens without the panel."""
+    app, seen = _app(tmp_path, monkeypatch)
+
+    assert _get(app, "/api/pdf").status_code == 200
+    assert "open_bookmarks" not in seen
+
+    seen.clear()
+    assert _get(app, "/api/pdf?open_bookmarks=1").status_code == 200
+    assert seen["open_bookmarks"] is True

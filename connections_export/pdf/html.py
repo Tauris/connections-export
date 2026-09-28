@@ -828,7 +828,7 @@ def _render_external_content(register: _ExternalRegister) -> str:
         )
     return (
         '<section id="external-content" class="page-break">'
-        "<h1>External content</h1>"
+        '<h1 data-outline="1">External content</h1>'
         '<p class="hcl-external-note">The images marked <em>External image E&hellip;</em> in '
         "this document &mdash; or, for small images in running text such as icons, with a "
         "superscript <em>E&hellip;</em> after them &mdash; are not part of the captured "
@@ -930,7 +930,7 @@ def _render_page_section(
     section_id = _escape(page.id)
     return (
         f'<section id="p-{section_id}" class="hcl-page{page_break_class}" data-depth="{depth}">'
-        f'<h{level} class="pdf-sectitle">{title}</h{level}>'
+        f'<h{level} class="pdf-sectitle" data-outline="{depth + 2}">{title}</h{level}>'
         f"{tags}"
         f'<div class="page-body">{body}</div>'
         f"{comments}{attachments}"
@@ -944,7 +944,7 @@ def _render_wiki(wiki: DerivedWiki, blob_bytes: BlobBytes, *, include_comments: 
         _render_page_section(page, depth, blob_bytes, include_comments=include_comments)
         for page, depth in _walk_pages(wiki)
     )
-    return f'<section class="hcl-wiki"><h1>{heading}</h1>{sections}</section>'
+    return f'<section class="hcl-wiki"><h1 data-outline="1">{heading}</h1>{sections}</section>'
 
 
 # --- blogs & forums ----------------------------------------------------------
@@ -1004,7 +1004,7 @@ def _render_blog_post(
     comments = _render_comments(post.comments) if include_comments else ""
     return (
         f'<section id="b-{section_id}" class="hcl-post page-break">'
-        f'<h2 class="pdf-sectitle">{title}</h2>{meta}{tags}'
+        f'<h2 class="pdf-sectitle" data-outline="2">{title}</h2>{meta}{tags}'
         f'<div class="post-body">{body}</div>'
         f"{comments}"
         "</section>"
@@ -1026,7 +1026,7 @@ def _render_blog(
         for post_id in blog.post_ids
         if post_id in blog.posts
     )
-    return f'<section class="hcl-blog"><h1>{heading}</h1>{posts}</section>'
+    return f'<section class="hcl-blog"><h1 data-outline="1">{heading}</h1>{posts}</section>'
 
 
 def _render_forum_reply(
@@ -1086,7 +1086,7 @@ def _render_forum_topic(
     replies = _render_reply_thread(topic, blob_bytes, scope_body)
     return (
         f'<section id="t-{section_id}" class="hcl-topic page-break">'
-        f'<h2 class="pdf-sectitle">{title}</h2>{meta}{flags}'
+        f'<h2 class="pdf-sectitle" data-outline="2">{title}</h2>{meta}{flags}'
         f'<div class="topic-body">{body}</div>'
         f"{replies}"
         "</section>"
@@ -1149,7 +1149,7 @@ def _render_file_library(library, blob_bytes: BlobBytes) -> str:
         return ""
     return (
         '<section class="hcl-files">'
-        f"<h1>{heading}</h1>"
+        f'<h1 data-outline="1">{heading}</h1>'
         '<table class="hcl-file-table">'
         "<thead><tr><th>Name</th><th>Folder</th><th>Size</th>"
         "<th>Version</th><th>Author</th><th>Bytes</th></tr></thead>"
@@ -1169,7 +1169,7 @@ def _render_forum(
         for topic_id in forum.topic_ids
         if topic_id in forum.topics
     )
-    return f'<section class="hcl-forum"><h1>{heading}</h1>{topics}</section>'
+    return f'<section class="hcl-forum"><h1 data-outline="1">{heading}</h1>{topics}</section>'
 
 
 def _render_rich_content_page(
@@ -1191,7 +1191,7 @@ def _render_rich_content_page(
     )
     return (
         f'<section id="rc-{section_id}" class="hcl-rc-page page-break">'
-        f'<h2 class="pdf-sectitle">{title}</h2>{meta}{version}'
+        f'<h2 class="pdf-sectitle" data-outline="2">{title}</h2>{meta}{version}'
         f'<div class="rc-body">{body}</div>'
         "</section>"
     )
@@ -1223,7 +1223,7 @@ def _render_rich_content(
         if empty > 0
         else ""
     )
-    return f'<section class="hcl-rc"><h1>{heading}</h1>{note}{pages}</section>'
+    return f'<section class="hcl-rc"><h1 data-outline="1">{heading}</h1>{note}{pages}</section>'
 
 
 # --- print CSS -------------------------------------------------------------

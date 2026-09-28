@@ -62,8 +62,8 @@ content stays faithful today and portable for whatever you move it into next.
 pip install connections-export
 ```
 
-That includes everything, the Obsidian, Jekyll and Hugo exporters too; the only
-optional extra is Windows Integrated Auth, below.
+That includes everything: the Obsidian, Jekyll and Hugo exporters, and — on
+Windows and macOS — signing in as yourself, below.
 
 Requires Python 3.12 or newer (tested on 3.12, 3.13 and 3.14, on Linux, macOS
 and Windows).
@@ -74,12 +74,15 @@ macOS (Intel and Apple silicon) and Windows — download it from the
 Python and no install. See *PDF export needs a browser* below for its one
 external requirement.
 
-**Windows Integrated Auth.** The Windows executable includes it — SSPI is the
-default auth mode there, so it signs in with your existing session and needs
-nothing installed. With `pip`, ask for the extra: `pip install
-"connections-export[sspi]"`. On Linux that extra needs system Kerberos headers
-first (`libkrb5-dev` on Debian/Ubuntu, `krb5-devel` on Fedora/RHEL); Windows and
-macOS need nothing extra.
+**Signing in as yourself.** The default: the tool uses the sign-in you already
+have — your Windows session (SSPI) on Windows, your Kerberos ticket on macOS
+and Linux. Every executable includes it, and a `pip install` does on Windows
+and macOS. On Linux, Kerberos compiles against system headers, so there it is
+an extra that is only needed if you sign in that way: install the headers
+first (`libkrb5-dev` on Debian/Ubuntu, `krb5-devel` on Fedora/RHEL), then
+`pip install "connections-export[sspi]"`. `connections-export probe sign-in`
+says which sign-in your installation uses, whether it loads, and — on macOS
+and Linux — whether you hold a Kerberos ticket.
 
 ### PDF export needs a browser
 

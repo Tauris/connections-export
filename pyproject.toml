@@ -1,6 +1,6 @@
 [project]
 name = "connections-export"
-version = "0.1.14"
+version = "0.1.15"
 description = "Lossless, archive-first export of HCL Connections content — wikis, blogs, and forums — to a portable, self-documenting package"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -48,6 +48,19 @@ dependencies = [
     # document. A runtime dependency, not a test one: without it a long
     # export yields its first page only. Pure Python, no system libraries.
     "pypdf>=4",
+    # Signing in as yourself -- the default auth mode -- works out of the box
+    # where it can be installed from ready-built wheels: SSPI on Windows,
+    # Kerberos on macOS. Both have wheels for every supported Python, so they
+    # cost a plain install nothing to build. On Linux Kerberos has no wheels
+    # and compiles against system headers, so there it stays the `sspi` extra.
+    "requests-negotiate-sspi>=0.5.2; sys_platform == 'win32'",
+    "requests-kerberos>=0.15.0; sys_platform == 'darwin'",
+    # Kerberos pulls `cryptography`, whose releases from 49 on ship ready-built
+    # wheels for Apple silicon only. On an Intel Mac a newer one compiles from
+    # source (a Rust toolchain for pip users) and, frozen, links against an
+    # OpenSSL the executable does not carry. 48 still ships a universal2 wheel.
+    # Revisit when 48 stops receiving fixes.
+    "cryptography<49; sys_platform == 'darwin' and platform_machine == 'x86_64'",
     "uvicorn>=0.51.0",
 ]
 
@@ -61,11 +74,12 @@ Issues = "https://github.com/Tauris/connections-export/issues"
 connections-export = "connections_export.cli:main"
 
 [project.optional-dependencies]
-# On Linux this needs system Kerberos headers before it will install:
+# Kerberos on Linux, where it has no wheels and compiles against the system
+# headers, which must be installed first:
 #   Debian/Ubuntu  sudo apt-get install libkrb5-dev
 #   Fedora/RHEL    sudo dnf install krb5-devel
-# `requests-kerberos` pulls `krb5`, which compiles against them. Windows and
-# macOS need nothing extra.
+# On Windows and macOS the base install already signs in as yourself; the
+# extra stays so existing `connections-export[sspi]` commands keep working.
 sspi = [
     "requests-negotiate-sspi>=0.5.2; sys_platform == 'win32'",
     "requests-kerberos>=0.15.0",

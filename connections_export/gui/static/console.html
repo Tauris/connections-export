@@ -169,7 +169,7 @@
         <div class="field">
           <label for="field-auth-mode">Sign in as yourself (auth)</label>
           <select id="field-auth-mode">
-            <option value="sspi">Windows sign-in (SSPI)</option>
+            <option value="sspi">Sign in as yourself (Windows sign-in / Kerberos)</option>
             <option value="kerberos">Kerberos</option>
             <option value="basic">Username and password</option>
             <option value="paste_token">Paste a token</option>
@@ -514,6 +514,7 @@
           </div>
           <label class="menu-check" title="Comments are always archived; untick to leave them out of the PDF."><input type="checkbox" id="r-pdf-comments" checked /> Include comments</label>
           <label class="menu-check" title="Images the pages show from other websites are not in the archive. Ticked, they are fetched now and put in the PDF, each marked &quot;External image E1…&quot; and listed with its original address on an External content page. Whether you may reproduce them is for you to judge; untick to leave them out (their addresses stay in the text)."><input type="checkbox" id="r-pdf-external" checked /> Include external images</label>
+          <label class="menu-check" title="The PDF always has bookmarks: every wiki, blog and forum with its pages. Ticked, viewers open it with the bookmarks panel showing; some viewers lay that panel over the page, so it is off by default."><input type="checkbox" id="r-pdf-open-bookmarks" /> Open with bookmarks showing</label>
           <div class="menu-sep"></div>
           <button class="btn" id="r-pdf" title="Render this archive to a PDF"><svg class="icon" aria-hidden="true"><use href="#i-download"/></svg> Export PDF</button>
           <button class="btn" id="r-preview" title="Preview the export page by page — watch it render and Stop early if the formatting or content is wrong"><svg class="icon" aria-hidden="true"><use href="#i-eye"/></svg> Preview first</button>
@@ -682,7 +683,7 @@
         <section class="panel settings-card">
           <header><h2><span aria-hidden="true"><svg class="icon" aria-hidden="true"><use href="#i-brand"/></svg></span> Ingest defaults</h2></header>
           <div class="settings-body">
-            <label class="settings-field">Authentication<select id="settings-auth-mode"><option value="sspi">Windows sign-in (SSPI)</option><option value="kerberos">Kerberos</option><option value="basic">Username and password</option><option value="paste_token">Paste a token</option></select></label>
+            <label class="settings-field">Authentication<select id="settings-auth-mode"><option value="sspi">Sign in as yourself (Windows sign-in / Kerberos)</option><option value="kerberos">Kerberos</option><option value="basic">Username and password</option><option value="paste_token">Paste a token</option></select></label>
             <label class="settings-field">Request delay (seconds)<input id="settings-min-interval" type="number" min="0.2" step="0.1" value="1" /><span class="foot-note">An export is thousands of requests. 3s overnight is kinder to a busy deployment than rushing it during the working day.</span></label>
             <label class="settings-field">Default author filter<input id="settings-author-filter" type="text" placeholder="Include everyone" /></label>
             <div class="settings-actions"><button class="btn primary" id="settings-save" type="button">Save</button><span class="foot-note" id="settings-save-status" role="status"></span></div>

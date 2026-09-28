@@ -240,14 +240,20 @@ In every choice, links between exported pages and pictures still point at the ex
 
 A self-contained brief for this — the model in one screen, the two-function shape, how to test without a deployment — is `docs/writing-an-ingester.md` in the source tree, written for someone starting from an example of the target format and nothing else.
 
-An ingester needs no knowledge of HCL Connections at all — only of the interchange package. The contract it follows is written out step by step in `docs/reference/interchange-format.md` §7, "Reconstructing content in a target wiki": create every page first and keep an id mapping, set hierarchy and order from the pre-computed lists, attach comments/versions/attachments, then rewrite links and body assets using that id mapping, and finally record whatever the target format has no place for. The Obsidian ingester (`connections_export/ingest/obsidian.py`) is a worked, runnable example of exactly that shape — proof the contract is, in its own words, "buildable with no HCL knowledge."
+An ingester needs no knowledge of HCL Connections at all — only of the interchange package. The contract it follows is written out step by step in `docs/reference/interchange-format.md` §7, "Reconstructing content in a target wiki": create every page first and keep an id mapping, set hierarchy and order from the pre-computed lists, attach comments/versions/attachments, then rewrite links and body assets using that id mapping, and finally record whatever the target format has no place for. Three ingesters ship with the tool, each a worked, runnable example of exactly that shape — proof the contract is, in its own words, "buildable with no HCL knowledge" — and each shows a different way to adapt it to what a target can hold:
+
+- **Obsidian** (`connections_export/ingest/obsidian.py`) — a *notes app*. The page tree becomes nested folders and links become `[[wikilinks]]`, which the app resolves by note name across the whole vault, so the exporter gives every note a name of its own and disambiguates the ones that would collide.
+- **Jekyll** (`connections_export/ingest/jekyll.py`) — a *blog-shaped site generator*. Everything is a dated post in one flat folder, so a wiki's hierarchy has to travel in front matter; and because Jekyll runs its template language over the content when it builds the site, every piece of captured text is escaped for it.
+- **Hugo** (`connections_export/ingest/hugo.py`) — a *section-based site generator*. The page tree maps directly onto nested sections and page bundles, each page's images beside it; links are references Hugo checks when it builds; and the export is content only, with the site's templates left to its owner (or to the optional starter site).
+
+Start from the one closest to your target. They share the building blocks a new exporter should reuse rather than rewrite: conversion to Markdown that keeps captured text inert, the page-content modes (`markdown`, `mixed`, `html`, `raw`), and combined exports of several archives.
 
 A new exporter follows the same two-function shape:
 
-- a writer that takes an already-loaded interchange model and a blob-reader function (`blob_hash → bytes | None`) and writes the target — see `write_obsidian_vault(interchange, blob_reader, out_dir)`;
+- a writer that takes an already-loaded interchange model and a blob-reader function (`blob_hash → bytes | None`) and writes the target — see `write_obsidian_vault(interchange, blob_reader, out_dir)`, `write_jekyll_site` or `write_hugo_content`;
 - a thin `from_package(package_dir, out_dir)` convenience wrapper that loads the package with `connections_export.interchange.load_package`, wires up a real blob reader over `connections_export.interchange.package.open_blob`, and calls the writer.
 
-Export it from `connections_export/ingest/__init__.py` alongside the Obsidian one, and add its name to the `--format` choices in `ingest_main` (`connections_export/cli.py`) so `connections-export ingest --format <yours>` can reach it.
+Export it from `connections_export/ingest/__init__.py` alongside the others, and add its name to the `--format` choices in `ingest_main` (`connections_export/cli.py`) so `connections-export ingest --format <yours>` can reach it.
 
 ## <a id="man-scope"></a>What gets captured — links and assets
 
@@ -470,7 +476,7 @@ The commands that talk to a deployment share these. All four have a configured d
 | Option | What it does |
 |---|---|
 | `--base-url` | The deployment root. |
-| `--auth-mode` | `sspi` (Windows sign-in), `kerberos`, `basic`, or `paste_token`. |
+| `--auth-mode` | `sspi` (sign in as yourself, the default: your Windows session on Windows, your Kerberos ticket on macOS and Linux), `kerberos`, `basic`, or `paste_token`. Every executable can sign in as yourself, and so can a `pip install` on Windows and macOS; on Linux, add the `[sspi]` extra (it needs the Kerberos headers). `connections-export probe sign-in` says which sign-in your installation uses, whether it loads, and whether you hold a Kerberos ticket. |
 | `--auth-root` | Which authentication path the deployment serves its API under — `basic` unless yours differs. |
 | `--config` | A configuration file other than the one found automatically. |
 
@@ -502,6 +508,7 @@ These need no deployment: they work from an archive or a package.
 | `pdf --archive DIR`<br>`pdf --package DIR` | Render it. `--output` names the file. |
 | `pdf --fidelity` | Render through the original system’s own stylesheets instead of the portable ones. Needs the deployment. |
 | `pdf --css FILE` | Your own stylesheet, appended after the captured pages’ own CSS so it wins. |
+| `pdf --open-bookmarks` | Ask viewers to open the PDF with its bookmarks panel showing; the bookmarks are there either way. [More](#man-pdf-bookmarks) |
 | `pdf --no-external-images` | Leave images from other websites out of the PDF, keeping their addresses; by default they are included, marked, and listed on an External content page. [More](#man-external-images) |
 | `ingest --archive DIR --output DIR` | Reconstruct a capture into a developer format: `--format obsidian` writes an Obsidian vault, `--format jekyll` a Jekyll site, `--format hugo` Hugo content. `--html` (`markdown`, `mixed`, `html` or `raw`) chooses how page content is written ([more](#man-export-html)). `--starter-site` adds a Hugo export's [starter site](#man-export-hugo-starter); `--starter-layout list` or `cards` chooses how its front page is drawn. `--package` takes a package instead of an archive. Repeat `--archive` to combine several archives into one export ([more](#man-export-combine)). |
 | `package --archive DIR --output DIR` | Write the portable interchange package for a capture — for an ingester of your own, or to hand to someone who has never seen this tool. |
@@ -537,6 +544,12 @@ For anything the tokens do not cover, do not guess at class names — have the p
 connections-export style --dump --output mystyle.css
 connections-export pdf --css mystyle.css --archive ./archive --output export.pdf
 ```
+
+### <a id="man-pdf-bookmarks"></a>Bookmarks
+
+Every PDF carries **bookmarks** — the list a PDF viewer shows in its sidebar: each wiki, blog, forum, file library and Highlights area, with its pages, posts and topics beneath it, a wiki's page tree nested as it is. Each leads to the page its item starts on, the same page the table of contents names. They hold only the document's own structure: no "Comments" or "Replies" entries, and none of the headings authors wrote inside their pages.
+
+Whether a viewer **opens with the bookmarks panel showing** is your choice: **Export → Open with bookmarks showing** in the Reader, or `pdf --open-bookmarks` on the command line. It is off by default, because some viewers lay that panel over the page rather than beside it; the bookmarks are in the PDF either way, one click away in any viewer.
 
 ### <a id="man-marks"></a>The running header and footer
 

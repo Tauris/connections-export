@@ -31,6 +31,64 @@ from connections_export.derive.model import Interchange
 from connections_export.pdf.browser import CHROMIUM_AVAILABLE, _launch, block_network
 from connections_export.pdf.html import DEFAULT_GENERATED_AT, BlobBytes, render_html
 
+#: Where each heading the renderer marked for the outline (`data-outline`: its
+#: level) landed once paged.js laid the document out -- the same page the
+#: table of contents' number points at. paged.js can repeat an element that
+#: straddles a page break; its `data-ref` says which original it is.
+_OUTLINE_JS = """
+() => {
+  const pages = Array.from(document.querySelectorAll('.pagedjs_page'));
+  const seen = new Set();
+  const out = [];
+  document.querySelectorAll('[data-outline]').forEach((el, i) => {
+    const key = el.getAttribute('data-ref') || ('i' + i);
+    if (seen.has(key)) return;
+    seen.add(key);
+    const page = pages.indexOf(el.closest('.pagedjs_page'));
+    const title = (el.textContent || '').replace(/\\s+/g, ' ').trim();
+    if (page >= 0 && title) {
+      out.push({ title, level: parseInt(el.getAttribute('data-outline'), 10) || 1, page });
+    }
+  });
+  return out;
+}
+"""
+
+
+def with_outline(pdf: bytes, entries: list[dict], *, open_panel: bool = False) -> bytes:
+    """`pdf` with bookmarks for `entries` (`{title, level, page}`, in document
+    order), nested by level. `open_panel` asks viewers to open with the
+    bookmarks panel showing -- a choice, not a default: some viewers lay the
+    panel over the page rather than beside it.
+
+    Built here rather than asked of Chromium: its outline turns every heading
+    into a bookmark -- each "Comments" and "Replies" label and every heading an
+    author wrote inside a page -- and nests a wiki's pages beside the wiki.
+    These are exactly the document's containers and pages."""
+    if not entries:
+        return pdf
+    import io  # noqa: PLC0415
+
+    from pypdf import PdfReader, PdfWriter  # noqa: PLC0415
+
+    writer = PdfWriter(clone_from=PdfReader(io.BytesIO(pdf)))
+    last = len(writer.pages) - 1
+    parents: dict[int, object] = {}
+    for entry in entries:
+        level = max(1, int(entry["level"]))
+        parent = next((parents[n] for n in range(level - 1, 0, -1) if n in parents), None)
+        item = writer.add_outline_item(
+            entry["title"], min(max(int(entry["page"]), 0), last), parent=parent
+        )
+        parents[level] = item
+        for deeper in [n for n in parents if n > level]:
+            del parents[deeper]
+    if open_panel:
+        writer.page_mode = "/UseOutlines"
+    out = io.BytesIO()
+    writer.write(out)
+    return out.getvalue()
+
 
 class PdfRenderError(RuntimeError):
     """A PDF failure with browser resources that could not load.
@@ -317,7 +375,12 @@ def _stamp_args(marks, generated_at: str) -> dict:
 
 
 def html_to_pdf_paged(
-    html: str, *, marks=None, generated_at: str = "", pdf_timeout: float = 120.0
+    html: str,
+    *,
+    marks=None,
+    generated_at: str = "",
+    pdf_timeout: float = 120.0,
+    open_bookmarks: bool = False,
 ) -> bytes:
     """Paginate `html` with the vendored paged.js polyfill inside a headless
     Chromium and return the PDF bytes. Callers check `PAGED_AVAILABLE` first;
@@ -372,7 +435,9 @@ def html_to_pdf_paged(
                 "html[data-paged-done]", state="attached", timeout=int(pdf_timeout * 1000)
             )
             page.evaluate(_STAMP_JS, _stamp_args(marks, generated_at))
-            return page.pdf(print_background=True, prefer_css_page_size=True)
+            outline = page.evaluate(_OUTLINE_JS)
+            pdf = page.pdf(print_background=True, prefer_css_page_size=True)
+            return with_outline(pdf, outline, open_panel=open_bookmarks)
         except Exception as exc:
             raise PdfRenderError(str(exc), failures=failures, blocked=blocked) from exc
         finally:
@@ -390,6 +455,7 @@ def render_pdf_paged(
     extra_css: str | None = None,
     marks=None,
     pdf_timeout: float = 120.0,
+    open_bookmarks: bool = False,
     external_images: Mapping[str, bytes | None] | None = None,
     small_image_px: int | None = None,
 ) -> bytes:
@@ -409,4 +475,10 @@ def render_pdf_paged(
         external_images=external_images,
         small_image_px=small_image_px,
     )
-    return html_to_pdf_paged(html, marks=marks, generated_at=generated_at, pdf_timeout=pdf_timeout)
+    return html_to_pdf_paged(
+        html,
+        marks=marks,
+        generated_at=generated_at,
+        pdf_timeout=pdf_timeout,
+        open_bookmarks=open_bookmarks,
+    )

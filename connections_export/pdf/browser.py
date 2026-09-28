@@ -313,6 +313,9 @@ def _pdf_kwargs(*, outline: bool, marks: Marks | None = None) -> dict:
         "print_background": True,
         "format": "A4",
         "outline": outline,
+        # Chromium builds the outline from the tagged PDF's structure; asked
+        # for an outline without tagging, it silently writes none.
+        "tagged": outline,
         "display_header_footer": True,
         "header_template": chromium_raw(marks.header_html, marks)
         if marks.header_html
