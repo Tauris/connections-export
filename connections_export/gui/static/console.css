@@ -973,7 +973,9 @@
 .pdf-opt { display: inline-flex; align-items: center; gap: var(--sp-1); font-size: 12px; color: var(--muted, #667085); white-space: nowrap; }
 .pdf-opt input { margin: 0; }
 /* Scope dropdown reads as a sibling of the toolbar buttons. */
-#r-pdf-scope { padding: var(--sp-2) var(--sp-2); font-size: 12px; }
+.menu-choice { border: 0; margin: 0; padding: 0; gap: var(--sp-1); }
+.menu-choice legend { padding: 0; margin-bottom: var(--sp-1); }
+.menu-choice input:disabled + span { opacity: 0.55; }
 
 /* Inline PDF viewer overlay: view a rendered (live) PDF without a blind
    download. Full-screen scrim, a slim toolbar, and the native PDF viewer

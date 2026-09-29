@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import base64
 import contextlib
+import hashlib
 import mimetypes
 import re
 from collections.abc import Callable, Iterator, Mapping
@@ -106,6 +107,36 @@ def external_images_register(
         _EXTERNAL.reset(token)
 
 
+#: Where a served render's images live. `.invalid` can never resolve, and
+#: the print page's network guard (`browser.block_network`) answers these
+#: from memory -- nothing is fetched.
+SERVED_IMAGE_ORIGIN = "https://images.example.invalid/"
+
+#: A served render's images: address -> (content type, bytes).
+ServedImages = dict[str, tuple[str, bytes]]
+
+#: Unset outside `serving_images`: images are embedded as `data:` URIs.
+_SERVED: ContextVar[ServedImages | None] = ContextVar("served images", default=None)
+
+
+@contextlib.contextmanager
+def serving_images() -> Iterator[ServedImages]:
+    """Within this scope `render_html` lists each image here and refers to it
+    by address, instead of writing it into the document as base64.
+
+    For the PDF renderers: a browser loads a document with its images inside
+    it far more slowly than the document grows -- 50 MB of images took
+    seconds shy of Playwright's 30-second limit, 150 MB crashed the browser --
+    while the same images answered on request load in a few seconds. Outside
+    the scope the document stays self-contained."""
+    served: ServedImages = {}
+    token = _SERVED.set(served)
+    try:
+        yield served
+    finally:
+        _SERVED.reset(token)
+
+
 # --- content-type sniffing ---------------------------------------------
 #
 # `ResolvedAsset` carries no content-type (only `derive`'s pipeline saw
@@ -157,6 +188,17 @@ def _data_uri(href: str, data: bytes) -> str:
     content_type = _guess_content_type(href, data)
     encoded = base64.b64encode(data).decode("ascii")
     return f"data:{content_type};base64,{encoded}"
+
+
+def _image_src(href: str, data: bytes) -> str:
+    """An image's `src`: its served address inside `serving_images`, keyed by
+    its content so a repeated image is served once; otherwise a `data:` URI."""
+    served = _SERVED.get()
+    if served is None:
+        return _data_uri(href, data)
+    url = SERVED_IMAGE_ORIGIN + hashlib.sha256(data).hexdigest()
+    served.setdefault(url, (_guess_content_type(href, data), data))
+    return url
 
 
 # --- body/comment sanitization ------------------------------------------
@@ -253,6 +295,13 @@ def _is_data_image(value: str) -> bool:
     return _URL_NOISE.sub("", value).lower().startswith("data:image/")
 
 
+def _is_embedded_image(value: str) -> bool:
+    """An image that is part of the export: embedded, or one this render
+    serves itself (`serving_images`) -- never any other address."""
+    served = _SERVED.get()
+    return _is_data_image(value) or (served is not None and value in served)
+
+
 def _safe_navigation(value: str) -> bool:
     """A link may go anywhere a reader might follow it, except to script."""
     scheme = _url_scheme(value)
@@ -266,7 +315,7 @@ def _safe_resource(value: str) -> bool:
     a same-document reference (`<use href="#icon">`). Anything else is a load
     from elsewhere at render time."""
     stripped = _URL_NOISE.sub("", value)
-    return stripped.startswith("#") or _is_data_image(value)
+    return stripped.startswith("#") or _is_embedded_image(value)
 
 
 # --- author CSS -------------------------------------------------------------
@@ -412,7 +461,7 @@ def _clean_attributes(
         if (
             mark_unembedded_images
             and name == "img"
-            and not _is_data_image(element.get("src") or "")
+            and not _is_embedded_image(element.get("src") or "")
         ):
             _replace(element, _missing_image_marker(tree, original_src))
 
@@ -469,7 +518,7 @@ def _rewrite_images(
             digest = _blob_digest(asset.blob_hash)
             data = blob_bytes(digest) if digest else None
         if data is not None:
-            img.set("src", _data_uri(asset.original_href, data))
+            img.set("src", _image_src(asset.original_href, data))
             continue
         if asset is not None and asset.scope == "external":
             _rewrite_external_image(tree, img, asset.resolved_url or asset.original_href)
@@ -574,7 +623,7 @@ def _rewrite_external_image(tree: lxml.html.HtmlElement, img, url: str) -> None:
             marker.set("id", f"ext-{number}")
         _replace(img, marker)
         return
-    img.set("src", _data_uri(url, data))
+    img.set("src", _image_src(url, data))
     wrapper = tree.makeelement(
         "span", {"class": "hcl-external-inline" if small else "hcl-external-image"}
     )

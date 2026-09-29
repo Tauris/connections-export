@@ -48,3 +48,17 @@ def _isolate_saved_settings(tmp_path_factory, monkeypatch):
     so tests cannot see each other's saved settings either.
     """
     monkeypatch.setenv(settings_store.SETTINGS_DIR_ENV, str(tmp_path_factory.mktemp("settings")))
+
+
+@pytest.fixture(autouse=True)
+def _no_windows_browser_from_wsl(monkeypatch):
+    """Tests never open the developer's Windows browser.
+
+    Under WSL the console opens the address with `wslview` or `explorer.exe`
+    -- real programs, past the `webbrowser.open` stand-ins tests install. On a
+    developer machine that is itself WSL, a test of the launch then opened a
+    real browser tab. WSL is off for every test unless one says otherwise.
+    """
+    from connections_export import cli
+
+    monkeypatch.setattr(cli, "_in_wsl", lambda: False)

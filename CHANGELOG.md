@@ -5,6 +5,42 @@ Notable changes to `connections-export`, newest first. Versions follow
 the archive format may still change between minor versions — the format's own
 version is recorded inside every archive.
 
+## 0.1.17 — 2026-09-29
+
+### Fixed
+- **Large PDF exports no longer stop after 30 seconds.** Every image went
+  into the document the browser loads as text, and loading grows far faster
+  than the document: 50 MB of images took most of 30 seconds, 150 MB crashed
+  the browser. Loading also had a fixed 30-second limit, so an ordinary
+  community with a few dozen photos failed with "Timeout 30000ms exceeded",
+  external images on or off, whatever the render timeout said. Images are
+  now handed to the browser on request, straight from memory -- nothing
+  goes over the network -- and the render timeout covers every step:
+  loading, laying out and printing. And it now measures a stall, not the
+  whole job: laying out continues as long as new pages keep appearing, and
+  printing is allowed extra time for every page, so an archive of any size
+  finishes, while a stuck export still gives up after the timeout (120
+  seconds by default).
+- **"What to export" shows its choices on the Export menu itself.** It was a
+  dropdown inside the menu, and a dropdown opens a popup of its own, which
+  some setups close the moment it appears -- a Linux browser shown on Windows
+  through WSLg among them -- leaving only "Whole archive" in sight. Whole
+  archive, the open item and Choose components are now three buttons you
+  can see at once.
+- **Under WSL the console opens your Windows browser.** Python looks for
+  Linux browser helpers, which a WSL distribution usually lacks, so the
+  console only printed its address. Under WSL it now opens it with `wslview`
+  when installed, or `explorer.exe`, which uses the Windows default browser;
+  `$BROWSER`, the Linux convention for choosing one, still wins.
+
+### Added
+- **The macOS executables are checked for the macOS they need.** Every
+  native part declares the oldest macOS it runs on; the build now fails if
+  any requires more than macOS 11, except Playwright's browser driver, which
+  needs macOS 13.5 — now documented as the minimum for PDF export on a Mac
+  (a `pip` install included). A dependency moving its wheels to a newer
+  macOS can no longer raise the requirement unnoticed.
+
 ## 0.1.16 — 2026-09-28
 
 ### Fixed

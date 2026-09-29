@@ -29,7 +29,13 @@ from pathlib import Path
 
 from connections_export.derive.model import Interchange
 from connections_export.pdf.browser import CHROMIUM_AVAILABLE, _launch, block_network
-from connections_export.pdf.html import DEFAULT_GENERATED_AT, BlobBytes, render_html
+from connections_export.pdf.html import (
+    DEFAULT_GENERATED_AT,
+    BlobBytes,
+    ServedImages,
+    render_html,
+    serving_images,
+)
 
 #: Where each heading the renderer marked for the outline (`data-outline`: its
 #: level) landed once paged.js laid the document out -- the same page the
@@ -374,6 +380,42 @@ def _stamp_args(marks, generated_at: str) -> dict:
     }
 
 
+#: The printing step has no progress to watch, so its limit grows with the
+#: document: half a second a page on top of the render timeout -- about ten
+#: times what an 879-page export with 60 photos needed.
+PRINT_SECONDS_PER_PAGE = 0.5
+
+_DONE = "html[data-paged-done]"
+
+
+def _wait_for_layout(page, *, stall_ms: int) -> int:
+    """Wait for paged.js to finish, failing only when it stops making pages.
+
+    Layout time grows with the export, so one deadline for all of it fails a
+    large archive that is laying out steadily just as it fails a hang. Each
+    new page restarts the budget instead; the wait itself runs in Playwright,
+    so a page stuck in script still times out. Returns the page count."""
+    pages = 0
+    while True:
+        try:
+            page.wait_for_selector(
+                f"{_DONE}, .pagedjs_pages > .pagedjs_page:nth-child({pages + 1})",
+                state="attached",
+                timeout=stall_ms,
+            )
+        except Exception as exc:
+            raise TimeoutError(
+                f"The layout made no progress for {stall_ms // 1000} s after {pages} pages ({exc})"
+            ) from exc
+        if page.query_selector(_DONE) is not None:
+            return page.locator(".pagedjs_page").count()
+        pages = page.locator(".pagedjs_page").count()
+
+
+def _print_timeout_ms(*, pdf_timeout: float, pages: int) -> int:
+    return int((pdf_timeout + PRINT_SECONDS_PER_PAGE * pages) * 1000)
+
+
 def html_to_pdf_paged(
     html: str,
     *,
@@ -381,6 +423,7 @@ def html_to_pdf_paged(
     generated_at: str = "",
     pdf_timeout: float = 120.0,
     open_bookmarks: bool = False,
+    served: ServedImages | None = None,
 ) -> bytes:
     """Paginate `html` with the vendored paged.js polyfill inside a headless
     Chromium and return the PDF bytes. Callers check `PAGED_AVAILABLE` first;
@@ -399,10 +442,13 @@ def html_to_pdf_paged(
         try:
             # A service worker would see requests before the route does.
             page = browser.new_page(service_workers="block")
+            # The setting governs every step -- loading a large document with
+            # its images embedded can take longer than Playwright's own 30 s.
+            page.set_default_timeout(pdf_timeout * 1000)
             # Before `set_content`: the document is untrusted, and nothing in
             # it may load from -- or report to -- anywhere. The polyfill is
             # unaffected: it is inserted as text, never requested.
-            block_network(page, blocked)
+            block_network(page, blocked, served)
 
             def request_failed(request) -> None:
                 if request.url in blocked:
@@ -431,11 +477,11 @@ def html_to_pdf_paged(
                 " document.documentElement.setAttribute('data-paged-done', ''); } };"
             )
             page.evaluate(_INSERT_POLYFILL_JS, [POLYFILL_PATH.read_text(encoding="utf-8"), nonce])
-            page.wait_for_selector(
-                "html[data-paged-done]", state="attached", timeout=int(pdf_timeout * 1000)
-            )
+            pages = _wait_for_layout(page, stall_ms=int(pdf_timeout * 1000))
             page.evaluate(_STAMP_JS, _stamp_args(marks, generated_at))
             outline = page.evaluate(_OUTLINE_JS)
+            # `pdf()` takes no timeout of its own; it obeys the page default.
+            page.set_default_timeout(_print_timeout_ms(pdf_timeout=pdf_timeout, pages=pages))
             pdf = page.pdf(print_background=True, prefer_css_page_size=True)
             return with_outline(pdf, outline, open_panel=open_bookmarks)
         except Exception as exc:
@@ -464,21 +510,23 @@ def render_pdf_paged(
     number) and a TOC carrying real page numbers. `include_comments=False`
     omits page/post comments from the export (they stay in the archive).
     `chrome=False` drops the cover + TOC (the live per-entity tiles)."""
-    html = render_html(
-        interchange,
-        blob_bytes=blob_bytes,
-        generated_at=generated_at,
-        include_comments=include_comments,
-        chrome=chrome,
-        style_overrides=style_overrides,
-        extra_css=extra_css,
-        external_images=external_images,
-        small_image_px=small_image_px,
-    )
+    with serving_images() as served:
+        html = render_html(
+            interchange,
+            blob_bytes=blob_bytes,
+            generated_at=generated_at,
+            include_comments=include_comments,
+            chrome=chrome,
+            style_overrides=style_overrides,
+            extra_css=extra_css,
+            external_images=external_images,
+            small_image_px=small_image_px,
+        )
     return html_to_pdf_paged(
         html,
         marks=marks,
         generated_at=generated_at,
         pdf_timeout=pdf_timeout,
         open_bookmarks=open_bookmarks,
+        served=served,
     )

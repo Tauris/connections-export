@@ -47,3 +47,11 @@ def test_saved_settings_do_not_land_in_the_users_config_directory(monkeypatch):
 
 def test_archives_do_not_land_in_the_working_directory():
     assert not _is_below(Path(gui_support.ARCHIVES_BASE).resolve(), Path.cwd())
+
+
+def test_no_test_opens_a_windows_browser_from_wsl():
+    """The console under WSL opens the Windows browser directly; a test on a
+    WSL machine must not."""
+    from connections_export import cli
+
+    assert cli._in_wsl() is False

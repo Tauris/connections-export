@@ -72,7 +72,10 @@ and Windows).
 macOS (Intel and Apple silicon) and Windows — download it from the
 [Releases](https://github.com/Tauris/connections-export/releases) page, make it executable, and run it. It needs no
 Python and no install. The Linux one runs on any distribution with glibc 2.28
-or newer — Ubuntu 20.04, Debian 10, RHEL 8 and later, WSL included. See *PDF export needs a browser* below for its one
+or newer — Ubuntu 20.04, Debian 10, RHEL 8 and later, WSL included. The macOS
+ones run on macOS 11 or newer; PDF export there needs macOS 13.5 (Ventura) or
+newer, for the browser driver it uses — which holds for a `pip` install on a
+Mac as well. See *PDF export needs a browser* below for its one
 external requirement.
 
 **Signing in as yourself.** The default: the tool uses the sign-in you already

@@ -46,6 +46,7 @@ from connections_export.pdf.html import (
     _sanitize_body,
     _walk_pages,
     external_images_register,
+    serving_images,
 )
 
 #: At-rules whose block contains nested style rules (so we recurse to scope
@@ -261,6 +262,7 @@ def render_pdf_browser(
     include_comments: bool = True,
     external_images: Mapping[str, bytes | None] | None = None,
     small_image_px: int | None = None,
+    pdf_timeout: float = 120.0,
 ) -> bytes:
     """Render `interchange` to a browser-fidelity PDF: one combined
     document (cover + clickable TOC + scoped pages), printed once with a
@@ -268,12 +270,13 @@ def render_pdf_browser(
     raises whatever Playwright raises if no usable browser is present."""
     from connections_export.pdf.browser import html_to_pdf  # noqa: PLC0415
 
-    html = render_html_browser(
-        interchange,
-        blob_bytes,
-        generated_at=generated_at,
-        include_comments=include_comments,
-        external_images=external_images,
-        small_image_px=small_image_px,
-    )
-    return html_to_pdf(html, outline=True)
+    with serving_images() as served:
+        html = render_html_browser(
+            interchange,
+            blob_bytes,
+            generated_at=generated_at,
+            include_comments=include_comments,
+            external_images=external_images,
+            small_image_px=small_image_px,
+        )
+    return html_to_pdf(html, outline=True, pdf_timeout=pdf_timeout, served=served)

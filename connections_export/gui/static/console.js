@@ -2449,12 +2449,18 @@
       .map((i) => "include=" + encodeURIComponent(i.value));
   }
 
+  // The export scope: "all", "item" (what is open in the reader) or "choose".
+  function pdfScope() {
+    const checked = document.querySelector('input[name="r-pdf-scope"]:checked');
+    return checked ? checked.value : "all";
+  }
+
   function wirePdfPicker() {
     const sel = $("r-pdf-scope");
     const pick = $("pdf-pick");
     if (!sel || !pick) return;
     sel.addEventListener("change", () => {
-      const choosing = sel.value === "choose";
+      const choosing = pdfScope() === "choose";
       pick.hidden = !choosing;
       if (choosing) renderPdfPicker();
     });
@@ -2465,22 +2471,18 @@
     });
   }
 
-  // Keep the scope dropdown honest: enable + relabel "Current item" to match
+  // Keep the scope choice honest: enable + relabel "Current item" to match
   // what's open; disable it (and fall back to Whole archive) when nothing is.
   function refreshPdfScopeOption() {
     const sel = $("r-pdf-scope");
     if (!sel) return;
-    const itemOpt = sel.querySelector('option[value="item"]');
-    if (!itemOpt) return;
+    const item = sel.querySelector('input[value="item"]');
+    const label = sel.querySelector(".scope-item-label");
+    if (!item || !label) return;
     const scope = currentReaderScope();
-    if (scope) {
-      itemOpt.textContent = scope.label;
-      itemOpt.disabled = false;
-    } else {
-      itemOpt.textContent = "Current item";
-      itemOpt.disabled = true;
-      if (sel.value === "item") sel.value = "all";
-    }
+    item.disabled = !scope;
+    label.textContent = scope ? scope.label : "Current item";
+    if (!scope && item.checked) sel.querySelector('input[value="all"]').checked = true;
   }
 
   // Export the reconstructed archive to a PDF (the `pdf` capability, served
@@ -2519,16 +2521,15 @@
       if ($("r-pdf-open-bookmarks") && $("r-pdf-open-bookmarks").checked) params.push("open_bookmarks=1");
       // Scoped export: "one thread vs the whole". Only when the dropdown
       // is on "Current item" AND something is actually open.
-      const sel = $("r-pdf-scope");
       const scope = currentReaderScope();
-      if (sel && sel.value === "choose") {
+      if (pdfScope() === "choose") {
         const chosen = pdfIncludeParams();
         if (!chosen.length) {
           notify("Tick at least one component to export.", "Nothing selected");
           return;
         }
         params.push(...chosen);
-      } else if (sel && sel.value === "item" && scope) {
+      } else if (pdfScope() === "item" && scope) {
         params.push(scope.kind === "page" ? "scope=tile" : "scope=item");
         params.push("kind=" + encodeURIComponent(scope.kind), "id=" + encodeURIComponent(scope.id));
         if (scope.kind === "page") params.push("chrome=0");
@@ -2870,9 +2871,8 @@
     if (!window.pdfjsLib) { notify("The PDF preview library didn't load — reload the page and retry."); return; }
     // Honour the reader scope selector: "Current item" previews just the open
     // page/post/thread; otherwise the whole model accumulates.
-    const sel = $("r-pdf-scope");
     const rscope = currentReaderScope();
-    lpOnly = (sel && sel.value === "item" && rscope)
+    lpOnly = (pdfScope() === "item" && rscope)
       ? { kind: rscope.kind, id: rscope.id, label: rscope.label }
       : null;
     lpBusy = false; lpSeen = new Set(); lpPageCount = 0; livePreviewActive = true;
@@ -2905,9 +2905,8 @@
     // export agree on "one item vs the whole" instead of the live path always
     // scoping to whatever page happened to be open. "Current item" -> render
     // just that item's live URL; "Whole archive" -> every live URL.
-    const sel = $("r-pdf-scope");
     const rscope = currentReaderScope();
-    const wantItem = sel && sel.value === "item" && rscope;
+    const wantItem = pdfScope() === "item" && rscope;
     const scope = wantItem ? "page" : "all";
     const itemId = wantItem ? rscope.id : "";
     let livePdfApiUrl = "/api/live-pdf?scope=" + scope

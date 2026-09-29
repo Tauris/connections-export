@@ -122,6 +122,17 @@ jobs:
               chown -R "$HOST_UID:$HOST_GID" /src
             '
 
+      # The Mac executables must not quietly require a newer macOS: every
+      # native part declares the oldest it runs on, and a dependency whose
+      # wheels move to a new macOS moves the whole executable with it. macOS
+      # 11 for everything, except Playwright's Node.js driver, which needs 13.5
+      # -- the documented minimum for PDF export.
+      - name: Requires no newer macOS than documented
+        if: runner.os == 'macOS'
+        run: >-
+          uv run --locked --all-extras --python 3.13 python tools/check_macos_minimum.py
+          dist/connections-export --max 11.0 --allow playwright/driver/node=13.5
+
       # The proof the build above exists for: the executable on the oldest
       # system it claims, with that system's own Kerberos libraries removed,
       # must start and load the ones it carries. On the build machine the

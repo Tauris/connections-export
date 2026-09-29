@@ -272,11 +272,15 @@ def register(
         except Exception as exc:  # noqa: BLE001 - convert renderer failures to a useful API error
             error_type = type(exc).__name__
             detail = f"PDF rendering failed ({error_type}) using {fidelity} fidelity."
-            if error_type == "TimeoutError":
+            # The paged renderer wraps the browser's timeout in its own error.
+            timed_out = "TimeoutError" in (error_type, type(exc.__cause__).__name__)
+            if timed_out:
                 detail += (
-                    " The browser did not finish loading or paginating the document within "
-                    "the renderer timeout; check the server log for the blocked resource."
+                    " The browser did not finish loading or paginating the document: it"
+                    " made no progress within the render timeout (Settings, PDF appearance)."
                 )
+                if exc.__cause__ is not None:
+                    detail += f" {exc}"
             else:
                 detail += f" {exc}" if str(exc) else " Check the server log for the full traceback."
             report = _write_pdf_failure_report(

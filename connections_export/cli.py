@@ -9,7 +9,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import platform
 import re
+import shutil
+import subprocess
 import sys
 import webbrowser
 from collections.abc import Callable, Mapping, Sequence
@@ -1490,9 +1494,43 @@ def _open_browser_when_listening(host: str, port: int) -> None:
             # a failure to start belongs, and a browser that did not open is
             # not itself an error worth a second message.
             return
-        webbrowser.open(url)
+        _open_in_browser(url)
 
     threading.Thread(target=wait_then_open, daemon=True).start()
+
+
+def _is_wsl(kernel_release: str, env: Mapping[str, str]) -> bool:
+    """Whether a kernel release and environment are Linux under Windows' WSL."""
+    return bool(env.get("WSL_DISTRO_NAME")) or "microsoft" in kernel_release.lower()
+
+
+def _in_wsl() -> bool:
+    """Whether this is Linux under Windows' WSL, where the browser is Windows'."""
+    return _is_wsl(platform.uname().release, os.environ)
+
+
+def _open_in_browser(url: str) -> None:
+    """Open `url` in the user's browser.
+
+    Python looks for Linux helpers (`xdg-open`, `x-www-browser`, ...), which a
+    WSL distribution usually lacks: its user's browser is on the Windows side,
+    so nothing opened. Under WSL: `wslview` when installed, else
+    `explorer.exe`, which opens the Windows default browser. `$BROWSER`, the
+    Linux convention for choosing one, is honoured first, everywhere."""
+    if _in_wsl() and not os.environ.get("BROWSER"):
+        for helper in ("wslview", "explorer.exe"):
+            found = shutil.which(helper)
+            if found:
+                try:
+                    subprocess.Popen(
+                        [found, url],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                    )
+                    return
+                except OSError:
+                    continue
+    webbrowser.open(url)
 
 
 def open_main(

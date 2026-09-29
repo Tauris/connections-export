@@ -25,7 +25,13 @@ from collections.abc import Iterator, Mapping
 from typing import TYPE_CHECKING
 
 from connections_export.derive.model import Interchange
-from connections_export.pdf.html import DEFAULT_GENERATED_AT, BlobBytes, render_html
+from connections_export.pdf.html import (
+    DEFAULT_GENERATED_AT,
+    BlobBytes,
+    ServedImages,
+    render_html,
+    serving_images,
+)
 
 if TYPE_CHECKING:  # pragma: no cover - annotations only
     from connections_export.pdf.marks import Marks
@@ -99,7 +105,7 @@ def render_request_allowed(url: str) -> bool:
     return url.lower().startswith(_RENDER_ALLOWED_PREFIXES)
 
 
-def block_network(page, blocked: list[str]) -> None:
+def block_network(page, blocked: list[str], served: ServedImages | None = None) -> None:
     """Answer every request the page makes for anything outside itself with
     an empty response from here, recording each in `blocked`. Nothing is
     forwarded. Installed BEFORE `set_content`, so not even the first parse
@@ -112,11 +118,18 @@ def block_network(page, blocked: list[str]) -> None:
 
     Blocked requests are recorded separately from real failures: they are the
     guard working, not the export failing -- a captured page that references
-    an intranet stylesheet should still print."""
+    an intranet stylesheet should still print.
+
+    `served` holds the render's own images (`html.serving_images`), answered
+    here from memory at their reserved addresses."""
 
     def handle(route) -> None:
         request = route.request
         url = request.url
+        if served and url in served:
+            content_type, body = served[url]
+            route.fulfill(status=200, content_type=content_type, body=body)
+            return
         if render_request_allowed(url):
             route.continue_()
             return
@@ -340,7 +353,14 @@ def _pdf_kwargs(*, outline: bool, marks: Marks | None = None) -> dict:
     }
 
 
-def html_to_pdf(html: str, *, outline: bool = False, marks: Marks | None = None) -> bytes:
+def html_to_pdf(
+    html: str,
+    *,
+    outline: bool = False,
+    marks: Marks | None = None,
+    pdf_timeout: float = 120.0,
+    served: ServedImages | None = None,
+) -> bytes:
     """`page.set_content(html); page.pdf(...)` -- print `html`
     with a headless Chromium-based browser (system Edge/Chrome preferred,
     see the module docstring) and return the PDF bytes. Callers are expected
@@ -364,8 +384,11 @@ def html_to_pdf(html: str, *, outline: bool = False, marks: Marks | None = None)
             # own templates -- so the untrusted document gets none. A service
             # worker would see requests before the route does.
             page = browser.new_page(java_script_enabled=False, service_workers="block")
+            # The setting governs loading and printing alike; a large document
+            # with its images embedded can outlast Playwright's own 30 s.
+            page.set_default_timeout(pdf_timeout * 1000)
             blocked: list[str] = []
-            block_network(page, blocked)
+            block_network(page, blocked, served)
             page.set_content(html, wait_until="load")
             return page.pdf(**_pdf_kwargs(outline=outline, marks=marks))
         finally:
@@ -384,20 +407,22 @@ def render_pdf(
     marks: Marks | None = None,
     external_images: Mapping[str, bytes | None] | None = None,
     small_image_px: int | None = None,
+    pdf_timeout: float = 120.0,
 ) -> bytes:
     """`html_to_pdf(render_html(...))` -- the end-to-end
     entry point: interchange model -> PDF bytes. `include_comments=False`
     omits comments from the export (they remain in the archive).
     `chrome=False` drops the cover + TOC (the live per-entity tiles)."""
-    html = render_html(
-        interchange,
-        blob_bytes=blob_bytes,
-        generated_at=generated_at,
-        include_comments=include_comments,
-        chrome=chrome,
-        style_overrides=style_overrides,
-        extra_css=extra_css,
-        external_images=external_images,
-        small_image_px=small_image_px,
-    )
-    return html_to_pdf(html, marks=marks)
+    with serving_images() as served:
+        html = render_html(
+            interchange,
+            blob_bytes=blob_bytes,
+            generated_at=generated_at,
+            include_comments=include_comments,
+            chrome=chrome,
+            style_overrides=style_overrides,
+            extra_css=extra_css,
+            external_images=external_images,
+            small_image_px=small_image_px,
+        )
+    return html_to_pdf(html, marks=marks, pdf_timeout=pdf_timeout, served=served)

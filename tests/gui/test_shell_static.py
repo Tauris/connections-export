@@ -265,8 +265,8 @@ def test_export_scope_selector_is_present_and_shared():
     # The archive export reads it and can send a scoped request.
     assert "scope=item" in JS
     assert "currentReaderScope" in JS
-    # #4: the live path reads the SAME dropdown, not its own ad-hoc rule.
-    assert 'sel.value === "item"' in JS
+    # #4: the live path reads the SAME choice, not its own ad-hoc rule.
+    assert 'pdfScope() === "item"' in JS
 
 
 def test_live_pdf_opens_in_the_inline_viewer():
@@ -956,7 +956,7 @@ def test_a_failed_lookup_leads_with_what_happened_not_the_endpoint():
 def test_export_can_choose_components_and_wiki_sections():
     """ "Whole archive" or "the item open in the reader" were the only
     options, so exporting two of five forums meant exporting all five."""
-    assert '<option value="choose">Choose components…</option>' in HTML
+    assert 'value="choose" /> Choose components…' in HTML
     assert 'id="pdf-pick-tree"' in HTML
     assert "function renderPdfPicker(" in JS
     assert "function pdfIncludeParams(" in JS

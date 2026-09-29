@@ -265,3 +265,28 @@ def test_pdf_include_with_nothing_matching_refuses_rather_than_exporting_all(tmp
             return await client.get("/api/pdf", params={"include": ["forum:does-not-exist"]})
 
     assert asyncio.run(go()).status_code in (422, 503)
+
+
+def test_a_wrapped_render_timeout_is_explained(tmp_path):
+    """The paged renderer wraps the browser's timeout in its own error; the
+    reader still gets the explanation, not only the raw browser text."""
+    from connections_export.pdf.paged import PdfRenderError
+
+    archive_dir = tmp_path / "archive"
+    run_demo((lambda _e: None), archive_dir=archive_dir, delay=0)
+
+    def failing_renderer(model, blob_bytes, **kwargs):
+        try:
+            raise TimeoutError("The layout made no progress for 120 s after 40 pages")
+        except TimeoutError as exc:
+            raise PdfRenderError(str(exc)) from exc
+
+    app = make_app(demo=True, archive_dir=archive_dir, pdf_renderer=failing_renderer)
+
+    async def _do():
+        async with _client(app) as client:
+            return await client.get("/api/pdf")
+
+    detail = _run(_do()).json()["detail"]
+    assert "did not finish loading or paginating" in detail
+    assert "after 40 pages" in detail
