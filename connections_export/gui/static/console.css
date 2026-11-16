@@ -2029,3 +2029,9 @@ a.btn:not(.primary) { text-decoration: none; display: inline-flex; align-items: 
   border-radius: var(--radius); margin: 0 0 var(--sp-6);
   box-shadow: 0 1px 0 var(--line, rgba(0,0,0,0.08)), 0 10px 30px -18px rgba(5, 20, 40, 0.55);
 }
+
+/* Archives an older release left incomplete: what is missing, and a
+   "Capture again" for each. */
+.archive-issue-banner .repair-banner-msg p { margin: 0 0 var(--sp-2); }
+.archive-issue-banner .issue-archive-list { list-style: none; margin: var(--sp-2) 0 0; padding: 0; display: grid; gap: var(--sp-2); }
+.archive-issue-banner .issue-archive-list li { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-4); flex-wrap: wrap; }

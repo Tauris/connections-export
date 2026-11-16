@@ -27,7 +27,8 @@ when no link is available to follow, not the primary path.
 from __future__ import annotations
 
 import re
-from urllib.parse import unquote
+from collections.abc import Callable, Sequence
+from urllib.parse import parse_qs, unquote, urldefrag, urlsplit
 
 import lxml.etree
 import lxml.html
@@ -38,6 +39,9 @@ from connections_export.adapters.model import Attachment, ForumReply, ForumTopic
 
 _FLAGS_SCHEME = "http://www.ibm.com/xmlns/prod/sn/flags"
 _NODE_ID_RE = re.compile(r"[?&]nodeId=([^&#\"']+)", re.IGNORECASE)
+#: A forum download, in either form a deployment writes it:
+#: ``/forums/ajax/download?nodeId=...`` or ``/forums/ajax/download/<post>/<file>/<name>``.
+_DOWNLOAD_RE = re.compile(r"/(?:ajax/)?download(?:/|\?)", re.IGNORECASE)
 
 
 class ForumRef(BaseModel):
@@ -169,18 +173,81 @@ def _normalized_ref(reply_to: dict[str, str | None] | None, key: str) -> str | N
     return atom.entry_uuid(value)
 
 
+def _is_download(href: str | None) -> bool:
+    return bool(href) and bool(_DOWNLOAD_RE.search(href))
+
+
+def _node_id(href: str | None) -> str | None:
+    match = _NODE_ID_RE.search(href or "")
+    return unquote(match.group(1)) if match else None
+
+
+def attachment_key(href: str | None) -> str:
+    """One attachment, however its download URL is spelled: the node id when
+    there is one, otherwise the URL without its fragment."""
+    node = _node_id(href)
+    if node:
+        return f"node:{node}"
+    # Host-free: a page links relatively (``/forums/ajax/download/...``) to the
+    # file its feed names by a full address, and both are one attachment.
+    parts = urlsplit(href or "")
+    path = unquote(parts.path).rstrip("/")
+    return path + (f"?{parts.query}" if parts.query else "")
+
+
+def _filename_from_href(href: str | None) -> str | None:
+    """The name a download URL itself carries: a ``name``/``fileName`` query
+    value, or a last path segment that looks like a file (``.../report.docx``)."""
+    parts = urlsplit(href or "")
+    query = parse_qs(parts.query)
+    for key in ("fileName", "filename", "name", "title"):
+        value = (query.get(key) or [""])[0].strip()
+        if value and value.lower() != "blob":
+            return value
+    segment = unquote(parts.path.rstrip("/").rsplit("/", 1)[-1])
+    if "." in segment and not segment.lower().startswith("download"):
+        return segment
+    return None
+
+
+def _usable_name(value: str | None) -> str | None:
+    value = (value or "").strip()
+    return value if value and value.lower() != "blob" else None
+
+
 def _attachments(entry) -> list[Attachment]:
-    """Read HCL forum download links embedded in topic/reply entries."""
+    """Read the downloads a topic/reply entry links to.
+
+    A deployment spells these two ways: a link carrying ``fid``/``nodeId``
+    attributes (a pasted image is one, named ``blob``), and a plain
+    ``rel="enclosure"`` link to ``/forums/ajax/download/...`` whose name is in
+    ``title`` -- an uploaded document. Both are attachments; reading only the
+    first lost every uploaded document.
+    """
     out: list[Attachment] = []
+    seen: set[str] = set()
     for link in atom.findall(entry, "atom:link"):
         href = link.get("href")
-        node_id = link.get("fid") or link.get("nodeId")
-        if not href or not node_id or "/download/" not in href and "/ajax/download" not in href:
+        if not href:
             continue
+        node_id = link.get("fid") or link.get("nodeId")
+        rel = link.get("rel")
+        # An enclosure is an attachment by definition; any other link only
+        # when it is a download and not navigation (alternate/self/edit).
+        if rel != "enclosure" and not (
+            _is_download(href) and (node_id or rel in (None, "related"))
+        ):
+            continue
+        key = attachment_key(href)
+        if key in seen:
+            continue
+        seen.add(key)
         out.append(
             Attachment(
-                uuid=node_id,
-                filename=None if (link.get("name") or "").lower() == "blob" else link.get("name"),
+                uuid=node_id or _node_id(href) or key,
+                filename=_usable_name(link.get("name"))
+                or _usable_name(link.get("title"))
+                or _filename_from_href(href),
                 content_type=link.get("type"),
                 enclosure_href=href,
             )
@@ -250,6 +317,157 @@ def attachments_from_html(data: bytes | str) -> list[Attachment]:
             )
         )
     return out
+
+
+def _label(element) -> str | None:
+    """The name a page shows for a download link: what hovering shows
+    (``title``), a ``download``/``data-filename`` attribute, the enclosing
+    ``dfAttachment`` row's ``fileName``, or the link text."""
+    for value in (
+        element.get("title"),
+        element.get("download"),
+        element.get("data-filename"),
+    ):
+        if _usable_name(value):
+            return unquote(value.strip())
+    for row in element.iterancestors():
+        if _usable_name(row.get("fileName")):
+            return unquote(row.get("fileName").strip())
+    # Link text is a name only when it looks like one: "Download" or
+    # "Herunterladen" is the link's purpose, and the address names the file.
+    text = " ".join(" ".join(element.itertext()).split())
+    return _usable_name(text) if "." in text else None
+
+
+def _marks(element, post_id: str) -> bool:
+    """Whether an element names a post as its own -- in an identifying
+    attribute, never in a link (a reply links to the post it answers)."""
+    return any(
+        post_id in (value or "")
+        for name, value in element.attrib.items()
+        if name in ("id", "uuid", "name") or name.startswith("data-")
+    )
+
+
+def _scope(tree, post_id: str, other_ids: Sequence[str]):
+    """The part of a page that belongs to one post: the element naming the
+    post, widened for as long as that takes in no other post."""
+    others = [o for o in other_ids if o and o != post_id]
+    elements = [e for e in tree.iter() if isinstance(e.tag, str)]
+    taken: set = set()
+    for element in elements:
+        if any(_marks(element, o) for o in others):
+            taken.add(element)
+            taken.update(element.iterancestors())
+    for element in elements:
+        if not _marks(element, post_id):
+            continue
+        scope = element
+        while (parent := scope.getparent()) is not None and parent not in taken:
+            scope = parent
+        return scope
+    return None
+
+
+def page_attachments(
+    data: bytes | str, *, post_id: str | None = None, other_ids: Sequence[str] = ()
+) -> list[Attachment]:
+    """Forum downloads linked from a post's rendered page.
+
+    Every link to a forum download counts, named as the page names it (see
+    `_label`). With `post_id`, only the part of the page belonging to that
+    post is read (see `_scope`); when the page does not say which post is
+    which, `post_id=None` reads all of it.
+    """
+    try:
+        tree = lxml.html.fromstring(data)
+    except (TypeError, ValueError, lxml.etree.ParserError):
+        return []
+    root = tree
+    if post_id is not None:
+        root = _scope(tree, post_id, other_ids)
+        if root is None:
+            return []
+    out: list[Attachment] = []
+    seen: set[str] = set()
+    for element in root.iter("a"):
+        href = element.get("href") or ""
+        in_list = any(
+            " dfAttachment " in f" {(a.get('class') or '')} " for a in element.iterancestors()
+        )
+        if not _is_download(href) or not (in_list or "/forums/" in href or _node_id(href)):
+            continue
+        key = attachment_key(href)
+        if key in seen:
+            continue
+        seen.add(key)
+        mime = element.xpath("string(.//span[contains(@class, 'dfMimeIcon')]/@mimeType)")
+        out.append(
+            Attachment(
+                uuid=_node_id(href) or key,
+                filename=_label(element) or _filename_from_href(href),
+                content_type=mime or None,
+                enclosure_href=href,
+            )
+        )
+    return out
+
+
+def merge_page_attachments(entries: Sequence, read_page: Callable[[str], bytes | None]) -> None:
+    """Add what each post's rendered page lists to the attachments its feed
+    entry names, and fill in names the feed leaves as ``blob``.
+
+    The feed is not the whole story: a reply's uploaded document can be on
+    its page and nowhere in the feed. `read_page` returns a page's bytes, or
+    None when it is not available; each page is read once however many
+    posts point at it. Posts sharing one page each get only their own part
+    of it; what the page does not attribute to any of them goes to the first
+    (the topic, when it is one of them) rather than being dropped.
+    """
+    pages: dict[str, list] = {}
+    for entry in entries:
+        url = urldefrag(getattr(entry, "alternate_url", None) or "")[0]
+        if url:
+            pages.setdefault(url, []).append(entry)
+    held = {attachment_key(a.enclosure_href) for e in entries for a in e.attachments}
+    for url, sharing in pages.items():
+        html = read_page(url)
+        if not html:
+            continue
+        ids = [e.id for e in sharing]
+        scoped: dict[str, str] = {}
+        if len(sharing) > 1:
+            for entry in sharing:
+                for attachment in page_attachments(html, post_id=entry.id, other_ids=ids):
+                    scoped.setdefault(attachment_key(attachment.enclosure_href), entry.id)
+        listed = page_attachments(html)
+        names = {
+            f"node:{node}": name for node, name in attachment_filenames_from_html(html).items()
+        }
+        names |= {attachment_key(a.enclosure_href): a.filename for a in listed if a.filename}
+        for entry in sharing:
+            for attachment in entry.attachments:
+                if not attachment.filename:
+                    attachment.filename = names.get(attachment_key(attachment.enclosure_href))
+        by_id = {entry.id: entry for entry in sharing}
+        for attachment in listed:
+            key = attachment_key(attachment.enclosure_href)
+            if key in held:
+                continue  # the feed already gave it to its post
+            held.add(key)
+            by_id[_owner(attachment, sharing, scoped.get(key))].attachments.append(attachment)
+
+
+def _owner(attachment: Attachment, sharing: Sequence, scoped: str | None) -> str:
+    """Which of the posts sharing a page an attachment found on it belongs
+    to: the post its download address names (``/download/<post>/<file>/...``),
+    else the post whose part of the page holds it, else the first -- the
+    topic, when it shares the page -- rather than none."""
+    path = unquote(urlsplit(attachment.enclosure_href or "").path)
+    for entry in sharing:
+        if entry.id and f"/{entry.id}/" in path:
+            return entry.id
+    return scoped or sharing[0].id
 
 
 # --------------------------------------------------------------------

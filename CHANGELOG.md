@@ -5,6 +5,61 @@ Notable changes to `connections-export`, newest first. Versions follow
 changes incompatibly only with a new major version; the format's own version
 is recorded inside every archive.
 
+## 1.0.1b2 — 2026-11-16 (beta)
+
+Fixes for what 1.0.1b1 showed on a real forum thread. Archives captured with
+1.0.1b1 are not flagged; capture an affected thread again with this beta.
+
+### Fixed
+
+- **An uploaded document is listed once, on its own reply.** A thread's page
+  links a document relatively and labels it "Download", while the feed names
+  it by its full address; the two were taken for different files, so the
+  document appeared twice, once named "Download". And in a single-thread
+  capture, where the topic and its replies share one page, a document the
+  page did not attribute was put on the topic. Download addresses are now
+  compared without their host, a link's text is a filename only when it looks
+  like one, and a document goes to the post its download address names.
+- **Attachments are saved under their names.** Saving an attachment from the
+  Reader produced a file named after its hash, with no extension. It now has
+  the attachment's filename; an image pasted into a post, which the source
+  does not name, is listed as "Pasted image" and saved with the extension its
+  type implies.
+
+## 1.0.1b1 — 2026-11-16 (beta)
+
+A beta of a fix for Forums attachments, and of a way to capture an affected
+archive again without selecting everything anew. Install it with
+`uv tool install --force --refresh --reinstall https://github.com/Tauris/connections-export/archive/refs/heads/beta.zip`.
+
+### Added
+
+- **Capture again.** Every archive on the Archives page offers *Capture
+  again*: a new capture with the same deployment, components, community and
+  author scope the archive recorded, with no date cutoff, into a new archive.
+  What will be captured is shown before it starts, and the existing archive is
+  left exactly as it is.
+- **Archives from an older release say what they are missing.** An archive
+  whose forums were captured before this release carries the note *Forum
+  attachments may be missing*, and a notice on the Archives page explains the
+  problem and offers *Capture again* for each. Once the new capture has
+  finished, the old archive names it instead.
+
+### Fixed
+
+- **A forum reply's uploaded document is kept.** A reply with a pasted image
+  and an uploaded file (a Word document, say) kept only the image. Uploaded
+  files are `/forums/ajax/download/...` links named in their address and
+  shown on hover, and these were not recognised as attachments. Every
+  download link a topic or reply names is now an attachment, named by its
+  title or its address.
+- **What a post's page lists is part of the archive.** The page of each topic
+  and reply is read, once per page, and the attachments it lists are added
+  to the post they belong to. These were used before only to recover names,
+  and attachments found only there were downloaded but not shown in the
+  archive or the PDF. On a thread page showing several posts, each post gets
+  only its own attachments.
+
 ## 1.0.0 — 2026-11-16
 
 The first stable release. Everything from the 0.2.0 betas, listed below, in
