@@ -89,7 +89,7 @@ def test_archive_update_dispatches_from_archive_scope_not_stale_app():
 
     source = inspect.getsource(run_module)
     update = source[source.index("def _run_real") :]
-    archive_branch = update[update.index("if into is not None:") :]
+    archive_branch = update[update.index("if into is not None or again is not None:") :]
     archive_branch = archive_branch[: archive_branch.index('elif hcl_app == "community":')]
 
     assert "run_selection(" in archive_branch

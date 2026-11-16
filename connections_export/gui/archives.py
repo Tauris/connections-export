@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
@@ -144,6 +144,13 @@ class ArchiveInfo:
     item_count: int
     repair_needed: bool = False
     repair_reason: str | None = None
+    #: Known problems an older release left in this archive, each with what
+    #: went wrong and what to do (see `archive_issues`).
+    issues: list[dict] = field(default_factory=list)
+    #: The archives whose selections a completed run here repeated.
+    captured_again_from: frozenset[str] = frozenset()
+    #: The newer archive that captured this one again, once one has.
+    captured_again_as: str | None = None
 
 
 #: Source hosts that mark a run as demo data (the fake server's own hosts).
@@ -332,6 +339,71 @@ def archive_ledger(archive_dir: Path) -> dict:
         # holds now -- which is the only way to know what is missing.
         "communities": summary.get("communities") or [],
     }
+
+
+#: What an older forum reader missed, said to the person who has to decide
+#: whether it matters to them.
+FORUM_ATTACHMENTS_ISSUE = {
+    "key": "forum-attachments",
+    "title": "Forum attachments may be missing",
+    "explanation": (
+        "This archive was captured by a release before 1.0.1, whose forum reader "
+        "kept only the attachments linked with a node id -- in practice the images "
+        "pasted into a topic or reply. Documents uploaded to a post (a Word or PDF "
+        "file, say) are linked differently and were left out, so they are not in "
+        "this archive. Capturing it again makes a new archive with the same source, "
+        "components and author scope that includes them; this archive stays as it is."
+    ),
+    "remedy": "capture-again",
+}
+
+
+def _runs(archive_dir: Path) -> list:
+    from connections_export.archive.records import RunMetadata  # noqa: PLC0415
+
+    runs = []
+    try:
+        for entry in source_for(archive_dir).run_metadata():
+            try:
+                runs.append(RunMetadata.model_validate_json(entry.data))
+            except (OSError, ValueError):
+                continue
+    except (ArchiveSourceError, OSError, ValueError):
+        return []
+    return runs
+
+
+def archive_issues(archive_dir: Path) -> tuple[list[dict], frozenset[str]]:
+    """Known problems in this archive, and the archives it captured again.
+
+    Read from run metadata alone: each run records the version of the reader
+    that made it. A forum captured by the `forums-1` reader can lack uploaded
+    documents (`FORUM_ATTACHMENTS_ISSUE`); the remedy is a new archive, so
+    nothing here ever changes the old one.
+    """
+    runs = _runs(archive_dir)
+    issues = []
+    if any(run.adapter_version == "forums-1" for run in runs):
+        issues.append(dict(FORUM_ATTACHMENTS_ISSUE))
+    again = frozenset(
+        run.captured_again_from for run in runs if run.captured_again_from and run.completed_at
+    )
+    return issues, again
+
+
+def with_recaptures(infos: list[ArchiveInfo]) -> list[ArchiveInfo]:
+    """Mark each archive another one has since captured again: its issues are
+    then answered by that newer archive, which is named instead."""
+    newest: dict[str, str] = {}
+    for info in sorted(infos, key=lambda i: (i.mtime, i.name)):
+        for source in info.captured_again_from:
+            newest[source] = info.name
+    return [
+        replace(info, captured_again_as=newest[info.name], issues=[])
+        if info.name in newest
+        else info
+        for info in infos
+    ]
 
 
 def archive_repair_status(archive_dir: Path) -> dict:
@@ -599,6 +671,12 @@ def list_archives(base: Path) -> list[ArchiveInfo]:
                 **archive_repair_status(child),
             )
         )
+        issues, again = archive_issues(child)
+        # A demo archive's content is invented; it has nothing to recover.
+        infos[-1] = replace(
+            infos[-1], issues=[] if infos[-1].is_demo else issues, captured_again_from=again
+        )
+    infos = with_recaptures(infos)
     # Name breaks the tie, because mtime alone does not: two archives written
     # in the same second -- a batch, or one run started right after another --
     # carry the same mtime, and `iterdir` order is then whatever the

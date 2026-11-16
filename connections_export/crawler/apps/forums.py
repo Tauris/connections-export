@@ -10,16 +10,14 @@ from __future__ import annotations
 
 import threading
 from collections.abc import Callable, Sequence
-from urllib.parse import parse_qs, urlsplit
 
 from connections_export import paging
 from connections_export.adapters import atom
 from connections_export.adapters.forums import (
     ForumRef,
-    attachment_filenames_from_html,
-    attachments_from_html,
     build_reply_tree,
     forums_list_url,
+    merge_page_attachments,
     parse_forums_feed,
     parse_replies_feed,
     parse_single_topic,
@@ -60,34 +58,15 @@ from connections_export.http.client import HttpClient
 
 
 def _enrich_forum_attachment_filenames(fetcher, entries, discovered_from: str) -> None:
-    """Recover filenames that the Atom feed replaces with ``name=blob``."""
+    """Add what each post's rendered page lists to its attachments.
+
+    Every post's page is read, not only those whose feed entry lacks a name:
+    a reply whose pasted image the feed names can still have an uploaded
+    document that only its page lists (see `merge_page_attachments`).
+    """
     if not fetcher.config.capture_assets:
         return
-    for entry in entries:
-        if not entry.alternate_url:
-            continue
-        missing = [a for a in entry.attachments if not a.filename]
-        if not missing and entry.attachments:
-            continue
-        html = fetcher.get_content(entry.alternate_url, "topic", discovered_from)
-        if html is None:
-            continue
-        rendered_attachments = attachments_from_html(html)
-        names = attachment_filenames_from_html(html)
-        existing_hrefs = {a.enclosure_href for a in entry.attachments}
-        for rendered in rendered_attachments:
-            if (
-                rendered.enclosure_href
-                and rendered.filename
-                and rendered.enclosure_href not in existing_hrefs
-            ):
-                entry.attachments.append(rendered)
-        for attachment in missing:
-            node_id = (
-                parse_qs(urlsplit(attachment.enclosure_href or "").query).get("nodeId") or [None]
-            )[0]
-            if node_id and node_id in names:
-                attachment.filename = names[node_id]
+    merge_page_attachments(entries, lambda url: fetcher.get_content(url, "topic", discovered_from))
 
 
 def crawl_forums(
@@ -372,6 +351,10 @@ def crawl_forums(
                         h, base=session.base_url, discovered_from=u
                     )
                 )
+            topic_replies_url = replies_url(base_url=session.base_url, topic_uuid=tid)
+            replies = paginate(topic_replies_url, parse_replies_feed, "reply", t_url)
+            _enrich_forum_attachment_filenames(fetcher, [topic, *replies], t_url)
+            # After the pages are read: they can add attachments to the topic.
             for attachment in topic.attachments:
                 if attachment.enclosure_href:
                     ops.append(
@@ -382,9 +365,6 @@ def crawl_forums(
                             kind="attachments",
                         )
                     )
-            topic_replies_url = replies_url(base_url=session.base_url, topic_uuid=tid)
-            replies = paginate(topic_replies_url, parse_replies_feed, "reply", t_url)
-            _enrich_forum_attachment_filenames(fetcher, [topic, *replies], t_url)
             for reply in replies:
                 if reply.content_html:
                     ops.append(
@@ -569,13 +549,6 @@ def crawl_forums(
                         h, base=session.base_url, discovered_from=u
                     )
                 )
-            for attachment in topic.attachments:
-                if attachment.enclosure_href:
-                    ops.append(
-                        lambda h=attachment.enclosure_href, u=topics_feed_url: asset_capture.handle(
-                            h, base=session.base_url, discovered_from=u, kind="attachments"
-                        )
-                    )
             # No replies link on the topic entry (query-param addressing);
             # build the flat replies feed URL from the topic uuid.
             topic_replies_url = replies_url(base_url=session.base_url, topic_uuid=topic.id)
@@ -603,6 +576,14 @@ def crawl_forums(
                 policy=CachePolicy.ALWAYS,
             )
             _enrich_forum_attachment_filenames(fetcher, [topic, *replies], topics_feed_url)
+            # After the pages are read: they can add attachments to the topic.
+            for attachment in topic.attachments:
+                if attachment.enclosure_href:
+                    ops.append(
+                        lambda h=attachment.enclosure_href, u=topics_feed_url: asset_capture.handle(
+                            h, base=session.base_url, discovered_from=u, kind="attachments"
+                        )
+                    )
             for reply in replies:
                 if reply.content_html:
                     ops.append(

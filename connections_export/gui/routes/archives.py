@@ -220,6 +220,8 @@ def register(
                         "item_count": a.item_count,
                         "repair_needed": a.repair_needed,
                         "repair_reason": a.repair_reason,
+                        "issues": a.issues,
+                        "captured_again_as": a.captured_again_as,
                         "summary": read_archive_summary(a.path),
                     }
                     for a in infos
@@ -227,6 +229,17 @@ def register(
                 "archives_dir": str(support.ARCHIVES_BASE),
             }
         )
+
+    @app.get("/api/archive-again")
+    def archive_again(name: str) -> JSONResponse:
+        """What "Capture again" would repeat from this archive -- shown to the
+        person before anything starts, so a new archive is never a surprise."""
+        from connections_export.gui.routes.run import again_plan  # noqa: PLC0415
+
+        target = resolve_archive(support.ARCHIVES_BASE, name)
+        if target is None:
+            return JSONResponse({"error": "archive not found"}, status_code=404)
+        return JSONResponse(again_plan(target))
 
     @app.get("/api/repair-status")
     def repair_status() -> JSONResponse:

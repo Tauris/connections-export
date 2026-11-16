@@ -7321,6 +7321,103 @@
     allBtn.textContent = "Repair all " + n;
   }
 
+  // Archives an older release left incomplete. The remedy is a new archive
+  // with the same selections ("Capture again"), so the notice explains what
+  // is missing and offers that per archive; nothing is changed in place.
+  function renderIssueBanner() {
+    const banner = $("issue-banner");
+    const msg = $("issue-banner-msg");
+    if (!banner || !msg) return;
+    const byKey = new Map();
+    archivesOnPage.forEach((a) => {
+      (a.issues || []).forEach((issue) => {
+        if (!byKey.has(issue.key)) byKey.set(issue.key, { issue, archives: [] });
+        byKey.get(issue.key).archives.push(a);
+      });
+    });
+    if (!byKey.size) { banner.hidden = true; msg.innerHTML = ""; return; }
+    banner.hidden = false;
+    msg.innerHTML = "";
+    byKey.forEach(({ issue, archives }) => {
+      const n = archives.length;
+      const head = document.createElement("p");
+      head.innerHTML = "<b>" + escapeHtml(issue.title) + "</b> in " + n + " archive" + (n === 1 ? "" : "s") + ".";
+      const why = document.createElement("p");
+      why.className = "foot-note";
+      why.textContent = issue.explanation;
+      msg.appendChild(head);
+      msg.appendChild(why);
+      const list = document.createElement("ul");
+      list.className = "issue-archive-list";
+      archives.slice(0, 12).forEach((a) => {
+        const li = document.createElement("li");
+        const name = document.createElement("span");
+        name.textContent = (a.display_name || a.name) + " ";
+        li.appendChild(name);
+        li.appendChild(captureAgainButton(a, true));
+        list.appendChild(li);
+      });
+      if (n > 12) {
+        const more = document.createElement("li");
+        more.className = "foot-note";
+        more.textContent = "…and " + (n - 12) + " more, marked in the list below.";
+        list.appendChild(more);
+      }
+      msg.appendChild(list);
+    });
+  }
+
+  function captureAgainButton(a, primary) {
+    const again = document.createElement("button");
+    again.type = "button";
+    again.className = primary ? "btn primary" : "btn";
+    again.textContent = "Capture again";
+    again.title = "Capture the same source, components and author scope into a new archive. " +
+      "This archive is left as it is.";
+    again.addEventListener("click", (event) => {
+      event.stopPropagation();
+      captureAgain(a);
+    });
+    return again;
+  }
+
+  async function captureAgain(a) {
+    let plan;
+    try {
+      const res = await fetch("/api/archive-again?name=" + encodeURIComponent(a.name));
+      if (!res.ok) throw new Error("plan");
+      plan = await res.json();
+    } catch (_) {
+      notify("This archive's selections could not be read. Refresh the list and try again.", "Capture again");
+      return;
+    }
+    if (!plan.base_url || !(plan.components || []).length) {
+      notify("This archive does not record where it came from or what it captured, so it cannot be captured again. Start a new capture from a link instead.", "Capture again");
+      return;
+    }
+    let host = plan.base_url;
+    try { host = new URL(plan.base_url).host; } catch (_) {}
+    const rows = plan.components.map((c) =>
+      "<li>" + escapeHtml(c.kind) + ": " + escapeHtml(c.title || c.id) +
+      (c.count != null ? " (" + c.count + " now)" : "") + "</li>").join("");
+    const issues = (a.issues || []).map((i) => "<p>" + escapeHtml(i.explanation) + "</p>").join("");
+    const ok = await showDialog({
+      title: "Capture " + (plan.label || a.name) + " again?",
+      bodyHtml: issues +
+        "<p>A new archive is made from <b>" + escapeHtml(host) + "</b> with the same selections:</p>" +
+        "<ul>" + rows + "</ul>" +
+        (plan.community_title ? "<p>Community: " + escapeHtml(plan.community_title) + "</p>" : "") +
+        "<p>Author scope: " + (plan.author ? escapeHtml(plan.author) : "everyone") +
+        (plan.max_entries ? " · preview, up to " + plan.max_entries + " per component" : "") + "</p>" +
+        "<p>Everything is read anew, with no date cutoff. The existing archive is not changed; " +
+        "once the new one is complete, it is marked as captured again.</p>",
+      confirmLabel: "Capture into a new archive",
+      danger: false,
+    });
+    if (!ok) return;
+    beginRun({ again_from: a.name, base_url: plan.base_url, target_label: plan.label });
+  }
+
   async function startRepair() {
     if (repairActive) return;
     const affected = affectedArchives();
@@ -8623,6 +8720,7 @@
     }).then((j) => {
       const items = (j.archives || []);
       archivesOnPage = items;
+      renderIssueBanner();
       // Drop selections for archives that no longer exist.
       Array.from(archiveSelection).forEach((name) => {
         if (!items.some((a) => a.name === name)) archiveSelection.delete(name);
@@ -8694,6 +8792,19 @@
           repairNote.title = a.repair_reason || "This archive was created by an older adapter.";
           b.appendChild(repairNote);
         }
+        (a.issues || []).forEach((issue) => {
+          const note = document.createElement("span");
+          note.className = "archive-repair-note";
+          note.textContent = issue.title + " — capture again to include them";
+          note.title = issue.explanation;
+          b.appendChild(note);
+        });
+        if (a.captured_again_as) {
+          const note = document.createElement("span");
+          note.className = "foot-note archive-detail";
+          note.textContent = "Captured again as " + a.captured_again_as;
+          b.appendChild(note);
+        }
         // `/api/archives` already carried the persisted summary, so only ask
         // for it separately when this archive has none stored yet.
         (a.summary ? Promise.resolve(a.summary)
@@ -8731,6 +8842,7 @@
           openArchiveForUpdate(a.name);
         });
         actions.appendChild(extend);
+        if (!a.is_demo) actions.appendChild(captureAgainButton(a, !!(a.issues || []).length));
         const details = document.createElement("button");
         details.type = "button";
         details.className = "btn";

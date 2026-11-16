@@ -61,6 +61,10 @@ class _StartRequest(BaseModel):
     #: that the archive does not hold yet. Absent means "whatever the archive
     #: holds"; it never means "everything on the deployment".
     archive_components: list[dict] = Field(default_factory=list)
+    #: An existing archive whose selections this run repeats ("Capture again"):
+    #: its deployment, components, community, author scope and preview cap,
+    #: with no date cutoff, into a NEW archive. That archive is not written to.
+    again_from: str | None = None
     #: During an update, ask for each item's comments even when the item
     #: itself did not change. See `Config.recheck_comments`.
     recheck_comments: bool = False

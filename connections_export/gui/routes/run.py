@@ -183,6 +183,58 @@ def _archive_base_url(archive_dir) -> str | None:
         return None
 
 
+def again_plan(archive_dir) -> dict:
+    """What "Capture again" repeats from an existing archive.
+
+    The deployment, the components it holds, the community, the author scope
+    and the preview cap -- read from the archive's own record, so nothing has
+    to be selected again. Components come from its summary: whole containers,
+    so a capture first narrowed to one thread reads that thread's forum (the
+    author scope, when there was one, still narrows what is kept).
+    """
+    from connections_export.crawler.provenance import last_successful_run  # noqa: PLC0415
+    from connections_export.gui.archives import (  # noqa: PLC0415
+        _display_name_for,
+        read_archive_summary,
+    )
+
+    summary = read_archive_summary(archive_dir) or {}
+    try:
+        run = last_successful_run(Archive.open(archive_dir))
+    except Exception:  # noqa: BLE001 - an unreadable record leaves the summary
+        run = None
+    community = (summary.get("communities") or [{}])[0]
+    components = [
+        {
+            "kind": group.get("kind"),
+            "id": group.get("id"),
+            "title": group.get("title"),
+            "count": group.get("count"),
+        }
+        for group in summary.get("groups", [])
+        if group.get("kind") and group.get("id")
+    ]
+    return {
+        "base_url": _archive_base_url(archive_dir) or summary.get("base_url"),
+        "components": components,
+        "author": run.author_filter if run is not None else None,
+        "community_uuid": (run.community_uuid if run is not None else None) or community.get("id"),
+        "community_title": (run.community_title if run is not None else None)
+        or community.get("title"),
+        "max_entries": run.max_items if run is not None else None,
+        "label": _display_name_for(archive_dir, summary),
+    }
+
+
+def _again_scope(again: dict | None) -> dict[str, list[str]] | None:
+    if again is None:
+        return None
+    scope: dict[str, list[str]] = {}
+    for component in again["components"]:
+        scope.setdefault(component["kind"], []).append(component["id"])
+    return scope
+
+
 def register(
     app,
     *,
@@ -312,6 +364,8 @@ def register(
         recheck_comments: bool = False,
         scope_components: dict[str, list[str]] | None = None,
         search_userid: str | None = None,
+        again: dict | None = None,
+        again_from: str | None = None,
     ) -> None:
         """A real (non-demo) start: build a
         real HttpClient + auth strategy and crawl the identified app --
@@ -350,6 +404,7 @@ def register(
             # The deployment's other hosts, as configured: among them any
             # sign-in server on another domain the handshake is redirected to.
             hcl_hosts=_configured_hcl_hosts(),
+            captured_again_from=again_from,
         )
         try:
             # Use the serve process environment so Basic Auth can resolve
@@ -400,7 +455,7 @@ def register(
             app.state.live_cookies = []
 
         archive = Archive.open(config.output_dir)
-        if into is not None:
+        if into is not None or again is not None:
             # Archive updates are scoped by the ledger, not by the stale app
             # left over from the URL that was identified before the archive
             # was opened. Dispatch every selected archived component together.
@@ -414,6 +469,10 @@ def register(
                 author=author,
                 since=plan.since,
                 stop_event=app.state.stop_event,
+                # Capture again: the community the older archive was made for,
+                # so its wiki is attributed and its picture fetched as before.
+                community_uuid=(again or {}).get("community_uuid"),
+                community_title=(again or {}).get("community_title"),
             )
             archive_report = archive.report()
             safe_emit(
@@ -692,6 +751,46 @@ def register(
                 status_code=404,
             )
         archive_base = _archive_base_url(into_dir) if into_dir is not None else None
+        # "Capture again": everything is taken from the older archive's own
+        # record, and the run writes a new archive beside it.
+        again = None
+        if body.again_from:
+            again_dir = resolve_archive(support.ARCHIVES_BASE, body.again_from)
+            if again_dir is None or body.into:
+                return JSONResponse(
+                    {
+                        "status": "error",
+                        "detail": (
+                            "That archive can't be found any more. It may have been moved or "
+                            "deleted. Refresh the list and try again."
+                            if again_dir is None
+                            else "Capture again makes a new archive; it cannot also update one."
+                        ),
+                    },
+                    status_code=404 if again_dir is None else 400,
+                )
+            again = again_plan(again_dir)
+            if not again["base_url"] or not again["components"]:
+                return JSONResponse(
+                    {
+                        "status": "error",
+                        "detail": (
+                            "This archive does not record where it came from or what it "
+                            "captured, so it cannot be captured again. Start a new capture "
+                            "from a link instead."
+                        ),
+                    },
+                    status_code=409,
+                )
+            if again["base_url"].rstrip("/") == DEMO_SAMPLE_BASE_URL:
+                return JSONResponse(
+                    {
+                        "status": "error",
+                        "detail": "A demo archive is not captured again; start a new demo.",
+                    },
+                    status_code=400,
+                )
+            effective_base_url = again["base_url"]
         if not effective_base_url and archive_base:
             effective_base_url = archive_base
 
@@ -803,6 +902,7 @@ def register(
             # started without a label still names something.
             label=(
                 body.target_label
+                or (again["label"] if again else None)
                 # A set of communities is named for the first one added, which
                 # is a guess a person can correct: the archives list offers a
                 # rename, and it writes a name beside the data rather than
@@ -822,6 +922,10 @@ def register(
             if body.author and body.author.strip()
             else app.state.default_author_filter
         )
+        if again is not None:
+            # The archive's own scope, exactly -- "everyone" included, which a
+            # console default must not narrow.
+            run_author = again["author"]
         app.state.model_source.attach_live(run_dir, author=run_author)
         print(f"connections-export: writing this run's archive to {run_dir}", flush=True)
 
@@ -1068,7 +1172,9 @@ def register(
                         forum_uuid=body.forum_uuid,
                         topic_id=body.topic_id,
                         scope=body.scope,
-                        max_entries=body.max_entries,
+                        max_entries=(
+                            again["max_entries"] if again is not None else body.max_entries
+                        ),
                         emit=emit,
                         output_dir=run_dir,
                         author=run_author,
@@ -1084,8 +1190,10 @@ def register(
                         scope_components=(
                             archive_scope(into_dir, body.archive_components)
                             if into_dir is not None
-                            else None
+                            else _again_scope(again)
                         ),
+                        again=again,
+                        again_from=body.again_from if again is not None else None,
                         search_userid=(body.search_userid or "").strip() or None,
                     )
                     # Best-effort: derive the final archive and stash it so

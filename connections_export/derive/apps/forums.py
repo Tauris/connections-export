@@ -14,6 +14,7 @@ from urllib.parse import parse_qsl, urlsplit
 from connections_export.adapters import atom
 from connections_export.adapters.forums import (
     build_reply_tree,
+    merge_page_attachments,
     parse_forums_feed,
     parse_replies_feed,
     parse_topics_feed,
@@ -51,6 +52,11 @@ class DeriveError(Exception):
     `.../wiki/{label}/nav/feed` was ever archived. Distinct from a
     per-page/per-artifact gap, which is always represented via
     `Provenance.note`, never raised."""
+
+
+def _archived(index: ArchiveIndex, url: str) -> bytes | None:
+    response = index.get(url)
+    return response.content if response is not None else None
 
 
 def _flatten_reply_tree(
@@ -125,6 +131,15 @@ def _assemble_topic(
     # HCL-ism confined to provenance: the topic's raw `<id>` LSID text.
     provenance = Provenance(hcl_id=topic.provenance)
 
+    # No replies link on a topic entry (Forums addressing is query-param,
+    # not link-following); build the flat replies feed URL from the topic
+    # uuid, exactly as `crawl_forums` does.
+    topic_replies_url = replies_url(base_url=forums_base_url, topic_uuid=topic.id)
+    replies_items = index.paginate(topic_replies_url, parse_replies_feed, page_size=page_size)
+    # The posts' rendered pages, as the crawl read them, list attachments the
+    # feed does not -- the same merge the crawl made.
+    merge_page_attachments([topic, *replies_items], lambda url: _archived(index, url))
+
     body_html = strip_avatars(topic.content_html or "")
     resolved_assets = resolve_body_assets(
         body_html, page_url=base_url, base_url=base_url, hcl_hosts=hcl_hosts, index=index
@@ -140,11 +155,6 @@ def _assemble_topic(
         page_lookup={},
     )
 
-    # No replies link on a topic entry (Forums addressing is query-param,
-    # not link-following); build the flat replies feed URL from the topic
-    # uuid, exactly as `crawl_forums` does.
-    topic_replies_url = replies_url(base_url=forums_base_url, topic_uuid=topic.id)
-    replies_items = index.paginate(topic_replies_url, parse_replies_feed, page_size=page_size)
     note = _feed_note(index, "replies", topic_replies_url, page_size=page_size)
     if note:
         notes.append(note)

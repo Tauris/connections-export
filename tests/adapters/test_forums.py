@@ -360,3 +360,52 @@ def test_recommendation_entries_are_not_parsed_as_content():
     ).encode()
     topics = parse_topics_feed(topics_xml)
     assert [t.author for t in topics] == ["Real Poster"]
+
+
+def test_an_uploaded_document_link_is_an_attachment_named_by_its_title():
+    from connections_export.adapters import atom
+    from connections_export.adapters.forums import _attachments
+
+    entry = atom.parse_xml(
+        '<entry xmlns="http://www.w3.org/2005/Atom"><id>urn:lsid:x:reply-1</id>'
+        '<link rel="alternate" href="https://fake/forums/html/topic?id=t1"/>'
+        '<link rel="related" href="https://fake/forums/ajax/download?nodeId=n1"'
+        ' nodeId="n1" name="blob"/>'
+        '<link rel="enclosure" href="https://fake/forums/ajax/download/r1/d1/Plan%20B.docx"'
+        ' title="Plan B.docx" type="application/msword"/>'
+        "</entry>"
+    )
+    found = [(a.uuid, a.filename) for a in _attachments(entry)]
+    assert found[0] == ("n1", None)
+    assert found[1][1] == "Plan B.docx"
+    assert len(found) == 2
+
+
+def test_a_shared_thread_page_gives_each_post_only_its_own_attachments():
+    from types import SimpleNamespace
+
+    from connections_export.adapters.forums import merge_page_attachments
+
+    page = (
+        b'<div id="topicPost" uuid="t1"><a href="/forums/ajax/download/t1/a/topic.pdf"'
+        b' title="topic.pdf">pdf</a></div>'
+        b'<div class="replies">'
+        b'<div uuid="r1"><a href="/forums/ajax/download/r1/b/one.docx" title="one.docx">x</a>'
+        b'<a href="/forums/html/topic?id=t1&amp;replyTo=r2">answers r2</a></div>'
+        b'<div uuid="r2"><a href="/forums/ajax/download/r2/c/two.xlsx" title="two.xlsx">y</a></div>'
+        b'</div><a href="/forums/ajax/download/zz/d/orphan.txt" title="orphan.txt">z</a>'
+    )
+    url = "https://fake/forums/html/topic?id=t1"
+    posts = [
+        SimpleNamespace(id=i, alternate_url=f"{url}#{i}", attachments=[])
+        for i in ("t1", "r1", "r2")
+    ]
+    reads = []
+    merge_page_attachments(posts, lambda u: reads.append(u) or page)
+    named = {p.id: sorted(a.filename for a in p.attachments) for p in posts}
+    assert named == {
+        "t1": ["orphan.txt", "topic.pdf"],
+        "r1": ["one.docx"],
+        "r2": ["two.xlsx"],
+    }
+    assert reads == [url]  # one page, read once

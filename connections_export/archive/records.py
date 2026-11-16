@@ -175,3 +175,7 @@ class RunMetadata(BaseModel):
     #: an issue, or find the tool if it ever leaves PyPI. Defaulted like the
     #: others so an older record with no such key still validates.
     generator_repo_url: str = Field(default_factory=lambda: _generator_repo_url())
+    #: The archive whose selections this run repeated ("Capture again"), by
+    #: its folder name. Lets that older archive say it has been captured
+    #: again, without anything being written into it. Optional and additive.
+    captured_again_from: str | None = None

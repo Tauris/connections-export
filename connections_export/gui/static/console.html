@@ -117,6 +117,10 @@
         <button class="btn primary" id="repair-all" type="button">Repair all</button>
         <button class="btn danger" id="repair-stop" type="button" hidden title="Stop the repair. The archive it is on keeps what it already fetched; the rest are not started.">Stop</button>
       </div>
+      <div class="archive-repair-banner archive-issue-banner" id="issue-banner" hidden>
+        <span class="repair-banner-icon" aria-hidden="true">&#9888;</span>
+        <div class="repair-banner-msg" id="issue-banner-msg"></div>
+      </div>
       <div class="archive-toolbar" id="archive-toolbar" hidden>
         <button class="btn" id="select-superseded" type="button" title="Select every run that a later attempt at the same target has replaced">Select superseded</button>
         <button class="btn" id="repair-affected" type="button" disabled>Repair affected</button>

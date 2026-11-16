@@ -11,6 +11,7 @@
   <a href="#man-communities">Several communities in one archive</a>
   <a href="#man-update">Adding to an archive later</a>
   <a href="#man-repair">Repairing a blog archive from an older release</a>
+  <a href="#man-again">Forum attachments missing from an older archive — capture again</a>
   <a href="#man-pacing">Pacing, and running overnight</a>
   <a href="#man-proxy">Proxies</a>
   <a href="#man-cli">The command line</a>
@@ -434,6 +435,18 @@ connections-export crawl --repair --into PATH\TO\ARCHIVE
 `--repair` needs `--into` and takes nothing else — no URL, no `--component`. What to re-read is taken from the archive’s own record of what it captured and for whom, so it repairs precisely the blogs (and author scope) that are in it, against the same deployment, with no date cutoff. It is safe to run more than once.
 
 **How the archive is recognised as needing repair.** A capture records which version of each component reader produced it; a blog captured before the fix is marked with the older reader and is what the offer keys off. An older archive from before that record existed is recognised instead from its own request log — a blog whose comment feeds were never read from page 0 — so the offer is made whenever completeness cannot be confirmed, and never withheld on a guess. An archive captured by this release or later is never flagged, because its comments are already complete.
+
+### <a id="man-again"></a>Forum attachments missing from an older archive — capture again
+
+Releases before 1.0.1 kept only those forum attachments that were linked with a node id, which in practice means images pasted into a topic or reply. A document **uploaded** to a post — a Word or PDF file, say — is linked differently, by its name in the address, and was left out. So a forum thread whose reply had a screenshot and a Word document came out with the screenshot only.
+
+**The console tells you which archives are affected.** On **Archives**, a notice explains what is missing and lists every archive a forum was captured into by an older release; each of those archives also carries the note *Forum attachments may be missing* in the list.
+
+**The remedy is a new archive, not a change to the old one.** **Capture again** — on the notice, and on every archive in the list — reads the archive's own record of what it captured and shows it before anything starts: the deployment, the components with their names, the community, and the author scope. Confirm, and a new capture with exactly those selections runs, with no date cutoff, into a new archive beside the old one. Nothing has to be selected again, and the old archive is not written to. Once the new capture has finished, the old archive no longer shows the warning and names the archive that replaced it instead; delete it when you no longer need it.
+
+An **update** of the old archive does not fix this: an update re-reads only threads that have changed since, and the missing documents are in threads that have not.
+
+Components are repeated as whole containers — a forum, a blog, a wiki. An archive that was made from one thread of a forum is captured again as that forum; with an author scope, only that person's threads are kept, as before.
 
 ## <a id="man-pacing"></a>Pacing, and running overnight
 
