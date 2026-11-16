@@ -39,6 +39,7 @@ from connections_export.fakeserver.faults import Faults
 from connections_export.fakeserver.model import (
     DEMO_CHILD_COMMUNITY_TITLE,
     DEMO_CHILD_COMMUNITY_UUID,
+    DEMO_COMMUNITY_TITLE,
     DEMO_COMMUNITY_UUID,
     BlogSet,
     FakeWiki,
@@ -413,6 +414,22 @@ def _build_fastapi(
 
 def _register_community_routes(api: FastAPI) -> None:
     """Routes about a community itself, rather than about one of its apps."""
+
+    @api.get("/communities/service/atom/community/instance")
+    def community_entry_route(request: Request, communityUuid: str = ""):
+        base = str(request.base_url).rstrip("/")
+        if communityUuid == DEMO_COMMUNITY_UUID:
+            xml = atom.community_entry(communityUuid, DEMO_COMMUNITY_TITLE, base_url=base)
+        elif communityUuid == DEMO_CHILD_COMMUNITY_UUID:
+            xml = atom.community_entry(
+                communityUuid,
+                DEMO_CHILD_COMMUNITY_TITLE,
+                base_url=base,
+                parent=(DEMO_COMMUNITY_UUID, DEMO_COMMUNITY_TITLE),
+            )
+        else:
+            return Response(status_code=404)
+        return Response(content=xml, media_type="application/atom+xml")
 
     @api.get("/communities/service/atom/community/subcommunities")
     def subcommunities_route(request: Request, communityUuid: str = ""):

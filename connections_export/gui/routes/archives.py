@@ -100,8 +100,8 @@ def _too_large(what: str) -> JSONResponse:
         {
             "status": "error",
             "detail": (
-                f"{what} is larger than the {MAX_ARCHIVE_BYTES // 1024**3} GB an archive may "
-                "be opened at; open it from disk instead, by its path"
+                f"{what} is larger than the {MAX_ARCHIVE_BYTES // 1024**3} GB an archive can be "
+                "opened at here. Open it from disk instead, by typing its path."
             ),
         },
         status_code=413,
@@ -438,14 +438,39 @@ def register(
         """
         raw = (body.path or "").strip()
         if not raw:
-            return JSONResponse({"error": "give a directory"}, status_code=422)
+            return JSONResponse(
+                {"error": "Type or drop the folder that holds your archives."}, status_code=422
+            )
         candidate = Path(raw).expanduser()
         if not candidate.exists():
-            return JSONResponse({"error": f"no such directory: {candidate}"}, status_code=422)
+            return JSONResponse(
+                {
+                    "error": (
+                        f"There is no folder at {candidate}. Check the path; it has to exist "
+                        f"already."
+                    )
+                },
+                status_code=422,
+            )
         if not candidate.is_dir():
-            return JSONResponse({"error": f"not a directory: {candidate}"}, status_code=422)
+            return JSONResponse(
+                {
+                    "error": (
+                        f"{candidate} is a file, not a folder. Choose the folder that holds your "
+                        f"archives."
+                    )
+                },
+                status_code=422,
+            )
         support.ARCHIVES_BASE = candidate.resolve()
-        return JSONResponse({"archives_dir": str(support.ARCHIVES_BASE)})
+        # Saved like every other setting, so the next start -- after an
+        # update, a reboot -- finds the same folder.
+        from connections_export.gui.settings_store import save_settings  # noqa: PLC0415
+
+        app.state.editable_settings["archives_dir"] = str(support.ARCHIVES_BASE)
+        app.state.archives_dir_missing = None
+        saved = save_settings(app.state.editable_settings) is not None
+        return JSONResponse({"archives_dir": str(support.ARCHIVES_BASE), "saved": saved})
 
     @app.get("/api/archive-match")
     def get_archive_match(community_uuid: str = "", url: str = "") -> JSONResponse:
@@ -583,7 +608,15 @@ def register(
         name = (body.name or "").strip()
         target = resolve_archive(support.ARCHIVES_BASE, name)
         if target is None:
-            return JSONResponse({"error": f"no such archive: {name}"}, status_code=404)
+            return JSONResponse(
+                {
+                    "error": (
+                        "That archive can't be found any more. It may have been moved or "
+                        "deleted. Refresh the list and try again."
+                    )
+                },
+                status_code=404,
+            )
         if target.is_file():  # already a zip
             return JSONResponse(
                 {
@@ -620,7 +653,16 @@ def register(
         except OSError as error:
             with contextlib.suppress(OSError):
                 os.remove(tmp)
-            return JSONResponse({"error": f"could not write the zip: {error}"}, status_code=500)
+            return JSONResponse(
+                {
+                    "error": (
+                        "The .zip could not be saved. The disk may be full or protected. Free "
+                        "some space, then try again.\n\nTechnical details: "
+                    )
+                    + str(error)
+                },
+                status_code=500,
+            )
         return JSONResponse({"ok": True, "path": str(dest), "size": dest.stat().st_size})
 
     @app.put("/api/archives/{name}/label")
@@ -640,7 +682,14 @@ def register(
         directory = resolve_archive(support.ARCHIVES_BASE, name)
         if directory is None:
             return JSONResponse(
-                {"status": "error", "detail": f"no such archive: {name}"}, status_code=404
+                {
+                    "status": "error",
+                    "detail": (
+                        "That archive can't be found any more. It may have been moved or "
+                        "deleted. Refresh the list and try again."
+                    ),
+                },
+                status_code=404,
             )
         if not writable_archive(directory):
             # The name lives in `archive-summary.json`, inside the archive.
@@ -650,7 +699,9 @@ def register(
                 {
                     "status": "error",
                     "detail": (
-                        f"{name} is a zipped archive, which is read-only, so it cannot be renamed."
+                        f"{name} is a zipped archive, which is read-only, so it "
+                        f"cannot be "
+                        "renamed. Unpack it first if you want to rename it."
                     ),
                 },
                 status_code=400,
@@ -697,7 +748,11 @@ def register(
             return JSONResponse(
                 {
                     "status": "error",
-                    "detail": f"{target.name} did not open as an archive: {exc}",
+                    "detail": (
+                        f"{target.name} did not open as an archive. It may be damaged, or not "
+                        "an archive made by this tool. Try another one."
+                        f"\n\nTechnical details: {exc}"
+                    ),
                 },
                 status_code=400,
             )
@@ -721,7 +776,16 @@ def register(
         """
         raw = (body.path or "").strip()
         if not raw:
-            return JSONResponse({"status": "error", "detail": "nothing to open"}, status_code=400)
+            return JSONResponse(
+                {
+                    "status": "error",
+                    "detail": (
+                        "Type or paste the path to an archive folder or .zip, or a link to a "
+                        ".zip, then try again."
+                    ),
+                },
+                status_code=400,
+            )
 
         lowered = raw.lower()
         if lowered.startswith(("http://", "https://")):
@@ -732,7 +796,11 @@ def register(
         target = Path(raw).expanduser()
         if not target.exists():
             return JSONResponse(
-                {"status": "error", "detail": f"there is nothing at {target}"}, status_code=400
+                {
+                    "status": "error",
+                    "detail": f"Nothing was found at {target}. Check the path and try again.",
+                },
+                status_code=400,
             )
         return _attach(target)
 
@@ -754,7 +822,10 @@ def register(
             return JSONResponse(
                 {
                     "status": "error",
-                    "detail": "only a link to a .zip can be opened as an archive",
+                    "detail": (
+                        "Only a link that ends in .zip can be opened as an archive. Download the "
+                        "archive and drop it here instead."
+                    ),
                 },
                 status_code=400,
             )
@@ -769,7 +840,14 @@ def register(
         except Exception as exc:  # noqa: BLE001 - any failure is the same answer
             shutil.rmtree(holding, ignore_errors=True)
             return JSONResponse(
-                {"status": "error", "detail": f"could not download {url}: {exc}"},
+                {
+                    "status": "error",
+                    "detail": (
+                        "That link could not be downloaded. Check that you can open it in your "
+                        "browser, then try again.\n\nTechnical details: "
+                        f"{url}: {exc}"
+                    ),
+                },
                 status_code=400,
             )
         if not zipfile.is_zipfile(target):
@@ -778,8 +856,8 @@ def register(
                 {
                     "status": "error",
                     "detail": (
-                        f"what came back from {url} is not a zip -- a share that wants a "
-                        "login answers with a sign-in page, not an error"
+                        "That link did not give a .zip file. A share that wants a sign-in sends a "
+                        "sign-in page instead. Sign in, download the .zip, and drop it here."
                     ),
                 },
                 status_code=400,
@@ -820,7 +898,11 @@ def register(
         if not zipfile.is_zipfile(target):
             shutil.rmtree(holding, ignore_errors=True)
             return JSONResponse(
-                {"status": "error", "detail": f"{name} is not a zip file"}, status_code=400
+                {
+                    "status": "error",
+                    "detail": f"{name} is not a .zip file, so it cannot be opened as an archive.",
+                },
+                status_code=400,
             )
         response = _attach(target, label=name, holding=holding)
         if response.status_code != 200:
@@ -851,7 +933,9 @@ def register(
                 {
                     "status": "empty",
                     "detail": (
-                        "This archive has no browsable content — the import may not have finished."
+                        "This archive has no browsable content — the capture may not have "
+                        "finished. "
+                        "Capture it again, or open a different archive."
                     ),
                 },
                 status_code=422,

@@ -465,6 +465,8 @@ not contain copies of the content; the content remains in `blogs` and
 | `ideation_blog_id` | string or `null` | ID of the community's ideation blog, when present. |
 | `file_library_id` | string or `null` | ID of the community's file library (3.15), when captured. |
 | `rich_content_id` | string or `null` | ID of the community's Highlights container (3.17), when captured. |
+| `parent_id` | string or `null` | The community this one is a subcommunity of, read from the `parentcommunity` link in the community's own archived entry. `null` means top-level **or unknown** (an archive captured before the entry was archived). The parent need not itself be in the package. Added without a version bump (additive; readers ignore unknown keys). |
+| `parent_title` | string or `null` | The parent's title: its own record's title when the parent is in the package, otherwise the link's `title`. |
 | `logo` | `ResolvedAsset` or `null` | The community's own picture, captured like any other asset (3.8) — its bytes are in `blobs/`, addressed by hash. `null` when the community has none, or when the run did not capture one. |
 
 The logo is a **captured asset, not a URL**: a package read years later, with

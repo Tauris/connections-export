@@ -1,5 +1,7 @@
 # connections-export
 
+![connections-export: archive wikis, blogs and forums from Connections, kept safe and turned into PDFs, notes and sites](https://raw.githubusercontent.com/Tauris/connections-export/main/connections_export/gui/static/banner.webp)
+
 > Preserve HCL Connections content — wikis, blogs, forums, files and a
 > community's front page — as a portable, self-documenting archive you control.
 
@@ -87,6 +89,51 @@ first (`libkrb5-dev` on Debian/Ubuntu, `krb5-devel` on Fedora/RHEL), then
 `pip install "connections-export[sspi]"`. `connections-export probe sign-in`
 says which sign-in your installation uses, whether it loads, and — on macOS
 and Linux — whether you hold a Kerberos ticket.
+
+### Updating
+
+Update the way you installed:
+
+| Installed with | Update with |
+| --- | --- |
+| `pip` | `pip install -U connections-export` |
+| `uv tool` | `uv tool upgrade connections-export` |
+| an executable | download the new one from [Releases](https://github.com/Tauris/connections-export/releases) and replace the old file |
+
+Then check with `connections-export --version`. Your settings (in
+`%APPDATA%\connections-export` on Windows, `~/.config/connections-export`
+elsewhere) and your archives stay where they are.
+
+**Trying a beta.** Betas are not on PyPI; each one is a
+[pre-release](https://github.com/Tauris/connections-export/releases) with its
+executables, and installs from the `beta` branch:
+
+```sh
+uv tool install --force --refresh --reinstall https://github.com/Tauris/connections-export/archive/refs/heads/beta.zip
+# or
+pip install -U --force-reinstall https://github.com/Tauris/connections-export/archive/refs/heads/beta.zip
+```
+
+The same command later updates to the next beta. A beta always reports its own
+version, e.g. `v1.1.0b1`.
+
+**If the old version keeps starting**, it is almost always one of these:
+
+- **The console was still running.** Windows cannot replace a program that is
+  running, and a browser tab left open still shows the old console. Close both,
+  then update.
+- **`uv run connections-export`** does not start the tool you installed: it
+  starts the copy locked in the uv project of the folder you are in, and puts
+  that version back on every run. Start the installed tool with plain
+  `connections-export`, or `uv tool run connections-export` to be sure.
+- **A beta install split over two commands.** For a link, `--force` alone can
+  reuse uv's cached download of the old beta, and `--refresh` alone stops at
+  "already installed". Use all three flags together, as above. If it still
+  installs the old one, `uv cache clean connections-export` and run it again.
+- **Another copy is found first** — an older executable, or a second `pip`
+  install. `where connections-export` (Windows) or `which -a connections-export`
+  (macOS, Linux) lists every copy in the order they are found; remove the
+  older ones.
 
 ### PDF export needs a browser
 
@@ -330,8 +377,18 @@ what to look for.
 
 ## Status
 
-An early release, targeting HCL Connections 8.0. Keep your own backups and
-verify an export before you rely on it.
+Stable, targeting HCL Connections 8.0. Version 1.0 has been used to export
+single PDFs of more than 6,000 pages from a real archive. Within a major
+version the archive format stays readable: any 1.x reads every archive a 1.x
+wrote.
+
+Fitting pages to the printed page is a best effort. A page written for a
+scrolling browser window is reflowed, stacked or scaled so that nothing is cut
+off ([the steps](https://github.com/Tauris/connections-export/blob/main/docs/manual.md#man-pdf-fit)), but how well that works depends
+on how each page was laid out, and no set of rules can anticipate every layout.
+The archive always keeps the page as captured. As with any tool that moves
+your data, keep your own backups and look through an export before you rely
+on it.
 
 ## What is inside it, and under what licence
 

@@ -243,6 +243,19 @@ class ModelSource:
             content_type = _sniff_content_type(data, content_type)
         return data, content_type
 
+    def blob_size(self, blob_hash: str) -> int | None:
+        """A blob's size without reading it, where the source can tell; for
+        estimates only."""
+        digest = _digest_of(blob_hash)
+        if not _HEX64.fullmatch(digest):
+            return None
+        with self._lock:
+            source = self._blob_source
+        if source is None:
+            return None
+        size = getattr(source, "blob_size", None)
+        return size(digest) if size is not None else None
+
     def package_root(self) -> Path | None:
         """The directory backing the current model, if any: a written
         package directory (`from_package`), a raw archive directory

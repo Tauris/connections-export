@@ -67,6 +67,7 @@ from connections_export.gui.requests import (  # noqa: F401 (public at this addr
     _StartRequest,
     _StylePreviewRequest,
 )
+from connections_export.gui.routes import activity as routes_activity
 from connections_export.gui.routes import archives as routes_archives
 from connections_export.gui.routes import hugo as routes_hugo
 from connections_export.gui.routes import ingest as routes_ingest
@@ -102,6 +103,31 @@ from connections_export.gui.support import (  # noqa: F401 (public at this addre
     _resolve_archives_base,
     _resolve_interchange_spec_path,
 )
+
+
+def _restore_archives_dir(app) -> None:
+    """Point the console at the archives folder the user chose last time.
+
+    The environment variable still wins -- it is how a script or an operator
+    says where the archives are, and it is read at import. Without it, a
+    saved folder that exists is used. One that does not -- an unplugged
+    drive, a renamed share -- is NOT replaced by the default in silence: the
+    default is used for now, and Settings says which folder was not found,
+    because an empty archive list otherwise reads as the archives being gone.
+    """
+    import os  # noqa: PLC0415
+
+    from connections_export.gui import support  # noqa: PLC0415
+
+    app.state.archives_dir_missing = None
+    saved = (app.state.editable_settings.get("archives_dir") or "").strip()
+    if not saved or os.environ.get(support.ARCHIVES_DIR_ENV, "").strip():
+        return
+    path = Path(saved).expanduser()
+    if path.is_dir():
+        support.ARCHIVES_BASE = path.resolve()
+    else:
+        app.state.archives_dir_missing = saved
 
 
 def make_app(
@@ -191,6 +217,8 @@ def make_app(
         "pdf_style": {},
         "pdf_marks": {},
         "pdf_timeout": 120.0,
+        # None = worked out from the memory available at each export.
+        "pdf_part_size_mb": None,
         "pdf_small_image_px": 48,
         "archive_only": False,
         "default_author_filter": author_filter,
@@ -200,6 +228,7 @@ def make_app(
     from connections_export.gui.settings_store import load_settings  # noqa: PLC0415
 
     app.state.editable_settings.update(load_settings())
+    _restore_archives_dir(app)
     if app.state.editable_settings.get("default_author_filter"):
         app.state.default_author_filter = app.state.editable_settings["default_author_filter"]
 
@@ -240,6 +269,7 @@ def make_app(
     routes_archives.register(app, **_route_kwargs)
     routes_settings.register(app, **_route_kwargs)
     routes_pdf.register(app, **_route_kwargs)
+    routes_activity.register(app, **_route_kwargs)
     routes_ingest.register(app, **_route_kwargs)
     routes_hugo.register(app, **_route_kwargs)
     routes_static.register(app, **_route_kwargs)

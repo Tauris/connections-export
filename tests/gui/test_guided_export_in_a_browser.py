@@ -250,8 +250,9 @@ def test_the_readers_hugo_button_opens_the_dialog_for_the_open_archive(console):
         page.click('.recent-archive-row:has(.archive-select[data-name="wiki-run"]) .recent-archive')
         page.wait_for_selector("#r-export-menu", state="visible", timeout=30_000)
         page.click("#r-export-menu > summary")
-        page.click("#r-dev-export > summary")
-        page.click("#r-export-hugo")
+        page.click("#r-export-open")
+        page.check('input[name="xd-format"][value="hugo"]')
+        page.click("#xd-go:not([disabled])")
 
         page.wait_for_selector("#devx-scrim:not([hidden])")
         assert _step(page) == "2"
@@ -293,8 +294,9 @@ def test_the_reader_exports_an_archive_from_outside_the_archives_folder(console,
         if page.is_visible("#modal-ok"):
             page.click("#modal-ok")
         page.click("#r-export-menu > summary")
-        page.click("#r-dev-export > summary")
-        page.click("#r-export-jekyll")
+        page.click("#r-export-open")
+        page.check('input[name="xd-format"][value="jekyll"]')
+        page.click("#xd-go:not([disabled])")
 
         page.wait_for_selector("#devx-scrim:not([hidden])")
         assert _step(page) == "2"

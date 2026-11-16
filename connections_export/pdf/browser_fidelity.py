@@ -30,6 +30,7 @@ import lxml.html
 
 from connections_export.derive.model import DerivedPage, Interchange
 from connections_export.pdf.html import (
+    COVER_CSS,
     DEFAULT_GENERATED_AT,
     BlobBytes,
     _document_title,
@@ -46,6 +47,7 @@ from connections_export.pdf.html import (
     _sanitize_body,
     _walk_pages,
     external_images_register,
+    link_anchor_register,
     serving_images,
 )
 
@@ -166,6 +168,10 @@ _STYLE = """
   --pdf-toc-group-size: 11.5pt;
   --pdf-toc-entry-size: 10pt;
   --pdf-muted: #444;
+  --pdf-text: #111;
+  --pdf-rule: #cbd2dc;
+  --pdf-accent: #1f5f8b;
+  --pdf-cover-title-size: 30pt;
 }
 body {
   font-family: var(--pdf-font);
@@ -175,7 +181,6 @@ body {
 #toc .toc-title { font-size: var(--pdf-toc-title-size); font-weight: 700; }
 #toc .toc-group { font-size: var(--pdf-toc-group-size); font-weight: 700; }
 #toc li { font-size: var(--pdf-toc-entry-size); }
-#title-page { text-align: center; page-break-after: always; }
 #toc { page-break-after: always; }
 #toc a { text-decoration: none; color: #123; }
 .hcl-wiki > h1 { border-bottom: 2px solid #333; }
@@ -213,18 +218,24 @@ def render_html_browser(
     scoped to its own section. Pure — no browser. Printed as a single
     document so the TOC and in-export body links become active internal
     PDF links and the heading structure yields a bookmark outline."""
-    with external_images_register(external_images, small_image_px) as register:
+    # This renderer shows wikis, blogs and forums only, so links to Highlights
+    # pages or files must not become jumps to anchors it never writes.
+    shown = interchange.model_copy(update={"rich_content": [], "file_libraries": []})
+    with (
+        external_images_register(external_images, small_image_px) as register,
+        link_anchor_register(shown),
+    ):
         body = _render_browser_bodies(interchange, blob_bytes, include_comments=include_comments)
     external_content = register.included and bool(register.numbers)
     if external_content:
         body.append(_render_external_content(register))
-    cover = _render_title_page(interchange, generated_at)
+    cover = _render_title_page(interchange, generated_at, None, blob_bytes)
     toc = _render_toc(interchange, external_content=external_content)
     return (
         "<!DOCTYPE html>"
         '<html lang="en"><head><meta charset="utf-8">'
         f"<title>{_escape(_document_title(interchange))}</title>"
-        f"<style>{_STYLE}</style>"
+        f"<style>{_STYLE}{COVER_CSS}</style>"
         "</head><body>"
         f"{cover}{toc}{''.join(body)}"
         "</body></html>"

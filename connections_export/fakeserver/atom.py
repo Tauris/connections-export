@@ -1158,6 +1158,43 @@ def subcommunities_feed(children: list[tuple[str, str]], *, base_url: str) -> by
     return _to_bytes(feed)
 
 
+PARENT_COMMUNITY_REL = "http://www.ibm.com/xmlns/prod/sn/parentcommunity"
+
+
+def community_entry(
+    uuid: str,
+    title: str,
+    *,
+    base_url: str,
+    parent: tuple[str, str] | None = None,
+) -> bytes:
+    """A community's own entry (`.../community/instance?communityUuid=`).
+
+    A subcommunity's entry carries a `parentcommunity` link back to its parent,
+    shaped like the sibling `instance?communityUuid=` links. No picture is
+    named.
+    """
+    entry = ET.Element(_q(ATOM_NS, "entry"))
+    _sub(entry, ATOM_NS, "id", f"urn:lsid:ibm.com:communities:community-{uuid}")
+    _sub(entry, ATOM_NS, "title", title).set("type", "text")
+    _sub(entry, ATOM_NS, "updated", "2026-08-01T09:00:00.000Z")
+    _sub(entry, SNX_NS, "communityUuid", uuid)
+    link = _sub(entry, ATOM_NS, "link")
+    link.set("rel", "self")
+    link.set("href", f"{base_url}/communities/service/atom/community/instance?communityUuid={uuid}")
+    if parent is not None:
+        parent_uuid, parent_title = parent
+        link = _sub(entry, ATOM_NS, "link")
+        link.set("rel", PARENT_COMMUNITY_REL)
+        link.set("type", "application/atom+xml")
+        link.set("title", parent_title)
+        link.set(
+            "href",
+            f"{base_url}/communities/service/atom/community/instance?communityUuid={parent_uuid}",
+        )
+    return _to_bytes(entry)
+
+
 def profile_service_document(name: str, *, base_url: str) -> bytes:
     """The Profiles service document -- "who am I".
 

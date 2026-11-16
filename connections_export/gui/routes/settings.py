@@ -75,6 +75,8 @@ def register(
                 "auth_mode": auth_mode,
                 "archives_dir": str(support.ARCHIVES_BASE),
                 "archives_dir_env": ARCHIVES_DIR_ENV,
+                # The saved folder, when it was not there at start-up.
+                "archives_dir_missing": getattr(app.state, "archives_dir_missing", None),
                 "archives_count": len(list_archives(support.ARCHIVES_BASE)),
                 "pdf_browser_available": CHROMIUM_AVAILABLE,
                 "pdf_browser_detail": (
@@ -85,6 +87,7 @@ def register(
                 "pdf_style": settings.get("pdf_style") or {},
                 "pdf_marks": settings.get("pdf_marks") or {},
                 "pdf_timeout": settings.get("pdf_timeout", 120.0),
+                "pdf_part_size_mb": settings.get("pdf_part_size_mb"),
                 "pdf_small_image_px": settings.get("pdf_small_image_px", 48),
                 "archive_only": bool(settings.get("archive_only")),
                 "pdf_mark_defaults": DEFAULT_MARKS,
@@ -99,21 +102,45 @@ def register(
     def update_settings(body: _SettingsRequest) -> JSONResponse:
         """Update non-secret defaults used by subsequent browser ingests."""
         if body.auth_mode not in {"sspi", "kerberos", "basic", "paste_token"}:
-            return JSONResponse({"error": "unsupported auth mode"}, status_code=422)
+            return JSONResponse(
+                {
+                    "error": (
+                        "That sign-in method is not one this tool offers. Pick one from the list."
+                    )
+                },
+                status_code=422,
+            )
         if body.min_interval < 0:
-            return JSONResponse({"error": "min_interval must be non-negative"}, status_code=422)
+            return JSONResponse(
+                {"error": "The request delay cannot be negative. Use 0.2 or more, for example 1."},
+                status_code=422,
+            )
         if body.pdf_timeout <= 0:
-            return JSONResponse({"error": "pdf_timeout must be positive"}, status_code=422)
+            return JSONResponse(
+                {"error": "The render timeout must be more than 0 seconds, for example 120."},
+                status_code=422,
+            )
+        if body.pdf_part_size_mb is not None and body.pdf_part_size_mb < 0:
+            return JSONResponse(
+                {"error": "The PDF part size must be 0 or more. Leave it empty for automatic."},
+                status_code=422,
+            )
         if body.pdf_small_image_px < 0:
             return JSONResponse(
-                {"error": "pdf_small_image_px must be zero or more"}, status_code=422
+                {"error": "The small-image size must be 0 or more pixels, for example 48."},
+                status_code=422,
             )
         # An omitted `base_url` leaves the stored one alone. The console no
         # longer offers the field -- the deployment address comes from the URL
         # you drop -- so a save from there must not clear a value someone set
         # in connections-export.toml or an earlier version.
         existing_base = (app.state.editable_settings or {}).get("base_url")
+        # Updated, not replaced: settings chosen elsewhere -- the archives
+        # folder, on its own card -- are not in this form, and a save from
+        # here must not erase them. Replacing it did, and the next start was
+        # back at the default folder.
         app.state.editable_settings = {
+            **(app.state.editable_settings or {}),
             "base_url": (
                 body.base_url.strip() if body.base_url and body.base_url.strip() else existing_base
             ),
@@ -127,6 +154,7 @@ def register(
             "pdf_style": dict(body.pdf_style),
             "pdf_marks": dict(body.pdf_marks),
             "pdf_timeout": body.pdf_timeout,
+            "pdf_part_size_mb": body.pdf_part_size_mb,
             "pdf_small_image_px": body.pdf_small_image_px,
             # Omitted means unchanged, exactly as `base_url` above: this is
             # set from a different card than the one the Save buttons sit in.

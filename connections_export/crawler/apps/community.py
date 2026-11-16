@@ -41,7 +41,12 @@ def crawl_community_logo(
     clock: Callable[[], str] | None = None,
     run_id: str | None = None,
 ) -> CrawlResult:
-    """Capture a community's own picture into `archive`.
+    """Capture a community's own entry, and its picture, into `archive`.
+
+    The entry is also where a subcommunity names its parent
+    (`adapters.communities.parent_community`), so fetching it is what lets
+    derive record the community tree. It is archived even when no picture is
+    named.
 
     Two requests at most: the community document, and whatever image link it
     names. Captured rather than linked, so an archive read years later still

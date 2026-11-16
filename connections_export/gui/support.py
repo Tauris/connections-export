@@ -51,6 +51,16 @@ CONSOLE_CSS = STATIC_DIR / "console.css"
 
 CONSOLE_JS = STATIC_DIR / "console.js"
 
+#: The console's icon, from the sidebar's brand mark. The `.ico` is rendered
+#: from the SVG (16/32/48 px PNGs in an ICO container).
+FAVICON_SVG = STATIC_DIR / "favicon.svg"
+
+FAVICON_ICO = STATIC_DIR / "favicon.ico"
+
+#: The banner at the top of the Overview (and of the README, which links the
+#: same file in the public repository).
+BANNER = STATIC_DIR / "banner.webp"
+
 VENDOR_DIR = STATIC_DIR / "vendor"
 
 #: Vendored, version-pinned third-party assets served verbatim (pdf.js, its

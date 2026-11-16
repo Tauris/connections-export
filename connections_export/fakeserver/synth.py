@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from uuid import UUID
 
+from connections_export.fakeserver import crosslinks
 from connections_export.fakeserver.content import (
     blog_body,
     page_comment,
@@ -930,7 +931,21 @@ def _synthesize_blog(
 def synthesize_blogs(seed: SynthSeed) -> BlogSet:
     """Build a `BlogSet` from `seed`. Pure function of `seed`: same seed
     in, byte-identical dataset out (mirrors `synthesize`'s determinism
-    guarantee)."""
+    guarantee). With `human_names` (the demo) every post also carries a
+    paragraph of links to distant content (`crosslinks`)."""
+    blogset = raw_blogs(seed)
+    if seed.human_names:
+        items = crosslinks.catalogue(seed)
+        for blog in blogset.blogs:
+            for post in blog.posts:
+                post.body_html += crosslinks.paragraph(
+                    crosslinks.related(items, f"blog:{post.slug}"), post.title
+                )
+    return blogset
+
+
+def raw_blogs(seed: SynthSeed) -> BlogSet:
+    """`synthesize_blogs` without the cross-link paragraphs."""
     ids = _IdFactory(_id_rng(seed, "blog"))
     clock = _Clock(seed.base_timestamp)
     later = wave_clock(seed)
@@ -1302,7 +1317,7 @@ def synthesize_rich_content(seed: SynthSeed, *, community_uuid: str) -> RichCont
     """Build a `RichContentSet` for one community. Pure function of `seed`."""
     ids = _IdFactory(_id_rng(seed, "rich_content"))
     clock = _Clock(seed.base_timestamp)
-    return RichContentSet(
+    rich = RichContentSet(
         communities=[
             _synthesize_rich_content(
                 ids=ids,
@@ -1313,12 +1328,34 @@ def synthesize_rich_content(seed: SynthSeed, *, community_uuid: str) -> RichCont
             )
         ]
     )
+    if seed.human_names:
+        items = crosslinks.catalogue(seed)
+        for community in rich.communities:
+            for index, page in enumerate(community.pages):
+                page.body_html += crosslinks.paragraph(
+                    crosslinks.highlights_related(items, index), page.title
+                )
+    return rich
 
 
 def synthesize_forums(seed: SynthSeed) -> ForumSet:
     """Build a `ForumSet` from `seed`. Pure function of `seed`: same seed
     in, byte-identical dataset out (mirrors `synthesize`'s determinism
-    guarantee)."""
+    guarantee). With `human_names` (the demo) every topic also carries a
+    paragraph of links to distant content (`crosslinks`)."""
+    forumset = raw_forums(seed)
+    if seed.human_names:
+        items = crosslinks.catalogue(seed)
+        for forum in forumset.forums:
+            for topic in forum.topics:
+                topic.content_html += crosslinks.paragraph(
+                    crosslinks.related(items, f"forum:{topic.uuid}"), topic.title
+                )
+    return forumset
+
+
+def raw_forums(seed: SynthSeed) -> ForumSet:
+    """`synthesize_forums` without the cross-link paragraphs."""
     ids = _IdFactory(_id_rng(seed, "forum"))
     clock = _Clock(seed.base_timestamp)
     later = wave_clock(seed)

@@ -1,6 +1,7 @@
 # Manual
 
 <nav class="manual-toc" aria-label="Manual sections">
+  <a href="#man-howto">How do I…</a>
   <a href="#man-intro">What this is</a>
   <a href="#man-format">The archive format</a>
   <a href="#man-export">Export — reconstructing into other tools</a>
@@ -16,6 +17,19 @@
   <a href="#man-style">Changing how the PDF looks</a>
   <a href="#man-marks">The running header and footer</a>
 </nav>
+
+## <a id="man-howto"></a>How do I…
+
+- **Capture a community?** Start on *Select & Tailor*, paste the community's web address, and choose what to keep. See [What this is](#man-intro) and [Several communities in one archive](#man-communities).
+- **Open an archive someone sent me?** Drop the folder or .zip onto the console, or use *An archive from anywhere* on the Archives page. See [Reading an archive someone handed you](#man-open).
+- **Export one PDF?** Open the archive on the Archives page, choose *Export…*, leave *PDF* and *One PDF* selected. See [Large exports](#man-pdf-large).
+- **Wonder why a table looks different in the PDF?** See [How content is made to fit the page](#man-pdf-fit).
+- **Split a large archive into several PDFs?** In the same dialog choose *Several PDFs*. See [Large exports](#man-pdf-large).
+- **Find my exports?** They are saved beside the archive, and listed under *Recent exports* on the Archives page. See [where exports go](#man-pdf-where).
+- **Update an archive later?** Choose *Extend or update* on the archive. See [Adding to an archive later](#man-update).
+- **Move an archive to another computer?** See [Moving an archive around](#man-move).
+- **What if an export runs out of memory?** It splits the work into smaller parts by itself; if one page alone is too big it says which. See [one PDF of any size](#man-pdf-memory).
+- **Change how the PDF looks?** See [Changing how the PDF looks](#man-style).
 
 ## <a id="man-intro"></a>What this is
 
@@ -314,6 +328,8 @@ So an export is not a spidering crawl that follows links outward until it runs o
 
 ## <a id="man-open"></a>Reading an archive someone handed you
 
+The **Archives** screen lists what is in the archives folder. Which folder that is, you choose under **Settings → Archives**: type or drop a folder and press **Save**. The choice is remembered, after a restart or an update too. If the folder is not there when the console starts — a disconnected drive or share — Settings says so and shows the default folder until it is back; nothing is moved or created. The `CONNECTIONS_EXPORT_ARCHIVES_DIR` environment variable, where set, takes precedence.
+
 The **Archives** screen lists what is in the archives folder. An archive you were given does not start there — it is a zip in Downloads, a folder on a share, a file synced out of OneDrive, or a link in a message. You do not have to file it first: **drop it anywhere on the console** and it opens in the Reader.
 
 - A **folder** or a **.zip** dragged from your file manager is read _where it lies_ — nothing is copied, and the archives folder is not touched.
@@ -517,6 +533,75 @@ These need no deployment: they work from an archive or a package.
 Every one of these also takes `--author`, so a filtered reading, PDF or vault can be produced from an unfiltered archive without capturing again.
 {: .foot-note }
 
+## <a id="man-pdf-large"></a>Large exports: one PDF in parts, or several PDFs
+
+<a id="man-pdf-memory"></a>**One PDF of any size.** A large export is laid out a part at a time and the parts are joined into one PDF. You don't do anything to make this happen. Page numbers, the "page N of M" footer, the table of contents, bookmarks and every link read exactly as in a PDF made in one piece. The size of each part follows the memory your machine has free when the export starts. If even one part does not fit, it is split smaller and tried again; only a single page too large on its own stops the export, and the message names it.
+
+**Several PDFs.** One PDF of thousands of pages is slow to open and too big to mail. Choose *Several PDFs* in the export dialog, or `--split` on the command line, and the export proposes files before anything is made, cut where you would expect:
+
+- *Automatic*: keep together whatever fits the limits you set (*at most N pages* or *N MB per file*), cutting by community, then app, then wiki, blog or forum, and only then inside one.
+- *One per community*: each subcommunity gets its own file.
+- *One per app*, or *one per container* (each wiki, blog, forum).
+
+Each file is a complete document, with its own cover ("File 2 of 5 … The others: …"), contents, page numbers and bookmarks. A link to something printed in another file opens that file at that page, as long as the files sit together in one folder. Desktop PDF viewers (Adobe Acrobat, Preview, Okular, Evince) follow these links; the viewer built into a web browser does not.
+
+<a id="man-pdf-where"></a>**Where exports go.** Every PDF export is saved beside its archive, in a folder named after it with `-pdf` added: one PDF as `<archive> <date time>.pdf`, several in a folder of their own plus a ZIP of them. The console offers *Download* and *Show in folder*, and lists earlier exports.
+
+**Before it starts**, the export says roughly how many pages it will have, how big it will be and how long it will take. If there is not enough disk space or no usable browser, it says so instead of failing partway; if memory is short, it warns that the export will be slower.
+
+**Attachments** are listed in the PDF by name and size; the files are in the archive. Tick *Attach the pages' attachment files* (or `--attach-files`) to attach them to the PDF itself.
+
+On the command line:
+
+```
+connections-export pdf --archive my-archive --plan --split community
+connections-export pdf --archive my-archive --split auto --max-pages 800 --output my-archive-pdfs
+```
+
+`--plan` prints the estimate and the proposed files without rendering anything.
+
+## <a id="man-pdf-fit"></a>How content is made to fit the page
+
+A wiki page, post or topic was written for a browser window, and a window can scroll sideways. Paper cannot: anything wider than the page would be cut off at the right-hand edge and lost from the PDF. So before each page is laid out, the export makes the captured content fit the printed width (A4 less its margins, 180 mm). It changes as little as it can, and in this order:
+
+1. **Text is allowed to wrap.** Lines an author kept from wrapping — a table set to "no wrap", a block of code on one line — wrap at the page edge. Very long words and addresses break where they must.
+2. **Pictures, videos and embedded content are shrunk to the page width**, keeping their proportions, even where the page said they must not shrink.
+3. **Fixed widths give way.** A box or table told to be wider than the page, by its own width or a minimum width, becomes as wide as the page instead.
+4. **Placed boxes rejoin the text.** A box the author positioned somewhere on the screen — far to the right, say — is printed where it occurs in the page instead, after the text before it.
+5. **Tables reflow.** A table that still does not fit, often because its cells were given more width than the table itself, has the widths its author gave the table, its columns and its cells set aside, and lays out its columns to fit the page.
+6. **Screenshots side by side are printed one after another.** A table whose pictures its columns would squeeze to less than 60% of their own width, such as a German column beside an English one, each with screenshots, prints its cells one after another at the full width of the page. Tables of text, or with small pictures, stay side by side.
+7. **What still does not fit is scaled down as a whole.** Some content cannot be reflowed — a row of panels that must sit side by side, a table with too many columns to fit at any width. It is printed smaller, as a whole, as far as it takes. There is no lower limit: smaller and complete is better than cut off.
+8. **A last check on every printed page.** After the pages are laid out, anything that still reaches past a page's edge is scaled down within that page. (What continues on the next page is not counted: it is printed there.)
+
+Three more things make sure what was fitted is what gets printed, and that page breaks lose nothing:
+
+- **The page is laid out exactly as it will be printed**: in print mode and at the width of the sheet. A page's own styles for printing, or for a narrow window, apply from the start, so the steps above see the layout the PDF will really have.
+- **A table keeps its columns over a page break.** Each table's column widths are fixed before the pages are made, so a row that continues on the next page has the same columns there.
+- **Text is continued exactly where a page break interrupted it.** The engine that divides the document into pages (paged.js) works out where the next page resumes by finding the text it last printed. In a paragraph or table cell whose text runs between pictures, links or bold words, the same words often occur earlier too, and it could resume at the earlier place. Some content was then printed twice and what followed it never, sometimes a whole column of a two-column table. This export corrects that in the engine before every layout.
+
+**This is a best effort.** The steps above handle the layouts seen in real wikis, blogs and forums, but how well they work depends heavily on how a particular page was built, and no set of rules can anticipate every layout an author has invented. They never change the content itself, only how it is laid out.
+
+What this means when you compare the PDF with the original page:
+
+- Wide tables can look narrower and taller, with cell text wrapped over more lines.
+- A box the author placed beside the text can appear below it instead.
+- Screenshots that sat side by side in a table appear one below the other, each at the full width.
+- Occasionally a wide table or a row of panels is printed noticeably smaller than the text around it. That is step 6 doing its job; the content is all there, and a PDF viewer's zoom brings it back.
+- Nothing is left out. If something seems missing, please report it, since keeping everything is the point of these steps.
+
+The original page, with its own layout, is still in the archive. The Reader shows it as captured.
+
+### <a id="man-pdf-cover"></a>The cover
+
+The first page names the export for what it contains:
+
+- one community: the community's name, with its picture when the archive holds it;
+- one wiki, blog or forum: that wiki's, blog's or forum's name;
+- two or three communities or containers: their names together;
+- anything bigger: the address of the system it came from.
+
+Below the name the cover lists what is inside, gives the number of pages, posts, topics and files, and ends with the source address and the date of the export. The cover carries no running header or footer, but it is still counted as page 1. Its colour is the `accent` token, and the size of its title is `cover_title_size` (see [Changing how the PDF looks](#man-style)).
+
 ## <a id="man-style"></a>Changing how the PDF looks
 
 The PDF stylesheet is built on a small set of **design tokens** — type sizes, line height, contents-list sizes, colours. Those are the supported surface: they keep working across versions, where the rules beneath them may be rearranged.
@@ -535,6 +620,8 @@ toc_title_size = "18pt"
 The quickest way to try one is **Settings → PDF appearance**: change a value, press Preview, and a real two-page sample is rendered with it. Each field shows its default, so an empty one means unchanged.
 
 The same card has a **Render timeout (seconds)** — how long an export may go without progress before it gives up (120 seconds by default). A large export takes as long as it needs: laying out continues as long as new pages keep appearing, and printing is allowed extra time for every page. Raise it only if a single step — loading the document, or the wait for the first page — needs longer; lower it if you would rather a stuck export failed sooner. When an export does hit the limit, the console says so and writes a `pdf-failure-*.md` report naming what did not finish, rather than failing silently.
+
+**PDF part size (MB)** is empty by default, which means automatic. Large exports are laid out in parts so the browser never holds the whole document at once, and the console shows which part it is on. At the start of each export the tool reads how much memory is free and picks the largest part that fits comfortably: about 1.15 GB for the browser itself plus 2.2 MB for every MB of part, within 60% of the free memory. Set a number only to force a size, for example if an export still runs out of memory ("Not enough memory"); 0 lays out the whole document at once. On the command line, `pdf_part_size_mb` in `connections-export.toml` or `--part-size-mb` does the same.
 
 **Small external images (pixels)**, 48 by default, is where an image from another website stops counting as an icon in running text. At or below it in both directions, an included external image gets a small superscript _E1_ after it; above it, a dashed frame and caption ([more](#man-external-images)). Raise it if the pages use larger inline badges, lower it if small pictures should still be framed, or set 0 to frame every one. On the command line, `pdf_small_image_px` in `connections-export.toml` does the same.
 

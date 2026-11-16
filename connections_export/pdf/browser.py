@@ -22,6 +22,7 @@ from __future__ import annotations
 import os
 import re
 from collections.abc import Iterator, Mapping
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from connections_export.derive.model import Interchange
@@ -121,13 +122,18 @@ def block_network(page, blocked: list[str], served: ServedImages | None = None) 
     an intranet stylesheet should still print.
 
     `served` holds the render's own images (`html.serving_images`), answered
-    here from memory at their reserved addresses."""
+    here at their reserved addresses -- from memory, or from the spool folder
+    a large render keeps them in."""
 
     def handle(route) -> None:
         request = route.request
         url = request.url
         if served and url in served:
             content_type, body = served[url]
+            # Spooled to disk by a large render (`serving_images(spool=...)`),
+            # read only while the browser asks for it.
+            if not isinstance(body, bytes):
+                body = Path(body).read_bytes()
             route.fulfill(status=200, content_type=content_type, body=body)
             return
         if render_request_allowed(url):

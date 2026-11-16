@@ -259,8 +259,8 @@ def test_live_pdf_has_live_only_hint():
 
 
 def test_export_scope_selector_is_present_and_shared():
-    # #6: a scope dropdown next to Export PDF ("Whole archive" vs the open item).
-    assert 'id="r-pdf-scope"' in HTML
+    # #6: the Export dialog's scope ("Whole archive" vs the open item).
+    assert 'name="xd-scope"' in HTML
     assert 'value="all"' in HTML and 'value="item"' in HTML
     # The archive export reads it and can send a scoped request.
     assert "scope=item" in JS
@@ -881,10 +881,10 @@ def test_export_settings_live_in_the_export_menu():
     """The scope select and the comments checkbox each spent a slot in the
     header on something that only matters at the moment of exporting."""
     assert 'id="r-export-menu"' in HTML
-    for control in ('id="r-pdf-scope"', 'id="r-pdf-comments"', 'id="r-preview"', 'id="r-live-pdf"'):
+    for control in ('id="r-export-open"', 'id="xd-comments"', 'id="r-preview"', 'id="r-live-pdf"'):
         assert control in HTML
     menu = HTML.split('id="r-export-menu"', 1)[1].split("</details>", 1)[0]
-    for control in ("r-pdf-scope", "r-pdf-comments", "r-preview", "r-pdf", "r-live-pdf"):
+    for control in ("r-export-open", "r-preview", "r-live-pdf"):
         assert control in menu, f"{control} should sit inside the export menu"
 
 
@@ -956,7 +956,7 @@ def test_a_failed_lookup_leads_with_what_happened_not_the_endpoint():
 def test_export_can_choose_components_and_wiki_sections():
     """ "Whole archive" or "the item open in the reader" were the only
     options, so exporting two of five forums meant exporting all five."""
-    assert 'value="choose" /> Choose components…' in HTML
+    assert 'value="choose" /><span class="xd-text">Chosen components…' in HTML
     assert 'id="pdf-pick-tree"' in HTML
     assert "function renderPdfPicker(" in JS
     assert "function pdfIncludeParams(" in JS
@@ -991,13 +991,13 @@ def test_a_pdf_render_shows_its_progress_where_it_can_be_seen():
     assert 'querySelector("#r-export-menu > summary")' in JS
     assert '"⏳ Rendering PDF… "' in JS
     assert "clearInterval(ticker)" in JS
-    assert '"PDF ready"' in JS
+    assert "Export finished" in JS
 
 
 def test_opening_with_the_bookmarks_panel_is_a_choice_off_by_default():
     """The PDF always has bookmarks; some viewers lay an opened panel over the
     page, so the export menu offers it unticked, and both the export and the
     preview's Full PDF link send it only when ticked."""
-    assert '<input type="checkbox" id="r-pdf-open-bookmarks" />' in HTML
+    assert '<input type="checkbox" id="xd-bookmarks" />' in HTML
     assert 'params.push("open_bookmarks=1")' in JS
     assert '"&open_bookmarks=1"' in JS

@@ -39,6 +39,7 @@ from connections_export.derive.apps.blogs import (
 from connections_export.derive.apps.communities import (
     _assemble_communities,
     _community_logo,
+    _link_parents,
 )
 from connections_export.derive.apps.files import (
     _COMMUNITY_LIBRARY_RE,
@@ -429,6 +430,8 @@ def derive(
                 base_url=resolved_base_url,
                 hcl_hosts=resolved_hcl_hosts,
             )
+
+    _link_parents(index, communities, base_url=resolved_base_url)
 
     interchange = Interchange(
         base_url=resolved_base_url,

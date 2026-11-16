@@ -25,6 +25,7 @@ from connections_export.crawler import (
     CrawlResult,
     crawl,
     crawl_blogs,
+    crawl_community_logo,
     crawl_files,
     crawl_forums,
     crawl_rich_content,
@@ -470,6 +471,19 @@ def run_demo(
         return app_name in app_filter
 
     results: list[CrawlResult] = []
+    # The communities' own entries: where the child names its parent. Silent
+    # (their own lifecycle events would end the console's run early) and not
+    # part of the results -- it is context for derive, not content.
+    if not _stopped():
+        for entry_uuid in (DEMO_COMMUNITY_UUID, DEMO_CHILD_COMMUNITY_UUID):
+            crawl_community_logo(
+                config=config,
+                clock=demo_clock,
+                client=client,
+                archive=archive,
+                community_uuid=entry_uuid,
+                emit=lambda _event: None,
+            )
     wiki_result = blog_result = forum_result = files_result = rte_result = None
     if _runs("wiki") and not _stopped():
         wiki_result = crawl(

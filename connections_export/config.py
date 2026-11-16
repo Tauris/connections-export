@@ -128,6 +128,12 @@ class Config(BaseModel):
     #: Maximum seconds the PDF browser/paged-media renderer may wait for a
     #: document to finish loading and paginating.
     pdf_timeout: float = 120.0
+    #: Megabytes of document the paged renderer lays out at once (0: all of
+    #: it). Lower this if a large export runs out of browser memory.
+    #: None (the default) works the part size out from the memory available
+    #: at the start of each export (`pdf.memory`); 0 lays the whole document
+    #: out at once.
+    pdf_part_size_mb: float | None = Field(default=None, ge=0)
     #: External images shown at this many pixels or less in both directions
     #: are icons in running text: marked with a superscript E-number rather
     #: than framed and captioned. 0 frames every one.

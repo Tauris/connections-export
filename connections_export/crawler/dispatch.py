@@ -21,6 +21,7 @@ from connections_export import apps
 from connections_export.crawler.crawl import (
     crawl,
     crawl_blogs,
+    crawl_community_logo,
     crawl_files,
     crawl_forums,
     crawl_rich_content,
@@ -113,6 +114,21 @@ def run_selection(
     """
     single = single or {}
     results: list[CrawlResult] = []
+
+    if community_uuid:
+        # The community's own entry: where a subcommunity names its parent,
+        # and where its picture is linked. One request, and never a reason to
+        # lose the capture around it.
+        try:
+            crawl_community_logo(
+                config=config,
+                client=client,
+                archive=archive,
+                community_uuid=community_uuid,
+                emit=emit,
+            )
+        except Exception:  # noqa: BLE001 - the entry is context, not content
+            pass
 
     for app, ids in _groups(selection):
         crawler = crawl_for(app.kind)

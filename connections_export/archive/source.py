@@ -73,6 +73,8 @@ class ArchiveSource(Protocol):
 
     def read_blob(self, digest: str) -> bytes | None: ...
 
+    def blob_size(self, digest: str) -> int | None: ...
+
     def run_metadata(self) -> list[RunEntry]: ...
 
     def read_json(self, name: str) -> dict | None: ...
@@ -126,6 +128,14 @@ class DirectorySource:
         if not path.is_file():
             return None
         return path.read_bytes()
+
+    def blob_size(self, digest: str) -> int | None:
+        """A blob's size without reading it -- for estimates."""
+        bare = valid_digest(digest)
+        if bare is None:
+            return None
+        path = self._root / BLOBS_DIRNAME / bare
+        return path.stat().st_size if path.is_file() else None
 
     def read_json(self, name: str) -> dict | None:
         path = self._root / name
@@ -272,6 +282,18 @@ class ZipSource:
         try:
             return self._read(f"{BLOBS_DIRNAME}/{bare}", MAX_BLOB_MEMBER_BYTES)
         except _OverLimit:
+            return None
+
+    def blob_size(self, digest: str) -> int | None:
+        """A blob's size from the zip's directory -- nothing is read."""
+        bare = valid_digest(digest)
+        if bare is None:
+            return None
+        try:
+            return (
+                self._handle().getinfo(self._resolve_prefix() + f"{BLOBS_DIRNAME}/{bare}").file_size
+            )
+        except KeyError:
             return None
 
     def read_json(self, name: str) -> dict | None:

@@ -1233,6 +1233,43 @@ def pdf_main(
         "in the PDF either way; some viewers lay the panel over the page, so it stays "
         "closed unless asked for.",
     )
+    parser.add_argument(
+        "--part-size-mb",
+        dest="part_size_mb",
+        type=float,
+        default=None,
+        help="Megabytes of a large document laid out at once. By default (and with "
+        "pdf_part_size_mb unset) it is worked out from the memory free when the export "
+        "starts; set it only to force a size. 0 lays out the whole document at once.",
+    )
+    parser.add_argument(
+        "--split",
+        choices=["auto", "community", "app", "container"],
+        default=None,
+        help="Make several PDFs instead of one, each a document of its own, linked to "
+        "each other: auto keeps together what fits --max-pages/--max-mb; community "
+        "(subcommunities separate), app or container make one PDF per each. --output "
+        "is then a folder.",
+    )
+    parser.add_argument(
+        "--max-pages", type=int, default=None, help="With --split: at most about N pages a file."
+    )
+    parser.add_argument(
+        "--max-mb", type=float, default=None, help="With --split: at most about N MB a file."
+    )
+    parser.add_argument(
+        "--plan",
+        action="store_true",
+        help="Say what the export would make -- estimated pages, size and time, and with "
+        "--split the files -- without rendering anything.",
+    )
+    parser.add_argument(
+        "--attach-files",
+        dest="attach_attachments",
+        action="store_true",
+        help="Attach the pages' attachment files to the PDF. By default they are listed "
+        "by name and size; the files themselves are in the archive.",
+    )
     args = parser.parse_args(argv)
 
     if args.demo and not (args.package or args.archive):
@@ -1252,6 +1289,18 @@ def pdf_main(
         print("connections-export pdf: no model available to render", file=__import__("sys").stderr)
         return 1
 
+    from connections_export.pdf import split as pdf_split  # noqa: PLC0415
+
+    limits = (
+        pdf_split.Limits(max_pages=args.max_pages, max_mb=args.max_mb, grouping=args.split)
+        if args.split
+        else None
+    )
+    files = pdf_split.propose(model, limits) if limits is not None else []
+    if args.plan:
+        print(_describe_plan(model, files))
+        return 0
+
     if render is None:
         render = _default_pdf_render(args.fidelity)
         if render is None:
@@ -1267,26 +1316,114 @@ def pdf_main(
     style_kwargs = _pdf_style_kwargs(args, env)
     if style_kwargs is None:
         return 2
+    import datetime as _datetime  # noqa: PLC0415
+
     from connections_export.pdf.external import prepare_external_images  # noqa: PLC0415
 
     render_kwargs = {
         **style_kwargs,
+        # The cover's date, as the console stamps it.
+        "generated_at": _datetime.datetime.now(_datetime.UTC).strftime("%Y-%m-%d %H:%M UTC"),
         "external_images": prepare_external_images(model, include=args.external_images),
         "open_bookmarks": args.open_bookmarks,
+        "attach_attachments": args.attach_attachments,
+        "progress": _stderr_progress(),
+        "part_size_mb": (
+            args.part_size_mb
+            if args.part_size_mb is not None
+            else load_config(
+                {}, config_path=getattr(args, "config_path", None), env=env
+            ).pdf_part_size_mb
+        ),
     }
+    from connections_export.pdf.progress import PdfOutOfMemoryError  # noqa: PLC0415
+
+    if files:
+        from connections_export.pdf import sets  # noqa: PLC0415
+        from connections_export.pdf.paged import render_pdf_paged  # noqa: PLC0415
+
+        out_dir = _Path(args.output if args.output != "wiki-export.pdf" else "wiki-export")
+        options = _accepted_kwargs(render_pdf_paged, render_kwargs)
+        progress = options.pop("progress", None)
+        try:
+            paths = sets.render_pdf_set(
+                model, blob_bytes, files, out_dir, progress=progress, **options
+            )
+        except PdfOutOfMemoryError as error:
+            print(f"connections-export pdf: {error}", file=sys.stderr)
+            return 1
+        print(f"connections-export pdf: wrote {len(paths)} PDFs to {out_dir}")
+        for path in paths:
+            print(f"  {path.name}  ({path.stat().st_size:,} bytes)")
+        return 0
+
     try:
         # A renderer (browser fidelity, an injected one) need not accept
         # every option; it gets the ones it does.
-        pdf_bytes = render(model, blob_bytes, **_accepted_kwargs(render, render_kwargs))
+        accepted = _accepted_kwargs(render, {**render_kwargs, "output": _Path(args.output)})
+        # With `output` the renderer writes the file itself, so a large PDF is
+        # never in memory; one that returns bytes anyway has them written.
+        pdf_bytes = render(model, blob_bytes, **accepted)
+    except PdfOutOfMemoryError as error:
+        print(f"connections-export pdf: {error}", file=sys.stderr)
+        return 1
     except ValueError as error:  # an unknown token name
         print(f"connections-export pdf: {error}", file=sys.stderr)
         return 2
-    _Path(args.output).write_bytes(pdf_bytes)
+    if pdf_bytes is not None:
+        _Path(args.output).write_bytes(pdf_bytes)
     print(
         f"connections-export pdf: wrote {args.output} "
-        f"({len(pdf_bytes)} bytes, {args.fidelity} fidelity)"
+        f"({_Path(args.output).stat().st_size} bytes, {args.fidelity} fidelity)"
     )
     return 0
+
+
+def _describe_plan(model, files) -> str:
+    """The `--plan` answer: what one PDF would be, or the proposed files."""
+    from connections_export.pdf.split import build_tree  # noqa: PLC0415
+
+    def minutes(pages: float, count: int) -> str:
+        seconds = pages * 0.06 + count * 8
+        return "under a minute" if seconds < 60 else f"about {round(seconds / 60)} min"
+
+    root = build_tree(model)
+    lines = [
+        f"The whole export: about {round(root.pages):,} pages, about "
+        f"{root.size / 2**20:,.0f} MB, {minutes(root.pages, max(1, len(files)))}."
+    ]
+    if files:
+        lines.append(f"{len(files)} PDFs:")
+        width = max(len(f.name) for f in files)
+        lines.extend(
+            f"  {f.name.ljust(width)}  ~{f.pages:>6,} pages  ~{f.size / 2**20:>7,.1f} MB"
+            for f in files
+        )
+    return "\n".join(lines)
+
+
+def _stderr_progress(interval: float = 2.0, clock: Callable[[], float] | None = None):
+    """A progress callback printing each report's message to stderr: every
+    change of stage, but `laying_out` updates at most once per `interval`."""
+    import time  # noqa: PLC0415
+
+    now = clock or time.monotonic
+    last_stage: list[tuple | None] = [None]
+    last_time = [float("-inf")]
+
+    def report(progress) -> None:
+        key = (progress.stage, progress.part)
+        changed = key != last_stage[0]
+        if not changed and progress.stage == "laying_out" and now() - last_time[0] < interval:
+            return
+        if not changed and progress.stage != "laying_out":
+            return
+        last_stage[0] = key
+        last_time[0] = now()
+        if progress.message:
+            print(f"connections-export pdf: {progress.message}", file=sys.stderr, flush=True)
+
+    return report
 
 
 def _accepted_kwargs(func: Callable[..., bytes], kwargs: dict) -> dict:
@@ -1494,9 +1631,35 @@ def _open_browser_when_listening(host: str, port: int) -> None:
             # a failure to start belongs, and a browser that did not open is
             # not itself an error worth a second message.
             return
-        _open_in_browser(url)
+        opened = _open_in_browser(url)
+        # After the browser's first requests, so this -- not a log line about
+        # a stylesheet or an icon -- is the last thing in the window. Where
+        # the browser came up behind other windows, that last line was all
+        # anyone saw, and people took it for the start-up having failed.
+        time.sleep(_REASSURE_AFTER_SECONDS)
+        print(_browser_opened_message(url, opened=opened), flush=True)
 
     threading.Thread(target=wait_then_open, daemon=True).start()
+
+
+#: How long after opening the browser the "it's running" note is printed: long
+#: enough for the console's first page load to be logged above it.
+_REASSURE_AFTER_SECONDS = 2.0
+
+
+def _browser_opened_message(url: str, *, opened: bool) -> str:
+    """What to tell someone watching the terminal once the console is up."""
+    if opened:
+        return (
+            f"connections-export: the console is running and has been opened in your browser.\n"
+            f"  If you don't see it, it may be behind other windows -- or open {url} yourself.\n"
+            "  Keep this window open while you use the console; press Ctrl+C here to stop it."
+        )
+    return (
+        "connections-export: the console is running, but no browser could be opened from here.\n"
+        f"  Open {url} in your browser.\n"
+        "  Keep this window open while you use the console; press Ctrl+C here to stop it."
+    )
 
 
 def _is_wsl(kernel_release: str, env: Mapping[str, str]) -> bool:
@@ -1509,14 +1672,17 @@ def _in_wsl() -> bool:
     return _is_wsl(platform.uname().release, os.environ)
 
 
-def _open_in_browser(url: str) -> None:
+def _open_in_browser(url: str) -> bool:
     """Open `url` in the user's browser.
 
     Python looks for Linux helpers (`xdg-open`, `x-www-browser`, ...), which a
     WSL distribution usually lacks: its user's browser is on the Windows side,
     so nothing opened. Under WSL: `wslview` when installed, else
     `explorer.exe`, which opens the Windows default browser. `$BROWSER`, the
-    Linux convention for choosing one, is honoured first, everywhere."""
+    Linux convention for choosing one, is honoured first, everywhere.
+
+    Returns whether a browser was launched (as far as can be told: a launcher
+    that starts reports success before any window appears)."""
     if _in_wsl() and not os.environ.get("BROWSER"):
         for helper in ("wslview", "explorer.exe"):
             found = shutil.which(helper)
@@ -1527,10 +1693,13 @@ def _open_in_browser(url: str) -> None:
                         stdout=subprocess.DEVNULL,
                         stderr=subprocess.DEVNULL,
                     )
-                    return
+                    return True
                 except OSError:
                     continue
-    webbrowser.open(url)
+    try:
+        return bool(webbrowser.open(url))
+    except webbrowser.Error:
+        return False
 
 
 def open_main(

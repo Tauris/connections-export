@@ -10,9 +10,12 @@ from connections_export.gui.demo import (
 from connections_export.gui.manual import console_document
 from connections_export.gui.support import (
     _VENDOR_FILES,
+    BANNER,
     CONSOLE_CSS,
     CONSOLE_HTML,
     CONSOLE_JS,
+    FAVICON_ICO,
+    FAVICON_SVG,
     VENDOR_DIR,
 )
 
@@ -55,6 +58,32 @@ def register(
     def console_js() -> FileResponse:
         return FileResponse(
             CONSOLE_JS, media_type="text/javascript", headers={"Cache-Control": "no-store"}
+        )
+
+    # Browsers ask for /favicon.ico on their own, often as the very last
+    # request after the console opens. Unanswered, it put a 404 at the bottom
+    # of the terminal -- and where the browser had come up out of sight, that
+    # line was the last thing anyone saw and read as the start-up failing.
+    @app.get("/favicon.ico", include_in_schema=False)
+    def favicon_ico() -> FileResponse:
+        return FileResponse(
+            FAVICON_ICO,
+            media_type="image/x-icon",
+            headers={"Cache-Control": "public, max-age=86400"},
+        )
+
+    @app.get("/banner.webp", include_in_schema=False)
+    def banner() -> FileResponse:
+        return FileResponse(
+            BANNER, media_type="image/webp", headers={"Cache-Control": "public, max-age=86400"}
+        )
+
+    @app.get("/favicon.svg", include_in_schema=False)
+    def favicon_svg() -> FileResponse:
+        return FileResponse(
+            FAVICON_SVG,
+            media_type="image/svg+xml",
+            headers={"Cache-Control": "public, max-age=86400"},
         )
 
     @app.get("/vendor/{name}")

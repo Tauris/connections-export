@@ -17,6 +17,7 @@ deployment whose document says it another way is one function to change.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from urllib.parse import parse_qs, urlsplit
 
 from connections_export.adapters import atom
 
@@ -57,6 +58,54 @@ def logo_href(data: bytes | str | None) -> str | None:
             return href
         if any(word in rel for word in _IMAGE_RELS):
             return href
+    return None
+
+
+#: The relation a subcommunity's own entry uses to point back at its parent.
+#: The href's exact shape is not relied on: the parser accepts the uuid
+#: wherever a `communityUuid` parameter appears in it.
+PARENT_COMMUNITY_REL = "http://www.ibm.com/xmlns/prod/sn/parentcommunity"
+
+
+@dataclass(frozen=True)
+class ParentCommunityRef:
+    """The community a subcommunity sits under, as its own entry names it."""
+
+    uuid: str
+    title: str | None = None
+
+
+def community_entry_url(*, base_url: str, community_uuid: str) -> str:
+    """A community's own entry: the document `logo_href` and the parent link
+    are both read from."""
+    return (
+        f"{base_url.rstrip('/')}/communities/service/atom/community/instance"
+        f"?communityUuid={community_uuid}"
+    )
+
+
+def parent_community(data: bytes | str | None) -> ParentCommunityRef | None:
+    """The parent a community's entry names, or None.
+
+    None for a top-level community, for a deployment that does not say, and
+    for a document that will not parse -- a missing parent means "unknown",
+    never a failed capture.
+    """
+    if not data:
+        return None
+    try:
+        root = atom.parse_xml(data)
+    except Exception:  # noqa: BLE001 - an unreadable document names no parent
+        return None
+    for link in root.xpath("//*[local-name()='link'][@rel][@href]"):
+        if (link.get("rel") or "").strip().lower() != PARENT_COMMUNITY_REL:
+            continue
+        query = parse_qs(urlsplit((link.get("href") or "").strip()).query)
+        uuids = next((v for k, v in query.items() if k.lower() == "communityuuid"), None)
+        if uuids and uuids[0]:
+            return ParentCommunityRef(
+                uuid=uuids[0], title=(link.get("title") or "").strip() or None
+            )
     return None
 
 

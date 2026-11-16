@@ -445,6 +445,15 @@ class DerivedCommunity(_Model):
     #: in the archive rather than on a system that may not answer later. This
     #: is what `{logo}` resolves to in a PDF header or footer.
     logo: ResolvedAsset | None = None
+    #: The community this one is a subcommunity of, when the archive holds the
+    #: community's own entry and that entry names a parent. None means
+    #: top-level OR unknown (an archive captured before the entry was
+    #: archived); the parent need not itself be in the export. Lets a planner
+    #: group a parent with its subcommunities.
+    parent_id: str | None = None
+    #: The parent's title: from the parent's own record when it is in the
+    #: export, otherwise whatever the child's link says. None when unknown.
+    parent_title: str | None = None
 
 
 class Interchange(_Model):

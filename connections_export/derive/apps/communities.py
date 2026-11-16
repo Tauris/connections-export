@@ -53,6 +53,30 @@ def _community_logo(
     )
 
 
+def _link_parents(
+    index: ArchiveIndex, communities: list[DerivedCommunity], *, base_url: str
+) -> None:
+    """Record each community's parent, read from its own archived entry.
+
+    Missing entry, no parent link, or a parent link pointing at itself all
+    leave `parent_id` None -- unknown is not an error.
+    """
+    from connections_export.adapters.communities import (  # noqa: PLC0415
+        community_entry_url,
+        parent_community,
+    )
+
+    by_id = {c.id: c for c in communities}
+    for community in communities:
+        document = index.get(community_entry_url(base_url=base_url, community_uuid=community.id))
+        parent = parent_community(document.content) if document is not None else None
+        if parent is None or parent.uuid == community.id:
+            continue
+        community.parent_id = parent.uuid
+        known = by_id.get(parent.uuid)
+        community.parent_title = (known.title if known else None) or parent.title
+
+
 def _assemble_communities(
     wikis: list[DerivedWiki],
     blogs: list[DerivedBlog],

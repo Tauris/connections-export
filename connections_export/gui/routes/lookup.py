@@ -151,7 +151,14 @@ def register(
             )
         if status is None or status >= 400:
             return JSONResponse(
-                {"status": "http_error", "detail": f"Search returned {status}.", "url": url},
+                {
+                    "status": "http_error",
+                    "detail": (
+                        f"The deployment refused the search (status {status}). "
+                        "Check that you can sign in to it, then try again."
+                    ),
+                    "url": url,
+                },
                 status_code=502,
             )
         try:
@@ -242,7 +249,14 @@ def register(
             )
         if status is None or status >= 400:
             return JSONResponse(
-                {"status": "http_error", "detail": f"Profiles returned {status}.", "url": url},
+                {
+                    "status": "http_error",
+                    "detail": (
+                        f"The deployment refused the lookup (status {status}). "
+                        "Check that you can sign in to it, then try again."
+                    ),
+                    "url": url,
+                },
                 status_code=502,
             )
         try:

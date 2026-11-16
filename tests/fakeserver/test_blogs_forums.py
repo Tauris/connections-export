@@ -311,6 +311,10 @@ def test_ps_and_page_slice_the_blog_entries_feed():
 def _visible_paragraphs(html_text):
     import re
 
+    # Link text is dropped: the cross-links the demo weaves into every item
+    # name the same distant targets from many places, and a title linked from
+    # ten pages is a link, not a repeated paragraph.
+    html_text = re.sub(r"<a\b[^>]*>.*?</a>", "", html_text, flags=re.S)
     return [
         part.strip()
         for part in re.sub(r"<[^>]+>", "\n", html_text).split("\n")

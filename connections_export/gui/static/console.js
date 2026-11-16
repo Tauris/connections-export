@@ -3,6 +3,33 @@
   const $ = (id) => document.getElementById(id);
   const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
 
+  // The last request that failed (a refusal from the console, or no answer at
+  // all). An error message can then offer "Copy details" with the raw status
+  // and server text for whoever supports this tool, without every call site
+  // having to pass them along.
+  let lastProblem = null;
+  (() => {
+    const original = window.fetch.bind(window);
+    window.fetch = async (input, init) => {
+      const url = typeof input === "string" ? input : (input && input.url) || String(input);
+      const method = ((init && init.method) || (input && input.method) || "GET").toUpperCase();
+      try {
+        const res = await original(input, init);
+        if (!res.ok && /^\/api\//.test(url.replace(location.origin, ""))) {
+          const note = { method, url, status: res.status + " " + (res.statusText || ""), detail: "", at: new Date() };
+          lastProblem = note;
+          res.clone().text().then((t) => { note.detail = t.slice(0, 1500); }).catch(() => {});
+        }
+        return res;
+      } catch (err) {
+        if (!(err && err.name === "AbortError")) {
+          lastProblem = { method, url, status: "no answer", detail: String((err && err.message) || err), at: new Date() };
+        }
+        throw err;
+      }
+    };
+  })();
+
   // Point vendored PDF.js at its vendored worker (both served from /vendor,
   // never a CDN). Set here rather than an inline <script> so the HTML stays
   // script-free (the split-assets guarantee).
@@ -1773,9 +1800,6 @@
     } else {
       renderAppSections(REAL_MODEL, '');
     }
-    // Every reader open funnels through here after setting the selection, so
-    // this is the one place to keep the export-scope dropdown in step with it.
-    refreshPdfScopeOption();
   }
 
   function renderAttachmentsReal(page) {
@@ -2237,6 +2261,7 @@
   // reader header -- so you always know what you're looking at. Reads the
   // server's current-archive so it survives navigation, reload, and open-archive.
   async function refreshCurrentArchive() {
+    if (typeof refreshWhatsOpen === "function") refreshWhatsOpen();
     let j;
     try {
       const r = await fetch("/api/current-archive");
@@ -2369,7 +2394,7 @@
   (function wireExportMenu() {
     const menu = document.getElementById("r-export-menu");
     if (!menu) return;
-    ["r-pdf", "r-preview", "r-live-pdf"].forEach((id) => {
+    ["r-export-open", "r-preview", "r-live-pdf"].forEach((id) => {
       const el = document.getElementById(id);
       if (el) el.addEventListener("click", () => { menu.open = false; });
     });
@@ -2397,9 +2422,9 @@
   // selects the page AND everything under it, which is the shape a wiki
   // hierarchy actually has -- picking a section should not mean picking its
   // children one at a time.
-  function renderPdfPicker() {
+  function renderPdfPicker(model) {
     const tree = $("pdf-pick-tree");
-    if (!tree || !REAL_MODEL) return;
+    if (!tree || !model) return;
     tree.innerHTML = "";
     const row = (value, text, kindLabel, isPage) => {
       const label = document.createElement("label");
@@ -2409,20 +2434,20 @@
         (kindLabel ? '<span class="pk-kind">' + escapeHtml(kindLabel) + "</span>" : "");
       tree.appendChild(label);
     };
-    (REAL_MODEL.wikis || []).forEach((wiki) => {
+    (model.wikis || []).forEach((wiki) => {
       row("wiki:" + wiki.id, wiki.title || wiki.label || wiki.id, "wiki", false);
       (wiki.root_page_ids || []).forEach((pid) => {
         const page = wiki.pages && wiki.pages[pid];
         if (page) row("subtree:" + pid, "↳ " + (page.title || page.label || pid), "section", true);
       });
     });
-    (REAL_MODEL.blogs || []).forEach((blog) => {
+    (model.blogs || []).forEach((blog) => {
       row("blog:" + blog.id, blog.title || blog.handle || blog.id, "blog", false);
     });
-    (REAL_MODEL.forums || []).forEach((forum) => {
+    (model.forums || []).forEach((forum) => {
       row("forum:" + forum.id, forum.title || forum.id, "forum", false);
     });
-    (REAL_MODEL.rich_content || []).forEach((container) => {
+    (model.rich_content || []).forEach((container) => {
       row("rich_content:" + container.id, container.title || "Highlights", "highlights", false);
       // Individual pages as well as the whole area: a community front page is
       // a handful of pages, and picking one of them is a reasonable ask that
@@ -2449,145 +2474,625 @@
       .map((i) => "include=" + encodeURIComponent(i.value));
   }
 
-  // The export scope: "all", "item" (what is open in the reader) or "choose".
-  function pdfScope() {
-    const checked = document.querySelector('input[name="r-pdf-scope"]:checked');
-    return checked ? checked.value : "all";
+  // What the Export dialog was last used for in this session. Preview and
+  // Live PDF follow it, so there is one set of choices, not two: the scope
+  // ("all", "item" or "choose") and the two options they honour.
+  const exportLast = { scope: "all", external: true, bookmarks: false };
+  function pdfScope() { return exportLast.scope; }
+
+  // The three yes/no choices every PDF export offers, as query parameters.
+  // Defaults: comments in, third-party images in, bookmarks panel closed.
+  function pdfOptionParams(o) {
+    const params = [];
+    if (!o.comments) params.push("comments=0");
+    // Third-party images: fetched and marked by default (?external_images=0 leaves them out).
+    if (!o.external) params.push("external_images=0");
+    // Bookmarks are always in the PDF; opening with their panel is a choice.
+    if (o.bookmarks) params.push("open_bookmarks=1");
+    return params;
   }
 
-  function wirePdfPicker() {
-    const sel = $("r-pdf-scope");
-    const pick = $("pdf-pick");
-    if (!sel || !pick) return;
-    sel.addEventListener("change", () => {
-      const choosing = pdfScope() === "choose";
-      pick.hidden = !choosing;
-      if (choosing) renderPdfPicker();
-    });
-    pick.addEventListener("click", (event) => {
-      const action = event.target.closest("button")?.dataset.pick;
-      if (!action) return;
-      pick.querySelectorAll("input").forEach((i) => { i.checked = action === "all"; });
-    });
-  }
-
-  // Keep the scope choice honest: enable + relabel "Current item" to match
-  // what's open; disable it (and fall back to Whole archive) when nothing is.
-  function refreshPdfScopeOption() {
-    const sel = $("r-pdf-scope");
-    if (!sel) return;
-    const item = sel.querySelector('input[value="item"]');
-    const label = sel.querySelector(".scope-item-label");
-    if (!item || !label) return;
-    const scope = currentReaderScope();
-    item.disabled = !scope;
-    label.textContent = scope ? scope.label : "Current item";
-    if (!scope && item.checked) sel.querySelector('input[value="all"]').checked = true;
-  }
-
-  // Export the reconstructed archive to a PDF (the `pdf` capability, served
-  // via GET /api/pdf). Renders server-side (Chromium) and downloads the
-  // bytes; a 503 carries a clear reason (model not ready, or no browser).
-  async function exportPdf() {
-    const btn = $("r-pdf");
-    const label = btn.textContent;
-    btn.disabled = true;
-    btn.textContent = "⏳ Rendering…";
-    // Clicking Export PDF closes the menu, so the button above is out of
-    // sight for the whole render -- a minute or more on a large archive, with
-    // nothing on screen but a busy machine. The menu's own toolbar button
-    // stays visible: it carries the progress, with the time so far.
-    const summary = document.querySelector("#r-export-menu > summary");
-    const summaryHtml = summary ? summary.innerHTML : "";
-    const started = Date.now();
-    const tick = () => {
-      if (!summary) return;
-      const secs = Math.floor((Date.now() - started) / 1000);
-      summary.textContent = "⏳ Rendering PDF… " + Math.floor(secs / 60) + ":" +
-        String(secs % 60).padStart(2, "0");
-    };
-    tick();
-    const ticker = setInterval(tick, 1000);
-    if (summary) summary.classList.add("busy");
+  // The one PDF job runner, shared by the Reader's Export menu and the
+  // Archives page: POST /api/pdf/jobs, then follow the job (`trackPdfJob`).
+  // `reattachName` is re-opened once on a stale 503.
+  async function startPdfExport({ params, summary, reattachName }) {
+    if (pdfTrack.active) {
+      notify("A PDF export is already being made. Wait for it to finish, or cancel it, then start the next one.",
+        "One export at a time");
+      return;
+    }
+    // Claimed before the request goes out, so a second click cannot start a second poller.
+    pdfTrack.active = true;
+    let jobId = null;
+    const panel = ensurePdfProgressPanel();
+    showPdfPanelRunning(panel);
+    panel.hidden = false;
+    $("pp-title").textContent = "Exporting PDF";
+    $("pp-msg").textContent = "Starting…";
+    $("pp-time").textContent = "0:00";
+    $("pp-part").textContent = ""; $("pp-pages").textContent = ""; $("pp-eta").textContent = "";
+    $("pp-bar").classList.add("indeterminate");
+    $("pp-cancel").disabled = true;
     try {
-      // Comments are always in the archive; the checkbox only omits them from
-      // this export (?comments=0).
-      const withComments = $("r-pdf-comments") ? $("r-pdf-comments").checked : true;
-      const params = [];
-      if (!withComments) params.push("comments=0");
-      // Third-party images: fetched and marked by default (?external_images=0 leaves them out).
-      if ($("r-pdf-external") && !$("r-pdf-external").checked) params.push("external_images=0");
-      // Bookmarks are always in the PDF; opening with their panel is a choice.
-      if ($("r-pdf-open-bookmarks") && $("r-pdf-open-bookmarks").checked) params.push("open_bookmarks=1");
-      // Scoped export: "one thread vs the whole". Only when the dropdown
-      // is on "Current item" AND something is actually open.
-      const scope = currentReaderScope();
-      if (pdfScope() === "choose") {
-        const chosen = pdfIncludeParams();
-        if (!chosen.length) {
-          notify("Tick at least one component to export.", "Nothing selected");
-          return;
-        }
-        params.push(...chosen);
-      } else if (pdfScope() === "item" && scope) {
-        params.push(scope.kind === "page" ? "scope=tile" : "scope=item");
-        params.push("kind=" + encodeURIComponent(scope.kind), "id=" + encodeURIComponent(scope.id));
-        if (scope.kind === "page") params.push("chrome=0");
-      }
-      const pdfUrl = "/api/pdf" + (params.length ? "?" + params.join("&") : "");
-      let res = await fetch(pdfUrl);
+      const jobsUrl = "/api/pdf/jobs" + (params.length ? "?" + params.join("&") : "");
+      const start = () => fetch(jobsUrl, { method: "POST" });
+      let res = await start();
       // A server reload can discard the attached archive while this reader
       // still has its cached model. Reattach the remembered archive once so
       // archive-backed print can recover from that stale 503.
       if (res.status === 503) {
-        if (openArchiveName) {
+        if (reattachName) {
           try {
             await fetch("/api/open-archive", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ name: openArchiveName }),
+              body: JSON.stringify({ name: reattachName }),
             });
           } catch (_) {}
         }
-        res = await fetch(pdfUrl);
+        res = await start();
       }
       if (!res.ok) {
-        let msg = "PDF export failed (" + res.status + ").";
+        let msg = "The PDF could not be started. Try again in a moment.";
         try {
           const j = await res.json();
-          if (j.detail) msg = j.detail;
-          else if (j.status === "pending") msg = "The model isn't ready yet — let the import finish first.";
+          msg = j.status === "pending"
+            ? "The archive is still being read. Wait for it to finish, then try again."
+            : serverMessage(j, msg);
         } catch (_) {}
-        notify(msg);
+        panel.hidden = true;
+        notify(msg, "The PDF did not start");
         return;
       }
-      const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = "export.pdf";
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(url);
-      notify("Saved as export.pdf in your browser's downloads.", "PDF ready");
+      jobId = (await res.json()).job;
     } catch (_) {
-      notify("PDF export isn't reachable right now.");
+      panel.hidden = true;
+      notify("The console could not be reached, so the PDF was not started. Check that it is still running, then try again.",
+        "The PDF did not start");
+      return;
+    } finally {
+      pdfTrack.active = false;
+    }
+    await trackPdfJob(jobId, { summary });
+  }
+
+  // One poll loop at a time, whichever way the job got here: started by this
+  // tab, or found running after a reload / in the activity list.
+  const pdfTrack = { active: false, jobId: null, latest: null, samples: [] };
+
+  // Follow one running PDF job until it settles, drawing the corner panel
+  // (and `summary`, a toolbar element, when given). `initial` is the job as
+  // `/api/activity` described it, so a re-attached job shows its true elapsed
+  // time and progress at once.
+  async function trackPdfJob(jobId, { summary, initial } = {}) {
+    if (pdfTrack.active) return;
+    pdfTrack.active = true;
+    pdfTrack.jobId = jobId;
+    pdfTrack.latest = initial || null;
+    pdfTrack.samples = [];
+    const summaryHtml = summary ? summary.innerHTML : "";
+    let started = Date.now() - ((initial && initial.elapsed_s) || 0) * 1000;
+    let latest = initial || null;
+    const clock = () => {
+      const secs = Math.floor((Date.now() - started) / 1000);
+      return Math.floor(secs / 60) + ":" + String(secs % 60).padStart(2, "0");
+    };
+    const panel = ensurePdfProgressPanel();
+    let finished = false;
+    let lastStage = null;
+    showPdfPanelRunning(panel);
+    const draw = () => {
+      const pr = latest && latest.progress;
+      const known = pr && pr.pages_total;
+      const pct = known ? Math.min(100, Math.round(100 * pr.pages_done / pr.pages_total)) : null;
+      const msg = (pr && pr.message) || "Starting…";
+      // Several PDFs: which file is being made; one PDF cut into parts: which part.
+      const part = pr && pr.files > 1 ? "File " + pr.file + " of " + pr.files
+        : pr && pr.parts > 1 ? "Part " + pr.part + " of " + pr.parts : "";
+      if (summary) {
+        summary.textContent = "⏳ Rendering PDF… " + (pct != null ? pct + "% · " : "") + clock();
+      }
+      panel.hidden = false;
+      $("pp-msg").textContent = msg;
+      $("pp-time").textContent = clock();
+      $("pp-title").textContent = pr && pr.files > 1 ? "Exporting PDFs" : "Exporting PDF";
+      $("pp-part").textContent = part;
+      $("pp-pages").textContent = pr && pr.pages_done
+        ? pr.pages_done + (known ? " of " + pr.pages_total : "") + " pages" : "";
+      $("pp-eta").textContent = pdfEtaText(latest) || "";
+      const bar = $("pp-bar");
+      bar.classList.toggle("indeterminate", pct == null);
+      bar.setAttribute("aria-valuenow", pct == null ? "" : String(pct));
+      $("pp-fill").style.width = pct == null ? "" : pct + "%";
+      // Screen readers hear the stage change, not every tick of the clock.
+      const stage = pr && (pr.stage + ":" + (pr.file || 1) + ":" + (pr.part || 1));
+      if (stage && stage !== lastStage) {
+        lastStage = stage;
+        announce((part ? part + ". " : "") + msg);
+      }
+    };
+    draw();
+    const ticker = setInterval(draw, 1000);
+    if (summary) summary.classList.add("busy");
+    $("pp-cancel").disabled = false;
+    $("pp-cancel").onclick = async () => {
+      $("pp-cancel").disabled = true;
+      $("pp-msg").textContent = "Cancelling…";
+      try { await fetch("/api/pdf/jobs/" + jobId, { method: "DELETE" }); } catch (_) {}
+    };
+    renderTray();
+    try {
+      // Poll until the job settles. A single failed poll is not the end of
+      // the export (the server is busy, not gone); several in a row are.
+      let misses = 0;
+      for (;;) {
+        await new Promise((r) => setTimeout(r, 1000));
+        let st;
+        try {
+          const r = await fetch("/api/pdf/jobs/" + jobId);
+          if (r.status === 404) {
+            notify("The console no longer has a record of this export. It may have been restarted. Look under Recent exports to see whether the PDF was saved.",
+              "Export lost track of");
+            return;
+          }
+          st = await r.json();
+          misses = 0;
+        } catch (_) {
+          if (++misses >= 10) {
+            notify("The console stopped answering, so progress can't be shown. The export may still be running. Wait a moment, then reload this page.",
+              "Lost touch with the console");
+            return;
+          }
+          continue;
+        }
+        latest = st;
+        pdfTrack.latest = st;
+        draw();
+        renderTray();
+        if (st.state === "running") continue;
+        if (st.state === "cancelled") { announce("The PDF export was cancelled."); notify("The PDF export was cancelled. Nothing was saved.", "Cancelled"); return; }
+        if (st.state === "failed") {
+          finishedNotice(st, false);
+          if (st.out_of_memory) {
+            notify(st.detail || "The computer ran out of memory while making this PDF. Close other programs, or export several smaller PDFs instead, then try again.", "Not enough memory");
+          } else {
+            notify(st.detail || "The PDF could not be made. Try again; if it keeps happening, copy the details and send them to whoever supports this tool.", "The PDF was not made");
+          }
+          return;
+        }
+        // The files are already on disk beside the archive; the panel says so
+        // and offers Download and Show in folder, and stays until dismissed.
+        finished = true;
+        showPdfPanelDone(panel, jobId, st);
+        finishedNotice(st, true);
+        loadRecentExports();
+        return;
+      }
+    } catch (_) {
+      notify("The console stopped answering, so progress can't be shown. Wait a moment, then reload this page.",
+        "Lost touch with the console");
     } finally {
       clearInterval(ticker);
+      pdfTrack.active = false;
+      pdfTrack.jobId = null;
+      pdfTrack.latest = null;
+      if (!finished) panel.hidden = true;
       if (summary) {
         summary.innerHTML = summaryHtml;
         summary.classList.remove("busy");
       }
-      btn.disabled = false;
-      btn.textContent = label;
+      trayTick();
     }
   }
-  $("r-pdf").addEventListener("click", exportPdf);
+
+  // Time left, from how fast pages have been appearing lately. Only said when
+  // it can be worked out (the page total is known and pages are moving);
+  // otherwise nothing, never a guess.
+  function pdfEtaText(job) {
+    const pr = job && job.progress;
+    if (!pr || !pr.pages_total || !pr.pages_done || pr.pages_done >= pr.pages_total) return "";
+    const samples = etaSamples[job.id || "_"] || (etaSamples[job.id || "_"] = []);
+    const now = Date.now();
+    const last = samples[samples.length - 1];
+    if (last && pr.pages_done < last.done) samples.length = 0;           // a new pass began
+    if (!last || pr.pages_done !== last.done) samples.push({ t: now, done: pr.pages_done });
+    while (samples.length > 2 && now - samples[0].t > 90000) samples.shift();
+    const first = samples[0], newest = samples[samples.length - 1];
+    const span = (newest.t - first.t) / 1000;
+    if (span < 8 || newest.done <= first.done) return "";
+    const perSecond = (newest.done - first.done) / span;
+    const secs = (pr.pages_total - pr.pages_done) / perSecond;
+    if (!Number.isFinite(secs)) return "";
+    if (secs < 45) return "less than a minute left";
+    const mins = Math.round(secs / 60);
+    if (mins < 90) return "about " + mins + " min left";
+    const hours = Math.round(secs / 360) / 10;
+    return "about " + hours + " h left";
+  }
+  const etaSamples = {};
+
+  // A polite live region for the few things worth saying aloud.
+  function announce(text) {
+    const el = $("activity-live");
+    if (!el) return;
+    el.textContent = "";
+    setTimeout(() => { el.textContent = text; }, 50);
+  }
+
+  // ---------- Finish notices (tab title, browser notification) ----------
+  const NOTIFY_KEY = "hcl-export-notify";
+  function notifyPref() {
+    try { return localStorage.getItem(NOTIFY_KEY) || ""; } catch (_) { return ""; }
+  }
+  let savedTitle = null, titleTimer = null;
+  function finishedNotice(st, ok) {
+    const label = st.title || "your export";
+    announce(ok ? "Your PDF is ready." : "The PDF export failed.");
+    if (!document.hidden) return;
+    if (savedTitle == null) savedTitle = document.title;
+    document.title = (ok ? "✓ PDF ready — " : "✗ PDF failed — ") + label;
+    clearTimeout(titleTimer);
+    titleTimer = setTimeout(restoreTitle, 120000);
+    try {
+      if (notifyPref() === "on" && "Notification" in window && Notification.permission === "granted") {
+        const n = new Notification(ok ? "Your PDF is ready" : "The PDF export failed",
+          { body: label, tag: "pdf-" + (st.id || "job") });
+        n.onclick = () => { window.focus(); n.close(); };
+      }
+    } catch (_) { /* a browser that refuses notifications is not an error */ }
+  }
+  function restoreTitle() {
+    clearTimeout(titleTimer);
+    if (savedTitle != null) { document.title = savedTitle; savedTitle = null; }
+  }
+
+  // The opt-in, offered once in the finished panel and only asked of the
+  // browser when it is clicked.
+  function offerNotifications() {
+    const row = $("pp-notify");
+    if (!row) return;
+    let show = false;
+    try {
+      show = "Notification" in window && Notification.permission !== "denied" && notifyPref() === "";
+    } catch (_) { show = false; }
+    row.hidden = !show;
+    $("pp-notify-btn").onclick = async () => {
+      let granted = false;
+      try { granted = (await Notification.requestPermission()) === "granted"; } catch (_) {}
+      try { localStorage.setItem(NOTIFY_KEY, granted ? "on" : "off"); } catch (_) {}
+      row.hidden = true;
+      announce(granted ? "You will be told when a long export finishes." : "Notifications stay off.");
+    };
+  }
+
+  // The small panel that stays visible while a PDF is being made, and then
+  // says where it went.
+  function ensurePdfProgressPanel() {
+    let el = $("pdf-progress");
+    if (el) return el;
+    el = document.createElement("div");
+    el.id = "pdf-progress";
+    el.className = "pdf-progress";
+    el.hidden = true;
+    // Not a live region itself: it redraws every second. What is worth
+    // hearing goes to #activity-live (stage changes and completion only).
+    el.setAttribute("role", "group");
+    el.setAttribute("aria-label", "PDF export");
+    el.innerHTML =
+      '<div class="pp-head"><span id="pp-title">Exporting PDF</span><span class="spacer"></span>' +
+      '<span class="pp-time" id="pp-time"></span>' +
+      '<button class="pp-close" id="pp-close" type="button" aria-label="Dismiss" hidden>\u00d7</button></div>' +
+      '<div class="pp-running" id="pp-running">' +
+      '<div class="pp-bar indeterminate" id="pp-bar" role="progressbar" aria-label="PDF export progress" aria-valuemin="0" aria-valuemax="100">' +
+      '<div class="pp-fill" id="pp-fill"></div></div>' +
+      '<div class="pp-msg" id="pp-msg"></div>' +
+      '<div class="pp-meta"><span id="pp-part"></span><span id="pp-pages"></span></div>' +
+      '<div class="pp-eta" id="pp-eta"></div>' +
+      '<div><button class="btn" id="pp-cancel" type="button">Cancel export</button></div></div>' +
+      '<div class="pp-done" id="pp-done" hidden>' +
+      '<p id="pp-done-msg"></p><p class="pp-sub" id="pp-done-where"></p>' +
+      '<ul class="pp-done-files" id="pp-done-files" hidden></ul>' +
+      '<div class="pp-actions"><a class="btn primary" id="pp-download" download>Download</a>' +
+      '<button class="btn" id="pp-reveal" type="button">Show in folder</button></div>' +
+      '<div class="pp-notify" id="pp-notify" hidden><button class="btn" id="pp-notify-btn" type="button">Notify me when long exports finish</button></div>' +
+      '<div class="pp-folder" id="pp-folder" hidden><span>Your file manager did not open. The files are in</span>' +
+      '<span class="mono" id="pp-folder-path"></span>' +
+      '<button class="btn" id="pp-copy" type="button">Copy path</button></div></div>';
+    document.body.appendChild(el);
+    $("pp-close").addEventListener("click", () => { el.hidden = true; });
+    return el;
+  }
+
+  function showPdfPanelRunning(panel) {
+    $("pp-running").hidden = false;
+    $("pp-done").hidden = true;
+    $("pp-close").hidden = true;
+    $("pp-time").hidden = false;
+  }
+
+  // "1,240 pages" / "85 MB" for the finished list.
+  function formatBytes(n) {
+    if (n >= 1024 * 1024 * 1024) return (n / 1024 / 1024 / 1024).toFixed(1) + " GB";
+    if (n >= 1024 * 1024) return Math.round(n / 1024 / 1024) + " MB";
+    return Math.max(1, Math.round(n / 1024)) + " KB";
+  }
+
+  function showPdfPanelDone(panel, jobId, st) {
+    const files = st.files || [];
+    const several = files.length > 1;
+    $("pp-running").hidden = true;
+    $("pp-done").hidden = false;
+    $("pp-close").hidden = false;
+    $("pp-time").hidden = true;
+    $("pp-title").textContent = "Export finished";
+    $("pp-done-msg").textContent = several
+      ? files.length + " PDFs are ready." : "Your PDF is ready.";
+    $("pp-done-where").textContent = st.folder ? "Saved in " + st.folder : "";
+    const list = $("pp-done-files");
+    list.hidden = !several;
+    list.innerHTML = several ? files.map((f) =>
+      "<li><span>" + escapeHtml(f.name) + "</span><span>" + escapeHtml(formatBytes(f.size)) + "</span></li>").join("") : "";
+    const dl = $("pp-download");
+    dl.href = "/api/pdf/jobs/" + jobId + "/file";
+    dl.textContent = several ? "Download all (ZIP)" : "Download";
+    $("pp-folder").hidden = true;
+    const reveal = $("pp-reveal");
+    reveal.disabled = false;
+    reveal.onclick = async () => {
+      let out = null;
+      try {
+        const res = await fetch("/api/pdf/jobs/" + jobId + "/reveal", { method: "POST" });
+        out = res.ok ? await res.json() : null;
+      } catch (_) { out = null; }
+      // No file manager to open (a headless or remote machine): say where it is.
+      if (!out || !out.opened) {
+        $("pp-folder-path").textContent = (out && out.folder) || st.folder || "";
+        $("pp-folder").hidden = false;
+      }
+    };
+    $("pp-copy").onclick = async () => {
+      const path = $("pp-folder-path").textContent;
+      try { await navigator.clipboard.writeText(path); $("pp-copy").textContent = "Copied"; }
+      catch (_) {
+        const range = document.createRange();
+        range.selectNodeContents($("pp-folder-path"));
+        const sel = window.getSelection();
+        sel.removeAllRanges(); sel.addRange(range);
+        $("pp-copy").textContent = "Press Ctrl+C";
+      }
+    };
+    $("pp-copy").textContent = "Copy path";
+    offerNotifications();
+  }
+
+  // ---------- Activity tray ----------
+  // A small, always-visible indicator at the sidebar foot: what is running
+  // (a capture, PDF exports), how far along, how long left, and a way to stop
+  // it. It is fed by `GET /api/activity`, so a reload or a second tab sees the
+  // same work. A running PDF job found there is re-attached to -- the same
+  // panel and poll loop a freshly started export uses -- on page load and when
+  // the tab comes back into view.
+  let activity = { capture: { running: false }, pdf: [] };
+  let trayTimer = null;
+  let trayBusy = false;
+
+  async function trayTick({ attach = false } = {}) {
+    if (trayBusy) return;
+    trayBusy = true;
+    try {
+      const res = await fetch("/api/activity");
+      if (res.ok) activity = await res.json();
+    } catch (_) { /* keep showing the last known state */ }
+    finally { trayBusy = false; }
+    const running = (activity.pdf || []).filter((j) => j.state === "running");
+    if (attach && !pdfTrack.active && running.length) {
+      trackPdfJob(running[0].id, { initial: running[0] });
+    }
+    renderTray();
+    scheduleTray();
+  }
+
+  function scheduleTray() {
+    clearTimeout(trayTimer);
+    if (document.hidden) return;
+    const busy = activity.capture.running || (activity.pdf || []).some((j) => j.state === "running");
+    trayTimer = setTimeout(() => trayTick(), busy ? 2500 : 12000);
+  }
+
+  function trayJobs() {
+    return (activity.pdf || []).filter((j) => j.state === "running").map((j) =>
+      (pdfTrack.jobId === j.id && pdfTrack.latest) ? pdfTrack.latest : j);
+  }
+
+  function jobFacts(job) {
+    const pr = job.progress;
+    const known = pr && pr.pages_total;
+    const pct = known ? Math.min(100, Math.round(100 * pr.pages_done / pr.pages_total)) : null;
+    const part = pr && pr.files > 1 ? "File " + pr.file + " of " + pr.files
+      : pr && pr.parts > 1 ? "Part " + pr.part + " of " + pr.parts : "";
+    const secs = Math.floor(job.elapsed_s || 0);
+    return { pct, part, eta: pdfEtaText(job),
+             time: Math.floor(secs / 60) + ":" + String(secs % 60).padStart(2, "0") };
+  }
+
+  function renderTray() {
+    const chip = $("sb-activity"), pop = $("activity-pop");
+    if (!chip) return;
+    const jobs = trayJobs();
+    const capture = !!(activity.capture && activity.capture.running);
+    const busy = capture || jobs.length > 0;
+    chip.classList.toggle("is-busy", busy);
+    let label = "Nothing running";
+    if (jobs.length) {
+      const f = jobFacts(jobs[0]);
+      label = (jobs.length > 1 ? jobs.length + " PDFs" : "PDF") + (f.pct != null ? " " + f.pct + "%" : " in progress");
+      if (capture) label += " + capture";
+    } else if (capture) label = "Capture running";
+    $("sb-activity-text").textContent = label;
+    chip.setAttribute("aria-label", "Activity: " + label);
+    if (pop.hidden) return;
+    const parts = [];
+    if (capture) {
+      parts.push('<div class="act-item"><b>A capture is running</b>' +
+        '<button class="btn" type="button" data-act="watch">Watch it</button></div>');
+    }
+    jobs.forEach((job) => {
+      const f = jobFacts(job);
+      const meta = [f.part, "so far " + f.time, f.eta].filter(Boolean).join(" · ");
+      parts.push('<div class="act-item" data-job="' + escapeAttr(job.id) + '"><b>' + escapeHtml(job.title || "PDF export") + "</b>" +
+        '<div class="pp-bar' + (f.pct == null ? " indeterminate" : "") + '" role="progressbar" aria-label="Progress of ' + escapeAttr(job.title || "PDF export") + '" aria-valuemin="0" aria-valuemax="100"' +
+        (f.pct == null ? "" : ' aria-valuenow="' + f.pct + '"') + '><div class="pp-fill"' + (f.pct == null ? "" : ' style="width:' + f.pct + '%"') + "></div></div>" +
+        '<div class="act-meta">' + escapeHtml(meta) + "</div>" +
+        '<button class="btn" type="button" data-act="cancel" data-id="' + escapeAttr(job.id) + '">Cancel</button></div>');
+    });
+    if (!parts.length) parts.push('<p class="act-idle">Nothing is running. PDFs and captures you start show up here, even after you reload this page.</p>');
+    parts.push('<button class="btn act-recent" type="button" data-act="recent">Recent exports</button>');
+    $("activity-body").innerHTML = parts.join("");
+  }
+
+  function wireTray() {
+    const chip = $("sb-activity"), pop = $("activity-pop");
+    if (!chip || !pop) return;
+    const setOpen = (open) => {
+      pop.hidden = !open;
+      chip.setAttribute("aria-expanded", String(open));
+      if (open) { renderTray(); trayTick(); }
+    };
+    chip.addEventListener("click", () => setOpen(pop.hidden));
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape" && !pop.hidden) { setOpen(false); chip.focus(); }
+    });
+    document.addEventListener("mousedown", (e) => {
+      if (!pop.hidden && !pop.contains(e.target) && !chip.contains(e.target)) setOpen(false);
+    });
+    pop.addEventListener("click", async (e) => {
+      const b = e.target.closest("button[data-act]");
+      if (!b) return;
+      if (b.dataset.act === "watch") { setOpen(false); showSection("ingest"); }
+      else if (b.dataset.act === "recent") {
+        setOpen(false);
+        showSection("archives");
+        const target = $("recent-exports");
+        if (target) target.scrollIntoView({ block: "start" });
+      } else if (b.dataset.act === "cancel") {
+        b.disabled = true;
+        try { await fetch("/api/pdf/jobs/" + b.dataset.id, { method: "DELETE" }); } catch (_) {}
+        trayTick();
+      }
+    });
+    // Back in view: the tab may have missed a lot. Look again, and pick up a
+    // job running somewhere else; the finished-title is no longer needed.
+    document.addEventListener("visibilitychange", () => {
+      if (document.hidden) return;
+      restoreTitle();
+      trayTick({ attach: true });
+    });
+    trayTick({ attach: true });
+  }
+
+  // ---------- Recent exports (Archives page) ----------
+  function whenRelative(epoch) {
+    const d = new Date(epoch * 1000);
+    if (isNaN(d.getTime())) return "";
+    const time = d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+    const day = (x) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+    const diff = Math.round((day(new Date()) - day(d)) / 86400000);
+    if (diff === 0) return "today " + time;
+    if (diff === 1) return "yesterday " + time;
+    return d.toLocaleDateString(undefined, { month: "short", day: "numeric",
+      year: diff > 300 ? "numeric" : undefined }) + " " + time;
+  }
+
+  let recentExportsShowAll = false;
+  async function loadRecentExports() {
+    const host = $("recent-exports-list");
+    if (!host) return;
+    let list = null;
+    try {
+      const res = await fetch("/api/exports/recent");
+      if (res.ok) list = (await res.json()).exports || [];
+    } catch (_) { list = null; }
+    if (list == null) {
+      host.innerHTML = '<p class="foot-note">The list of exports could not be read just now. Reopen this page to try again.</p>';
+      return;
+    }
+    if (!list.length) {
+      host.innerHTML = '<p class="foot-note">Nothing exported yet. When you make a PDF it is saved in a folder named <span class="mono">&lt;archive&gt;-pdf</span> next to the archive, and it is listed here so you can find it again.</p>';
+      return;
+    }
+    const LIMIT = 6;
+    // A set's folder and the ZIP of it are one export: one row, whose
+    // Download again is the ZIP.
+    const zipOf = {};
+    list.forEach((e) => { if (e.kind === "zip") zipOf[e.folder + "/" + e.name.replace(/\.zip$/i, "")] = e; });
+    const rows = list.filter((e) => e.kind !== "zip" || !list.some((o) => o.kind === "set" && o.folder === e.folder && o.name === e.name.replace(/\.zip$/i, "")));
+    const shown = recentExportsShowAll ? rows : rows.slice(0, LIMIT);
+    host.innerHTML = "";
+    const ul = document.createElement("ul");
+    ul.className = "re-list";
+    shown.forEach((e) => {
+      const li = document.createElement("li");
+      li.className = "re-row";
+      const kind = e.kind === "pdf" ? "PDF" : e.kind === "zip" ? "ZIP of PDFs"
+        : (e.files.length === 1 ? "1 PDF" : "Several PDFs (" + e.files.length + ")");
+      const text = document.createElement("div");
+      text.className = "re-text";
+      text.innerHTML = '<span class="re-name">' + escapeHtml(e.name) + "</span>" +
+        '<span class="foot-note">' + escapeHtml([e.archive, kind, formatBytes(e.size), whenRelative(e.modified)].filter(Boolean).join(" · ")) + "</span>";
+      const actions = document.createElement("div");
+      actions.className = "re-actions";
+      const zip = e.kind === "set" ? zipOf[e.folder + "/" + e.name] : null;
+      if (e.kind === "pdf" || e.kind === "zip" || zip) {
+        const dl = zip || e;
+        const a = document.createElement("a");
+        a.className = "btn";
+        a.textContent = "Download again";
+        a.setAttribute("aria-label", "Download " + e.name + " again");
+        a.href = "/api/exports/file?folder=" + encodeURIComponent(dl.folder) + "&name=" + encodeURIComponent(dl.name);
+        a.download = dl.name;
+        actions.appendChild(a);
+      }
+      const reveal = document.createElement("button");
+      reveal.type = "button";
+      reveal.className = "btn";
+      reveal.textContent = "Show in folder";
+      reveal.setAttribute("aria-label", "Show " + e.name + " in its folder");
+      const where = document.createElement("div");
+      where.className = "foot-note re-where";
+      where.hidden = true;
+      reveal.addEventListener("click", async () => {
+        let out = null;
+        try {
+          const r = await fetch("/api/exports/reveal", { method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ folder: e.folder, name: e.name }) });
+          out = r.ok ? await r.json() : null;
+        } catch (_) { out = null; }
+        if (!out || !out.opened) {
+          where.textContent = out && out.folder
+            ? "Your file manager did not open. It is in " + out.folder
+            : "The folder could not be found. It may have been moved or deleted.";
+          where.hidden = false;
+        }
+      });
+      actions.appendChild(reveal);
+      li.append(text, actions, where);
+      ul.appendChild(li);
+    });
+    host.appendChild(ul);
+    if (rows.length > LIMIT) {
+      const more = document.createElement("button");
+      more.type = "button";
+      more.className = "btn re-more";
+      more.textContent = recentExportsShowAll ? "Show fewer" : "Show all " + rows.length;
+      more.addEventListener("click", () => { recentExportsShowAll = !recentExportsShowAll; loadRecentExports(); });
+      host.appendChild(more);
+    }
+  }
 
   // Developer-format export (Obsidian vault / Jekyll site / Hugo content):
-  // the Reader's buttons open the guided export (`openDevExportForReader`,
-  // wired in `wireDevExport`), so there is one way to write these formats.
+  // the Export dialog hands over to the guided export
+  // (`openDevExportForReader`), so there is one way to write these formats.
 
   // Accumulating, abortable export preview (page by page). Same viewer the
   // dashboard "Live PDF preview" uses; here it renders the reader's model.
@@ -2772,10 +3277,8 @@
   // The preview and its Full PDF link follow the export menu's choices:
   // "Include external images", and "Open with bookmarks showing".
   function externalImagesQuery() {
-    const box = $("r-pdf-external");
-    const open = $("r-pdf-open-bookmarks");
-    return (box && !box.checked ? "&external_images=0" : "")
-      + (open && open.checked ? "&open_bookmarks=1" : "");
+    return (exportLast.external ? "" : "&external_images=0")
+      + (exportLast.bookmarks ? "&open_bookmarks=1" : "");
   }
 
   // Render one entity's bare PDF and append its page(s) as canvases. Returns
@@ -2868,7 +3371,7 @@
 
   function startLivePdfPreview() {
     stopLivePdfPreview();
-    if (!window.pdfjsLib) { notify("The PDF preview library didn't load — reload the page and retry."); return; }
+    if (!window.pdfjsLib) { notify("The PDF preview could not start. Reload this page and try again.", "Preview unavailable"); return; }
     // Honour the reader scope selector: "Current item" previews just the open
     // page/post/thread; otherwise the whole model accumulates.
     const rscope = currentReaderScope();
@@ -2939,17 +3442,10 @@
     try {
       const res = await fetch(url);
       if (!res.ok) {
-        let msg = "Live PDF failed (" + res.status + ").";
-        try {
-          const j = await res.json();
-          if (j.detail) msg = j.detail;
-          else if (j.status === "no_model") msg = "Run an import first.";
-          else if (j.status === "no_browser") msg = "No browser found. Install Edge/Chrome or run `playwright install chromium`.";
-          else if (j.status === "no_live_urls") msg = j.detail || "No live URLs in this model.";
-          else if (j.status === "unavailable") msg = "Source system unreachable — it may be offline or you may not have access right now.";
-        } catch (_) {}
+        let msg = "The live PDF could not be made. Try again in a moment.";
+        try { msg = serverMessage(await res.json(), msg); } catch (_) {}
         closePdfViewer();
-        notify(msg);
+        notify(msg, "The live PDF was not made");
         return;
       }
       const blob = await res.blob();
@@ -2959,7 +3455,7 @@
       showPdfViewer(blob, name, scope === "page" ? "Live PDF · this item" : "Live PDF · whole archive");
     } catch (_) {
       closePdfViewer();
-      notify("Live PDF is not reachable. Make sure hcl-serve is running.");
+      notify("The console could not be reached, so the live PDF was not made. Check that this tool is still running, then try again.", "The live PDF was not made");
     } finally {
       btn.disabled = false;
       btn.textContent = label;
@@ -2983,13 +3479,13 @@
       const res = await fetch("/api/live-pdf?scope=all&url=" + encodeURIComponent(droppedUrl),
                                {headers: {"Accept": "application/pdf, application/json"}});
       if (!res.ok) {
-        let msg = "Live PDF failed (" + res.status + ").";
-        try { const j = await res.json(); if (j.detail) msg = j.detail; } catch (_) {}
-        notify(msg); return;
+        let msg = "The live PDF could not be made. Try again in a moment.";
+        try { msg = serverMessage(await res.json(), msg); } catch (_) {}
+        notify(msg, "The live PDF was not made"); return;
       }
       const blob = await res.blob();
       showPdfViewer(blob, "live-export.pdf", "Live PDF · dropped URL");
-    } catch (_) { notify("Live PDF failed — check that hcl-serve is running."); }
+    } catch (_) { notify("The console could not be reached, so the live PDF was not made. Check that this tool is still running, then try again.", "The live PDF was not made"); }
     finally { livePdfBtn.disabled = false; livePdfBtn.textContent = label; }
   });
   $("r-search-input").addEventListener("input", (e) => {
@@ -4082,7 +4578,7 @@
       if (!liveGotEvent) {
         try { es.close(); } catch (_) {}
         liveSource = null;
-        showUnreachableBanner("Couldn't reach the live demo pipeline — the server may be unreachable. Try Restart.");
+        showUnreachableBanner("The live view lost touch with the console. Check that this tool is still running, then use Restart.");
       }
       // Otherwise the server already closed the stream normally after
       // `run_complete` (liveRunComplete() handled it); some browsers
@@ -4104,7 +4600,7 @@
   // every panel but the requested one and marks the matching sidebar
   // nav item active. The old setup/console screen togglers below are
   // now thin wrappers so every existing call site keeps working. ----------
-  const SECTIONS = ["overview", "select", "ingest", "archives", "reader", "manual", "licenses", "settings"];
+  const SECTIONS = ["overview", "select", "ingest", "archives", "reader", "summary", "manual", "licenses", "settings"];
   // What ships in this build, and under what terms. Read once per visit --
   // the bundle inside a build cannot change while it runs.
   let licensesLoaded = false;
@@ -4176,13 +4672,15 @@
       b.classList.toggle("active", b.dataset.section === id));
     try { localStorage.setItem("hcl-export-section", id); } catch (_) {}
     if (id === "licenses") loadLicenses();
+    if (id === "summary") loadSummary();
+    else if (typeof refreshWhatsOpen === "function") refreshWhatsOpen();
     if (id === "settings" && typeof loadSettings === "function") loadSettings();
     // Always refresh the recent-archives list when the Overview is shown, so
     // it reflects runs finished this session and, crucially, drops archives
     // that were removed since page load. A stale entry would otherwise 404 on
     // click ("I was not able to open the one archive it presented me"); the
     // list is loaded once at init, so without this it never self-corrects.
-    if (id === "archives" && typeof loadRecentArchives === "function") loadRecentArchives();
+    if (id === "archives" && typeof loadRecentArchives === "function") { loadRecentArchives(); loadRecentExports(); }
     // Always show which archive is in use when entering ingest or reader.
     if ((id === "ingest" || id === "reader") && typeof refreshCurrentArchive === "function") {
       refreshCurrentArchive();
@@ -4689,7 +5187,7 @@
               trust.disabled = true;
               chooseDeployment(data.untrusted_host).then((ok) => {
                 if (ok) openArchiveForUpdate(name);
-                else { trust.disabled = false; notify("Could not use that address."); }
+                else { trust.disabled = false; notify("That address could not be used. Check that it is the address of your Connections server, then try again.", "Address not used"); }
               });
             });
           }
@@ -4697,7 +5195,7 @@
       })
       .catch(() => {
         if (opening) opening.hidden = true;
-        notify("Could not read that archive's contents.");
+        notify("That archive could not be read. It may have been moved or deleted. Refresh the Archives list and try again.", "Archive not read");
       });
   }
 
@@ -5648,7 +6146,7 @@
         if (!ok) {
           // A drop that does not open has to say why. A page that appears to
           // ignore you is the worst of the available behaviours.
-          notify((j && j.detail) || "That did not open as an archive.", "Nothing to read");
+          notify((j && j.detail) || "That did not open as an archive. Drop a folder or a .zip made by this tool.", "Nothing to read");
           return;
         }
         openArchiveName = null;   // it is not one of the filed ones
@@ -5658,7 +6156,7 @@
         showSection("reader");
         if (typeof enterReaderReal === "function") enterReaderReal(undefined, { reveal: true });
       })
-      .catch(() => notify("Could not reach the server.", "Nothing to read"));
+      .catch(() => notify("The console could not be reached. Check that this tool is still running, then try again.", "Nothing to read"));
   }
 
   // What the chrome says about this session, stated once. It carries a fact or
@@ -5667,6 +6165,7 @@
   // "not signed in" described a state that does not exist and taught people to
   // ignore the one place that reports what is being worked on.
   async function loadShellIdentity() {
+    if (typeof refreshWhatsOpen === "function") refreshWhatsOpen();
     const wrap = $("sb-identity");
     const text = $("sb-identity-text");
     if (!wrap || !text) return;
@@ -5772,7 +6271,7 @@
       if (!res.ok) {
         // Show the URL we tried so the syntax is debuggable.
         renderResolveResult(null, j);
-        notify(j.detail || ("Resolve failed (" + res.status + ")."));
+        notify(j.detail || "That person could not be looked up. Check the spelling, then try again.", "Lookup failed");
         return;
       }
       if ($("field-author")) $("field-author").value = j.userid;
@@ -5780,7 +6279,7 @@
       setAuthorFilterMode("custom");
       renderResolveResult(j, j);
     } catch (_) {
-      notify("Resolve isn't reachable — is hcl-serve running?");
+      notify("The lookup could not be made because the console could not be reached. Check that this tool is still running, then try again.", "Lookup failed");
     } finally {
       if (btn) { btn.disabled = false; btn.textContent = label; }
     }
@@ -5893,7 +6392,7 @@
       }
       showSearchPreview(uid, shown, all.length, j.url, null, reducedTo, j.total);
     } catch (_) {
-      notify("Search preview isn't reachable — is hcl-serve running?");
+      notify("The search could not be made because the console could not be reached. Check that this tool is still running, then try again.", "Search failed");
     } finally {
       if (btn) { btn.disabled = false; btn.textContent = label; }
     }
@@ -5977,12 +6476,11 @@
       .catch((err) => {
         setAnalysing(false);
         if (isNetworkError(err)) {
-          setSetupNote("warn", "Couldn't reach the server to identify that URL.");
+          setSetupNote("warn", "The console could not be reached, so this address was not checked. Check that this tool is still running, then paste it again.");
         } else {
           // Surface the REAL error instead of blaming the network.
           console.error("identify: error handling the response", err);
-          setSetupNote("warn", "Something went wrong handling that URL: " +
-            (err && err.message ? err.message : err) + " (see the browser console).");
+          setSetupNote("warn", "This address could not be checked. Paste it again, or try a link to a page you can open in your browser.");
         }
       });
   }
@@ -6028,15 +6526,24 @@
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(startBody),
     })
-      .then(() => startLive())
-      .catch((err) => {
-        if (isNetworkError(err)) {
-          showUnreachableBanner("Couldn't reach the server to start the demo — check that hcl-serve is running, then try Restart.");
-        } else {
-          console.error("start: error after POST /api/start", err);
-          showUnreachableBanner("Something went wrong starting the run: " +
-            (err && err.message ? err.message : err) + " (see the browser console).");
+      .then(async (res) => {
+        if (res && res.ok === false) {
+          // The console refused to start it: say why, and take the person
+          // back to where they can fix it, instead of a run that never begins.
+          let why = "The capture could not be started. Check the address and sign-in, then try again.";
+          try { why = serverMessage(await res.json(), why); } catch (_) {}
+          showUnreachableBanner("The capture did not start.");
+          showSetupScreen();
+          notify(why, "The capture did not start");
+          return;
         }
+        startLive();
+      })
+      .catch((err) => {
+        console.error("start: error after POST /api/start", err);
+        showUnreachableBanner("The capture did not start: the console could not be reached.");
+        notify("The console could not be reached, so the capture did not start. Check that this tool is still running, then try again.",
+          "The capture did not start", err && err.message ? String(err.message) : String(err));
       });
   }
 
@@ -6453,15 +6960,15 @@
         try {
           const res = await fetch(apiUrl);
           if (!res.ok) {
-            let msg = "Live PDF failed.";
-            try { const j = await res.json(); if (j.detail) msg = j.detail; } catch(_) {}
-            notify(msg); return;
+            let msg = "The live PDF could not be made. Try again in a moment.";
+            try { msg = serverMessage(await res.json(), msg); } catch(_) {}
+            notify(msg, "The live PDF was not made"); return;
           }
           const blob = await res.blob();
           const objUrl = URL.createObjectURL(blob);
           const a = document.createElement("a"); a.href = objUrl; a.download = "live-export.pdf";
           document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(objUrl);
-        } catch(_) { notify("Live PDF request failed."); }
+        } catch(_) { notify("The console could not be reached, so the live PDF was not made. Check that this tool is still running, then try again.", "The live PDF was not made"); }
         finally { livePdfSetupBtn.disabled = false; livePdfSetupBtn.textContent = label; }
       });
     }
@@ -6538,7 +7045,7 @@
   // Attach the reader/model to a previously-run archive (`POST
   // /api/open-archive`), then jump straight into the real reader on it --
   // the same entry point a live run's "Open reader" button uses.
-  function openArchive(name, displayName, button) {
+  function openArchive(name, displayName, button, dest) {
     // The card button is structured (title / name / facts spans), so the
     // busy state swaps only the title line rather than flattening the card.
     const labelEl = button ? (button.querySelector(".ra-title") || button) : null;
@@ -6572,7 +7079,7 @@
               "The list has been refreshed."
             );
           }
-          throw new Error(j.detail || "Couldn't open that archive.");
+          throw new Error(j.detail || (res.status === 404 ? "That archive can't be found any more. It may have been moved or deleted. Refresh the list and try again." : "That archive could not be opened. Refresh the Archives list and try again."));
         });
       })
       .then(() => {
@@ -6586,6 +7093,12 @@
         REAL_MODEL = null;
         openArchiveName = name;
         clearReaderSelection();
+        if (dest === "summary") {
+          setReaderSource(displayName || name);
+          loadShellIdentity();
+          showSection("summary");
+          return;
+        }
         showSection("reader");
         setReaderSource(displayName || name);
         // Opening an archive changes what is in view, which is what the
@@ -6594,7 +7107,7 @@
         loadShellIdentity();   // what is in view changed; the chip follows
         if (typeof enterReaderReal === "function") enterReaderReal(undefined, { reveal: true });
       })
-      .catch((e) => notify(e && e.message ? e.message : "Couldn't open that archive."))
+      .catch((e) => notify(e && e.message ? e.message : "That archive could not be opened. Refresh the Archives list and try again."))
       .finally(() => {
         if (overlay) overlay.hidden = true;
         if (button) {
@@ -6648,7 +7161,8 @@
     const cancel = $("modal-cancel");
     ok.textContent = confirmLabel;
     ok.className = "btn " + (danger ? "danger" : "primary");
-    cancel.textContent = cancelLabel;
+    cancel.textContent = cancelLabel || "";
+    cancel.hidden = !cancelLabel;  // a plain message has one action only
     wrap.hidden = !confirmWord;
     input.value = "";
     if (confirmWord) {
@@ -6686,15 +7200,80 @@
   // The alert() replacement. Keeps the message, adds a title so the dialog
   // says what KIND of thing happened, and renders newlines as breaks -- the
   // old alerts embedded "\n\n" for paragraphs the OS dialog rendered as-is.
-  function notify(message, title) {
-    const text = escapeHtml(String(message == null ? "" : message)).replace(/\n/g, "<br>");
-    return showMessage(title || "Something went wrong", "<p>" + text + "</p>");
+  // Titles of messages that are not failures: no "Copy details" for these.
+  const CALM_TITLES = new Set(["Copied", "Copy", "Cancelled", "Nothing selected", "Nothing to export",
+    "Nothing to search for", "Nothing to look up", "New archive", "Reading an archive", "Pace changed",
+    "No superseded runs found", "One export at a time", "Zip ready", "Copy failed"]);
+  // A server message may end with "Technical details: ..."; that part is for
+  // support, not for the person reading, so it goes into Copy details.
+  const TECH_MARK = "\n\nTechnical details: ";
+
+  // The text to show for a refused request: the console's own plain wording
+  // when it gave some; a plain sentence for the few answers that are
+  // otherwise jargon, keeping the raw text for Copy details.
+  function serverMessage(j, fallback) {
+    j = j || {};
+    if (j.status === "no_browser") {
+      return "Making PDFs needs Microsoft Edge or Google Chrome, and this tool could not find either. " +
+        "Install one of them on this computer, then try again." + (j.detail ? TECH_MARK + j.detail : "");
+    }
+    if (j.status === "no_model") return "There is nothing to export yet. Open an archive first, then try again.";
+    if (j.status === "unavailable") {
+      return "The original system could not be reached. It may be offline, or you may not have access right now. Try again later.";
+    }
+    return j.detail || j.error || fallback;
+  }
+
+  function notify(message, title, tech) {
+    let text = String(message == null ? "" : message);
+    const at = text.indexOf(TECH_MARK);
+    if (at >= 0) { tech = (tech ? tech + "\n" : "") + text.slice(at + TECH_MARK.length); text = text.slice(0, at); }
+    const html = "<p>" + escapeHtml(text).replace(/\n/g, "<br>") + "</p>";
+    const isError = !CALM_TITLES.has(title || "");
+    const shown = showMessage(title || "Something went wrong",
+      html + (isError ? '<p><button class="btn copy-details" type="button" data-copy-details>Copy details</button></p>' : ""));
+    const button = document.querySelector("#modal-body [data-copy-details]");
+    if (button) {
+      button.addEventListener("click", async () => {
+        const block = supportDetails(text, title, tech);
+        let copied = false;
+        try { await navigator.clipboard.writeText(block); copied = true; } catch (_) {}
+        if (!copied) {
+          const box = document.createElement("textarea");
+          box.value = block; box.setAttribute("readonly", "");
+          box.style.cssText = "position:fixed;left:-9999px";
+          document.body.appendChild(box); box.select();
+          try { copied = document.execCommand("copy"); } catch (_) {}
+          box.remove();
+        }
+        button.textContent = copied ? "Copied" : "Could not copy";
+      });
+    }
+    return shown;
+  }
+
+  // The technical block for support: what the message said, the failing
+  // request (raw status and server text), when, and which build.
+  function supportDetails(message, title, tech) {
+    const lines = ["HCL Connections Export - error details",
+      "When: " + new Date().toISOString(),
+      "Version: " + (($("sb-version-text") || {}).textContent || "unknown"),
+      "Page: " + location.pathname,
+      "Shown to the user: " + (title ? title + " - " : "") + message];
+    const p = lastProblem;
+    if (p && Date.now() - p.at.getTime() < 60000) {
+      lines.push("Request: " + p.method + " " + p.url, "Status: " + p.status, "Server said: " + (p.detail || "(nothing)"),
+        "Request time: " + p.at.toISOString());
+    }
+    if (tech) lines.push("Technical: " + tech);
+    lines.push("Browser: " + navigator.userAgent);
+    return lines.join("\n");
   }
 
   // A message with a single dismiss -- the alert() replacement.
   function showMessage(title, bodyHtml) {
-    return showDialog({ title, bodyHtml, confirmLabel: "OK", danger: false,
-                        cancelLabel: "Close" });
+    return showDialog({ title, bodyHtml, confirmLabel: "Close", danger: false,
+                        cancelLabel: null });
   }
 
   // ---------- Archives panel: bulk selection ----------
@@ -6769,14 +7348,14 @@
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ names: affected.map((a) => a.name), confirmation: String(n) }),
       });
-      if (!res.ok) { const j = await res.json().catch(() => ({})); throw new Error(j.error || "Repair failed"); }
+      if (!res.ok) { const j = await res.json().catch(() => ({})); throw new Error(j.error || "The repair could not be started. Try again in a moment."); }
       await pollRepairStatus(n);
     } catch (e) {
       repairActive = false;
       if (banner) banner.classList.remove("is-running");
       if ($("repair-stop")) $("repair-stop").hidden = true;
       if (msg) msg.textContent = (e && e.message) || "Could not start the repair.";
-      notify((e && e.message) || "Could not start archive repair.");
+      notify((e && e.message) || "The repair could not be started. Try again in a moment.", "Repair did not start");
       renderRepairBanner();
     }
   }
@@ -6789,7 +7368,7 @@
     try {
       await fetch("/api/repair-stop", { method: "POST" });
     } catch (_) {
-      notify("Could not reach the console to stop the repair.");
+      notify("The console could not be reached, so the repair may not have stopped. Look at the banner above for how it is going.", "Repair not stopped");
     }
   }
 
@@ -6963,7 +7542,7 @@
         }
         archiveSelection.clear();
         loadRecentArchives();
-      }).catch((e) => notify(e.message || "Could not delete the selected archives."))
+      }).catch((e) => notify(e.message || "The selected archives could not be deleted. They may be open in another program. Close it and try again.", "Not deleted"))
         .then(() => { button.disabled = false; button.textContent = label; });
     });
   }
@@ -6975,7 +7554,7 @@
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ names, confirmation }),
     }).then((r) => {
-      if (!r.ok) return r.json().then((j) => Promise.reject(new Error(j.error || "Delete failed")));
+      if (!r.ok) return r.json().then((j) => Promise.reject(new Error(j.error || "Nothing was deleted. The archive may be open in another program. Close it and try again.")));
       return readNdjson(r, onProgress);
     });
   }
@@ -7582,8 +8161,416 @@
       if (event.target === $("devx-scrim")) closeDevExport();
     });
     $("export-selected")?.addEventListener("click", () => openDevExport(Array.from(archiveSelection)));
-    document.querySelectorAll("[data-devx-format]").forEach((button) =>
-      button.addEventListener("click", () => openDevExportForReader(button.dataset.devxFormat)));
+  }
+
+  // ---------- The Export dialog ----------
+  // One dialog for every export, opened from an archive's card on the
+  // Archives page and from the Reader's Export menu. A PDF (one file or
+  // several) is started through `startPdfExport`; a developer format hands
+  // over to the guided export (`openDevExportForReader`).
+  const XD_BIG_PAGES = 1500;       // above this, several PDFs are suggested
+  const XD_BIG_PER_FILE = 1000;    // ... of about this many pages each
+  let xd = null;                   // the open dialog's state, or null
+
+  const xdStoreKey = (key) => "hclExportChoices:" + key;
+  function xdLoadChoices(key) {
+    try { return JSON.parse(localStorage.getItem(xdStoreKey(key)) || "{}") || {}; }
+    catch (_) { return {}; }
+  }
+  function xdSaveChoices(key, choices) {
+    try { localStorage.setItem(xdStoreKey(key), JSON.stringify(choices)); } catch (_) { /* a convenience only */ }
+  }
+
+  const xdRadio = (name) => {
+    const r = document.querySelector('input[name="' + name + '"]:checked');
+    return r ? r.value : null;
+  };
+  const xdSetRadio = (name, value) => {
+    document.querySelectorAll('input[name="' + name + '"]').forEach((r) => { r.checked = r.value === value; });
+  };
+  const xdFormat = () => xdRadio("xd-format") || "pdf";
+  const xdSeveral = () => xdRadio("xd-count") === "several";
+  const xdNumber = (id) => {
+    const n = parseFloat($(id).value);
+    return n > 0 ? n : null;
+  };
+
+  // "About 1,240 pages", "about 85 MB", "about 2 minutes" -- rounded so the
+  // numbers do not pretend to more precision than an estimate has.
+  function xdPagesText(pages) {
+    const n = pages >= 100 ? Math.round(pages / 10) * 10 : Math.max(1, Math.round(pages));
+    return n.toLocaleString() + (n === 1 ? " page" : " pages");
+  }
+  function xdSizeText(bytes, about = false) {
+    const mb = bytes / 1024 / 1024;
+    const lead = about ? "about " : "";
+    if (mb < 1) return "under 1 MB";
+    if (about) return lead + xdSizeText(bytes);
+    if (mb >= 1024) return (mb / 1024).toFixed(1) + " GB";
+    return (mb >= 100 ? Math.round(mb / 5) * 5 : Math.round(mb)) + " MB";
+  }
+  function xdTimeText(seconds) {
+    if (seconds < 45) return "under a minute";
+    if (seconds < 90) return "about a minute";
+    const minutes = Math.round(seconds / 60);
+    if (minutes < 90) return "about " + minutes + " minutes";
+    const hours = Math.round(minutes / 30) / 2;
+    return "about " + hours + (hours === 1 ? " hour" : " hours");
+  }
+
+  function xdScopeParams() {
+    const scope = xdRadio("xd-scope") || "all";
+    if (scope === "choose") {
+      const chosen = pdfIncludeParams();
+      return chosen.length ? { params: chosen } : { params: [], none: true };
+    }
+    if (scope === "item" && xd.item) {
+      const params = [xd.item.kind === "page" ? "scope=tile" : "scope=item",
+        "kind=" + encodeURIComponent(xd.item.kind), "id=" + encodeURIComponent(xd.item.id)];
+      if (xd.item.kind === "page") params.push("chrome=0");
+      return { params };
+    }
+    return { params: [] };
+  }
+
+  function xdSplitParams() {
+    if (!xdSeveral()) return [];
+    const params = ["split=" + encodeURIComponent($("xd-split-by").value)];
+    const pages = xdNumber("xd-max-pages"), mb = xdNumber("xd-max-mb");
+    if (pages) params.push("max_pages=" + Math.round(pages));
+    if (mb) params.push("max_mb=" + mb);
+    return params;
+  }
+
+  function xdOptionParams() {
+    return pdfOptionParams({
+      comments: $("xd-comments").checked,
+      external: $("xd-external").checked,
+      bookmarks: $("xd-bookmarks").checked,
+    });
+  }
+
+  function xdCurrentChoices() {
+    return {
+      format: xdFormat(),
+      count: xdSeveral() ? "several" : "one",
+      split: $("xd-split-by").value,
+      maxPages: $("xd-max-pages").value,
+      maxMb: $("xd-max-mb").value,
+      comments: $("xd-comments").checked,
+      external: $("xd-external").checked,
+      attach: $("xd-attach").checked,
+      bookmarks: $("xd-bookmarks").checked,
+    };
+  }
+
+  // Show what the dialog's current choices ask for: the right sections, and
+  // a new plan.
+  function xdSync({ replan = true } = {}) {
+    const dev = xdFormat() !== "pdf";
+    $("xd-pdf").hidden = dev;
+    $("xd-dev").hidden = !dev;
+    $("xd-what").hidden = dev;
+    $("xd-split").hidden = !xdSeveral();
+    $("xd-pick").hidden = xdRadio("xd-scope") !== "choose";
+    document.querySelector(".xd-foot").dataset.dev = dev ? "1" : "";
+    $("xd-go").textContent = dev ? "Continue…" : "Export";
+    if (xd) xdSaveChoices(xd.key, xdCurrentChoices());
+    if (dev) {
+      xdShowChecks([]);
+      $("xd-go").disabled = !xd || !xd.ready;
+    } else if (replan) {
+      xdSchedulePlan();
+    }
+  }
+
+  function xdSchedulePlan(delay = 300) {
+    if (!xd) return;
+    clearTimeout(xd.timer);
+    $("xd-go").disabled = true;
+    xd.timer = setTimeout(xdPlan, delay);
+  }
+
+  function xdShowChecks(checks) {
+    const list = $("xd-checks");
+    list.hidden = !checks.length;
+    list.innerHTML = checks.map((c) =>
+      '<li class="' + (c.level === "error" ? "is-error" : "is-warning") + '">' +
+      escapeHtml(c.message) + "</li>").join("");
+  }
+
+  async function xdPlan() {
+    if (!xd || !xd.ready || xdFormat() !== "pdf") return;
+    const seq = ++xd.seq;
+    const scope = xdScopeParams();
+    const estimate = $("xd-estimate"), where = $("xd-where");
+    if (scope.none) {
+      estimate.textContent = "Tick at least one component to export.";
+      where.textContent = "";
+      $("xd-files").hidden = true;
+      xdShowChecks([]);
+      return;
+    }
+    estimate.textContent = "Estimating…";
+    const params = [...scope.params, ...xdSplitParams(), ...xdOptionParams()];
+    let res, plan = null, detail = "";
+    try {
+      res = await fetch("/api/pdf/plan" + (params.length ? "?" + params.join("&") : ""));
+      if (res.status === 503 && xd && seq === xd.seq) {  // a reload dropped the archive: attach it again once
+        await fetch("/api/open-archive", { method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name: xd.name }) }).catch(() => {});
+        res = await fetch("/api/pdf/plan" + (params.length ? "?" + params.join("&") : ""));
+      }
+      if (res.ok) plan = await res.json();
+      else { const j = await res.json().catch(() => ({})); detail = j.detail || ""; }
+    } catch (_) { detail = "The console isn't reachable right now."; }
+    if (!xd || seq !== xd.seq) return;   // a newer question has been asked
+    if (!plan) {
+      estimate.textContent = detail || "This can't be estimated yet — the archive may still be importing.";
+      where.textContent = "";
+      $("xd-files").hidden = true;
+      xdShowChecks([]);
+      return;
+    }
+    xdRenderPlan(plan);
+  }
+
+  function xdRenderPlan(plan) {
+    const est = plan.estimate;
+    // A large archive is easier to live with as several PDFs: suggest it once,
+    // when nothing was chosen before, and say so.
+    if (!xd.prefilled && !xd.remembered.count && est.pages > XD_BIG_PAGES && !xdSeveral()) {
+      xd.prefilled = true;
+      xdSetRadio("xd-count", "several");
+      if (!$("xd-max-pages").value) $("xd-max-pages").value = XD_BIG_PER_FILE;
+      xd.suggested = true;
+      xdSync();
+      return;
+    }
+    xd.prefilled = true;
+    $("xd-estimate").textContent = "About " + xdPagesText(est.pages) + " · " + xdSizeText(est.size, true)
+      + " · " + xdTimeText(est.seconds);
+    const where = $("xd-where");
+    where.textContent = "";
+    if (!xdSeveral() && plan.single_name) {
+      const one = document.createElement("span");
+      one.className = "mono";
+      one.textContent = plan.single_name;
+      where.append("This makes one file: ", one, ". ");
+    }
+    where.append("Saved beside the archive in ");
+    const path = document.createElement("span");
+    path.className = "mono";
+    path.textContent = plan.folder || "";
+    where.append(path);
+    const several = xdSeveral();
+    const files = plan.files || [];
+    $("xd-files").hidden = !several;
+    if (several) {
+      $("xd-files-title").textContent = files.length === 1
+        ? "This makes one file" : "This makes " + files.length + " files";
+      $("xd-file-list").innerHTML = files.map((f) => {
+        const contents = (f.contents || []).map((c) => "<li>" + escapeHtml(c) + "</li>").join("");
+        return "<li><details><summary><b>" + escapeHtml(f.name) + '</b><span class="xd-nums">about '
+          + escapeHtml(xdPagesText(f.pages)) + " · " + escapeHtml(xdSizeText(f.size, true))
+          + "</span></summary>" + (contents ? "<ul>" + contents + "</ul>" : "") + "</details></li>";
+      }).join("");
+    }
+    if (xd.suggested) {
+      xd.suggested = false;
+      where.append(" — this archive is large, so it is offered as several PDFs of about "
+        + XD_BIG_PER_FILE.toLocaleString() + " pages.");
+    }
+    const checks = plan.checks || [];
+    xdShowChecks(checks);
+    $("xd-go").disabled = checks.some((c) => c.level === "error");
+  }
+
+  async function xdModel() {
+    if (xd.model) return xd.model;
+    if (xd.fromReader && REAL_MODEL) return (xd.model = REAL_MODEL);
+    try {
+      const res = await fetch("/api/model");
+      if (res.ok) xd.model = await res.json();
+    } catch (_) { /* the list stays empty; the dialog says so */ }
+    return xd.model;
+  }
+
+  async function openExportDialog({ name, label, opener, fromReader = false }) {
+    if (xd) return;
+    const scrim = $("export-scrim");
+    let key = name;
+    if (fromReader) {
+      let current = null;
+      try {
+        const res = await fetch("/api/current-archive");
+        if (res.ok) current = await res.json();
+      } catch (_) { current = null; }
+      if (!current || !current.name) {
+        notify("Open an archive in the Reader first — there is nothing to export yet.", "Nothing to export");
+        return;
+      }
+      name = current.archive_name || current.name;
+      label = label || current.name;
+      key = name;
+    }
+    const remembered = xdLoadChoices(key);
+    xd = { name, key, label, fromReader, opener: opener || document.activeElement, ready: false,
+           seq: 0, timer: null, model: null, prefilled: false, suggested: false, remembered,
+           item: fromReader ? currentReaderScope() : null };
+    $("xd-title").textContent = "Export";
+    $("xd-archive").textContent = label;
+    $("xd-archive").title = label;
+    // The choices from last time (a convenience; the defaults when absent).
+    xdSetRadio("xd-scope", "all");
+    xdSetRadio("xd-format", ["pdf", "obsidian", "jekyll", "hugo"].includes(remembered.format) ? remembered.format : "pdf");
+    xdSetRadio("xd-count", remembered.count === "several" ? "several" : "one");
+    $("xd-split-by").value = ["auto", "community", "app", "container"].includes(remembered.split) ? remembered.split : "auto";
+    $("xd-max-pages").value = remembered.maxPages || "";
+    $("xd-max-mb").value = remembered.maxMb || "";
+    $("xd-comments").checked = remembered.comments !== false;
+    $("xd-external").checked = remembered.external !== false;
+    $("xd-attach").checked = remembered.attach === true;
+    $("xd-bookmarks").checked = remembered.bookmarks === true;
+    $("xd-item-row").hidden = !xd.item;
+    if (xd.item) $("xd-item-label").textContent = xd.item.label === "This page" ? "The open page"
+      : xd.item.label === "This post" ? "The open post" : xd.item.label === "This thread" ? "The open thread" : "The open item";
+    $("pdf-pick-tree").innerHTML = "";
+    $("xd-estimate").textContent = fromReader ? "Estimating…" : "Opening the archive…";
+    $("xd-where").textContent = "";
+    $("xd-files").hidden = true;
+    xdShowChecks([]);
+    $("xd-go").disabled = true;
+    xdSync({ replan: false });
+    scrim.hidden = false;
+    document.addEventListener("keydown", xdOnKey);
+    const first = document.querySelector('input[name="xd-scope"]:checked');
+    if (first) first.focus();
+
+    if (!fromReader) {
+      try {
+        const res = await fetch("/api/open-archive", { method: "POST",
+          headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name }) });
+        if (!res.ok) {
+          const j = await res.json().catch(() => ({}));
+          closeExportDialog();
+          if (res.status === 404 || j.status === "not_found") loadRecentArchives();
+          notify(res.status === 404 || j.status === "not_found"
+            ? "That archive can't be found any more. It may have been moved or deleted. Refresh the list and try again."
+            : j.detail || "That archive could not be opened. Refresh the Archives list and try again.", "Archive not opened");
+          return;
+        }
+      } catch (_) { closeExportDialog(); notify("The console could not be reached. Check that this tool is still running, then try again.", "Archive not opened"); return; }
+      // The Reader must not keep showing an archive it no longer has attached.
+      if (openArchiveName !== name) { REAL_MODEL = null; openArchiveName = name; }
+      refreshCurrentArchive();  // the "what's open" bar names the archive now attached
+    }
+    if (!xd) return;
+    xd.ready = true;
+    xdSync();
+  }
+
+  function closeExportDialog() {
+    if (!xd) return;
+    const opener = xd.opener;
+    clearTimeout(xd.timer);
+    xd.seq++;
+    xd = null;
+    $("export-scrim").hidden = true;
+    document.removeEventListener("keydown", xdOnKey);
+    if (opener && document.body.contains(opener)) { try { opener.focus(); } catch (_) {} }
+  }
+
+  function xdOnKey(event) {
+    if (!$("modal-scrim").hidden) return;      // a message sits on top: it takes the key
+    if (event.key === "Escape") { event.preventDefault(); closeExportDialog(); return; }
+    if (event.key !== "Tab") return;
+    const box = $("export-dialog");
+    const items = Array.from(box.querySelectorAll(
+      'button:not([disabled]), input:not([disabled]), select:not([disabled]), a[href], summary'))
+      .filter((el) => el.offsetParent !== null);
+    if (!items.length) return;
+    const firstEl = items[0], lastEl = items[items.length - 1];
+    if (!box.contains(document.activeElement)) { event.preventDefault(); firstEl.focus(); }
+    else if (event.shiftKey && document.activeElement === firstEl) { event.preventDefault(); lastEl.focus(); }
+    else if (!event.shiftKey && document.activeElement === lastEl) { event.preventDefault(); firstEl.focus(); }
+  }
+
+  async function xdGo() {
+    if (!xd || !xd.ready) return;
+    const format = xdFormat();
+    const { name, fromReader } = xd;
+    if (format !== "pdf") {
+      closeExportDialog();
+      openDevExportForReader(format);
+      return;
+    }
+    const scope = xdScopeParams();
+    if (scope.none) { notify("Tick at least one component to export.", "Nothing selected"); return; }
+    const params = [...scope.params, ...xdSplitParams(), ...xdOptionParams()];
+    if ($("xd-attach").checked) params.push("attach_attachments=1");
+    exportLast.scope = xdRadio("xd-scope") || "all";
+    exportLast.external = $("xd-external").checked;
+    exportLast.bookmarks = $("xd-bookmarks").checked;
+    closeExportDialog();
+    const summary = fromReader ? document.querySelector("#r-export-menu > summary") : null;
+    await startPdfExport({ params, summary, reattachName: name });
+  }
+
+  function wireExportDialog() {
+    const dlg = $("export-dialog");
+    if (!dlg) return;
+    dlg.addEventListener("change", async (event) => {
+      if (!xd) return;
+      if (event.target.name === "xd-scope" && event.target.value === "choose") {
+        $("xd-pick").hidden = false;
+        const model = await xdModel();
+        if (model && xd) {
+          renderPdfPicker(model);
+          if (!$("pdf-pick-tree").children.length) $("pdf-pick-tree").textContent = "This archive has no components to choose from.";
+        }
+      }
+      xdSync();
+    });
+    dlg.addEventListener("input", (event) => {
+      if (event.target.type === "number") xdSync();
+    });
+    $("xd-pick").addEventListener("click", (event) => {
+      const action = event.target.closest("button")?.dataset.pick;
+      if (!action) return;
+      $("xd-pick").querySelectorAll("input").forEach((i) => { i.checked = action === "all"; });
+      xdSync();
+    });
+    $("xd-go").addEventListener("click", xdGo);
+    $("xd-cancel").addEventListener("click", closeExportDialog);
+    $("export-scrim").addEventListener("mousedown", (event) => {
+      if (event.target === $("export-scrim")) closeExportDialog();
+    });
+    $("r-export-open")?.addEventListener("click", () => {
+      const menu = $("r-export-menu");
+      if (menu) menu.open = false;
+      openExportDialog({ fromReader: true, opener: menu ? menu.querySelector("summary") : null });
+    });
+  }
+
+  // "Export…" on an archive's own row: the same Export dialog the Reader's
+  // Export menu opens. The dialog attaches the archive server-side first,
+  // exactly as opening it in the Reader does, so nobody has to visit the
+  // Reader to export.
+  function buildArchiveExportButton(a) {
+    const label = a.display_name || a.name;
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "btn ra-export";
+    button.setAttribute("aria-haspopup", "dialog");
+    button.setAttribute("aria-label", "Export " + label);
+    button.title = "Export this archive as one or several PDFs, or in a developer format";
+    button.innerHTML = '<svg class="icon" aria-hidden="true"><use href="#i-download"/></svg> Export…';
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      openExportDialog({ name: a.name, label, opener: button });
+    });
+    return button;
   }
 
   // Fills the Archives panel's #archive-list ("Open an existing archive") from
@@ -7683,11 +8670,19 @@
         title.className = "ra-title";
         title.textContent = label;
         b.appendChild(title);
+        if (a.is_demo) {
+          // Fake data must never pass for real: say so on the card itself,
+          // not only in the folder name.
+          const badge = document.createElement("span");
+          badge.className = "demo-badge";
+          badge.textContent = "Demo data — fake";
+          b.appendChild(badge);
+        }
         const archiveName = document.createElement("span");
         archiveName.className = "archive-name mono";
         archiveName.textContent = a.name;
         b.appendChild(archiveName);
-        const itemsFact = (a.item_count || 0) + " items";
+        const itemsFact = woPlural(woItems(a), "item");
         const detail = document.createElement("span");
         detail.className = "foot-note archive-detail";
         detail.textContent = itemsFact + " · reading archive details…";
@@ -7736,6 +8731,18 @@
           openArchiveForUpdate(a.name);
         });
         actions.appendChild(extend);
+        const details = document.createElement("button");
+        details.type = "button";
+        details.className = "btn";
+        details.textContent = "Details";
+        details.setAttribute("aria-label", "Details of " + label);
+        details.title = "See what is inside this archive, without opening the Reader";
+        details.addEventListener("click", (event) => {
+          event.stopPropagation();
+          openArchive(a.name, label, details, "summary");
+        });
+        actions.insertBefore(details, actions.firstChild);
+        actions.appendChild(buildArchiveExportButton(a));
         // Save the whole archive as one .zip BESIDE it on disk — archives are
         // local and can be large, so nothing is streamed through the browser;
         // it writes <name>.zip next to the archive and reports where.
@@ -7759,7 +8766,7 @@
                 body: JSON.stringify({ name: a.name }),
               });
               const j = await res.json().catch(() => ({}));
-              if (!res.ok || !j.ok) { notify(j.error || "Could not create the zip.", "Zip failed"); return; }
+              if (!res.ok || !j.ok) { notify(j.error || "The .zip could not be saved. The disk may be full or protected. Free some space, then try again.", "Zip failed"); return; }
               const mb = j.size ? " (" + (j.size / 1048576).toFixed(1) + " MB)" : "";
               notify(
                 (j.already_zip ? "This archive is already a .zip: " : "Saved beside the archive: ") + j.path + mb,
@@ -7767,7 +8774,7 @@
               );
               loadRecentArchives();  // the new .zip shows up in the list
             } catch (_) {
-              notify("Could not create the zip.");
+              notify("The console could not be reached. Check that this tool is still running, then try again.", "Zip failed");
             } finally {
               dl.disabled = false;
               dl.textContent = label;
@@ -7798,7 +8805,7 @@
           fetch("/api/delete-archive", {
             method: "POST", headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ name: a.name, confirmation }),
-          }).then((r) => r.ok ? r.json() : r.json().then((j) => Promise.reject(new Error(j.error || "Delete failed"))))
+          }).then((r) => r.ok ? r.json() : r.json().then((j) => Promise.reject(new Error(j.error || "Nothing was deleted. The archive may be open in another program. Close it and try again."))))
             // The row is re-rendered out of existence, so the list rebuild
             // waits for its exit -- otherwise the delete lands in the same
             // frame and nothing ever animates. Runs alongside the request,
@@ -7807,7 +8814,7 @@
             .then(() => loadRecentArchives(before))
             .catch((e) => {
               row.classList.remove("leaving");
-              notify(e.message || "Could not delete archive.");
+              notify(e.message || "That archive could not be deleted. It may be open in another program. Close it and try again.", "Not deleted");
             });
         });
         actions.appendChild(del);
@@ -7850,7 +8857,7 @@
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ confirmation }),
     }).then((r) => {
-      if (!r.ok) return r.json().then((j) => Promise.reject(new Error(j.error || "Delete failed")));
+      if (!r.ok) return r.json().then((j) => Promise.reject(new Error(j.error || "Nothing was deleted. The archive may be open in another program. Close it and try again.")));
       return readNdjson(r, onProgress);
     });
   }
@@ -7905,7 +8912,7 @@
           notify("Deleted " + summary.deleted + ", but " + summary.failed.length + " could not be removed.", "Deleted with problems");
         }
         loadRecentArchives();
-      }).catch((e) => notify(e.message || "Could not delete demo archives."))
+      }).catch((e) => notify(e.message || "The demo archives could not be deleted. They may be open in another program. Close it and try again.", "Not deleted"))
         .then(() => { bulk.disabled = false; bulk.textContent = label; });
     });
   }
@@ -7994,6 +9001,13 @@
       pdf_style: currentStyleOverrides(),
       pdf_marks: currentMarkOverrides(),
       pdf_timeout: parseFloat(($("settings-pdf-timeout") || {}).value) || 120,
+      // Empty is a real answer: automatic, from the memory free at export time.
+      pdf_part_size_mb: (() => {
+        const raw = String(($("settings-pdf-part-size") || {}).value || "").trim();
+        if (raw === "") return null;
+        const v = parseFloat(raw);
+        return Number.isFinite(v) && v >= 0 ? v : null;
+      })(),
       pdf_small_image_px: smallImagePx(),
     };
   }
@@ -8100,6 +9114,10 @@
     if (pdfTimeoutInput && document.activeElement !== pdfTimeoutInput && s.pdf_timeout != null) {
       pdfTimeoutInput.value = String(s.pdf_timeout);
     }
+    const partSizeInput = $("settings-pdf-part-size");
+    if (partSizeInput && document.activeElement !== partSizeInput) {
+      partSizeInput.value = s.pdf_part_size_mb == null ? "" : String(s.pdf_part_size_mb);
+    }
     const smallImageInput = $("settings-pdf-small-image");
     if (smallImageInput && document.activeElement !== smallImageInput && s.pdf_small_image_px != null) {
       smallImageInput.value = String(s.pdf_small_image_px);
@@ -8129,6 +9147,16 @@
     // Only when it is not being edited: overwriting a half-typed path with a
     // refresh is a small thing that feels like the program fighting you.
     if (dirEl && document.activeElement !== dirEl) dirEl.value = s.archives_dir || "";
+    if (dirEl) dirEl.dataset.current = s.archives_dir || "";
+    // The folder saved last time was not there at start-up: say so, rather
+    // than let an empty list read as the archives being gone.
+    const dirStatus = $("set-archives-status");
+    if (dirStatus && s.archives_dir_missing) {
+      dirStatus.textContent = "The archives folder you chose before, " + s.archives_dir_missing +
+        ", was not found when the console started (a disconnected drive or share?), so the " +
+        "default folder is shown. Reconnect it and restart, or choose a folder here.";
+      dirStatus.classList.add("warn");
+    }
     const countEl = $("set-archives-count");
     if (countEl) {
       const n = s.archives_count || 0;
@@ -8184,9 +9212,9 @@
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(settingsBody()),
-      }).then((r) => r.ok ? r.json() : r.json().then((j) => Promise.reject(new Error(j.error || "Save failed"))))
+      }).then((r) => r.ok ? r.json() : r.json().then((j) => Promise.reject(new Error(j.error || "Your settings could not be saved. Try again."))))
         .then((s) => { renderSettings(s); if (status) status.textContent = "Saved for new ingests."; })
-        .catch((err) => { if (status) status.textContent = err.message || "Could not save settings."; })
+        .catch((err) => { if (status) status.textContent = err.message || "Your settings could not be saved. Try again."; })
         .finally(() => { save.disabled = false; });
     };
     // Applied and kept as it is pressed, like the theme control beside it in
@@ -8238,6 +9266,10 @@
       settingsSave.addEventListener("click", () =>
         saveSettings(settingsSave, $("settings-save-status")));
     }
+    const advSave = $("settings-adv-save");
+    if (advSave) {
+      advSave.addEventListener("click", () => saveSettings(advSave, $("settings-adv-status")));
+    }
     const styleSave = $("style-save");
     if (styleSave) {
       styleSave.addEventListener("click", () => saveSettings(styleSave, $("style-save-status")));
@@ -8256,7 +9288,7 @@
   //: in-process, and it is the one place left that shows how an archive comes
   //: to exist at all.
   const LIVE_ONLY_SECTIONS = ["select", "ingest"];
-  const LIVE_ONLY_CONTROLS = ["start-live-pdf", "live-pdf-preview"];
+  const LIVE_ONLY_CONTROLS = ["start-live-pdf", "live-pdf-preview", "welcome-capture", "ov-start"];
 
   function applyArchiveOnly(on) {
     document.querySelectorAll("[data-section]").forEach((button) => {
@@ -8300,7 +9332,13 @@
           if (status) status.textContent = body.error || "That directory cannot be used.";
           return;
         }
-        if (status) status.textContent = "Now reading archives from here.";
+        if (status) {
+          status.classList.remove("warn");
+          status.textContent = body.saved === false
+            ? "Now reading archives from here -- but it could not be saved, so the next start " +
+              "will use the default folder again."
+            : "Saved. Archives are read from here from now on, also after a restart or an update.";
+        }
         loadSettings();
         loadRecentArchives();
       })
@@ -8313,6 +9351,14 @@
     const drop = $("archives-dir-drop");
     if (!input) return;
     if (apply) apply.addEventListener("click", () => applyArchivesDir(input.value));
+    // A path typed but not saved is used by nothing: say so while it differs
+    // from the folder in use, so leaving Settings does not lose it unnoticed.
+    input.addEventListener("input", () => {
+      const status = $("set-archives-status");
+      if (!status) return;
+      const changed = input.value.trim() && input.value.trim() !== (input.dataset.current || "");
+      status.textContent = changed ? "Not saved yet -- press Save (or Enter) to use this folder." : "";
+    });
     input.addEventListener("keydown", (event) => {
       if (event.key === "Enter") { event.preventDefault(); applyArchivesDir(input.value); }
     });
@@ -8576,6 +9622,367 @@
     } catch (_) { /* leave the version line hidden if it can't be read */ }
   }
 
+  // ---------- Orientation: what is open, a first-run welcome, the archive
+  // summary, and "?" links into the manual. Three questions answered in one
+  // place -- what am I looking at, where do I start, what is in here -- so
+  // nobody has to guess what the tool is acting on. ----------
+
+  //: The facts about the open archive as /api/current-archive gave them, plus
+  //: what the archive list knows about it (display name, item count).
+  let woState = { known: false, name: null, listed: null, demo: false, info: null };
+  let woArchives = [];            // the archive list the switcher offers
+  let woBusy = false, woAgain = false;   // woBusy is the running promise
+  const WELCOME_KEY = "hcl-export-welcome-dismissed";
+
+  function woPlural(n, one, many) { return n + " " + (n === 1 ? one : (many || one + "s")); }
+
+  function welcomeDismissed() {
+    try { return localStorage.getItem(WELCOME_KEY) === "1"; } catch (_) { return false; }
+  }
+
+  //: How many things an archive holds, counted the way the summary page
+  //: counts them (pages, posts, topics, files) so the two never disagree. The
+  //: list's own `item_count` is every captured record, comments and blobs
+  //: included -- a bigger number that means something else.
+  function woItems(info) {
+    if (!info) return 0;
+    const groups = (info.summary && info.summary.groups) || [];
+    const sum = groups.reduce((n, g) => n + (Number(g.count) || 0), 0);
+    return sum || info.item_count || 0;
+  }
+
+  function woLabel() {
+    return (woState.info && (woState.info.display_name || woState.info.name)) || woState.name || "";
+  }
+
+  //: Look at what is open and what is on disk, then redraw the header, the
+  //: welcome and (if showing) the summary. Cheap to call often: calls made
+  //: while one is running collapse into a single follow-up.
+  function refreshWhatsOpen() {
+    if (woBusy) { woAgain = true; return woBusy; }
+    woBusy = (async () => {
+      try {
+        let current = null, list = null;
+        try {
+          const r = await fetch("/api/current-archive");
+          if (r.ok) current = await r.json();
+        } catch (_) { /* leave what we knew */ }
+        try {
+          const r = await fetch("/api/archives");
+          if (r.ok) list = await r.json();
+        } catch (_) { /* the header still names the open archive */ }
+        if (list) woArchives = list.archives || [];
+        if (current) {
+          const name = current.name || null;
+          const listed = current.archive_name || null;
+          const info = listed ? woArchives.find((a) => a.name === listed) || null : null;
+          woState = { known: true, name, listed, demo: !!current.is_demo_data, info };
+          demoArchiveOpen = woState.demo;
+        }
+      } finally {
+        woBusy = false;
+      }
+      renderWhatsOpen();
+      updateWelcome();
+      if (woAgain) { woAgain = false; await refreshWhatsOpen(); }
+    })();
+    return woBusy;
+  }
+
+  function renderWhatsOpen() {
+    const line = $("wo-line");
+    if (!line) return;
+    closeWoPop();
+    const switchable = woArchives.filter((a) => a.name !== woState.listed);
+    const sw = switchable.length
+      ? '<button class="wo-btn" id="wo-switch" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="wo-pop">Switch archive</button>'
+      : "";
+    if (!woState.known) return;
+    if (!woState.name) {
+      line.innerHTML = '<span class="wo-none">No archive open</span>' +
+        '<span class="wo-end"><button class="wo-btn" type="button" data-goto="archives">Choose one in Archives</button>' + sw + "</span>";
+    } else {
+      const info = woState.info;
+      const facts = [];
+      const held = woItems(info);
+      if (held) facts.push(woPlural(held, "item"));
+      if (!woState.listed) facts.push("opened from outside the archives folder");
+      else if (info && info.mtime) facts.push("updated " + whenRelative(info.mtime));
+      line.innerHTML =
+        (woState.demo ? '<span class="demo-badge wo-demo" title="Everything here is made up">Demo data</span>' : "") +
+        '<span class="wo-icon" aria-hidden="true">' + icon(woState.demo ? "flask" : "package") + "</span>" +
+        '<span class="wo-open">Open:</span>' +
+        '<button class="wo-name" id="wo-name" type="button" title="See what is inside this archive">' + escapeHtml(woLabel()) + "</button>" +
+        (facts.length ? '<span class="wo-facts">' + escapeHtml(facts.join(" · ")) + "</span>" : "") +
+        '<span class="wo-end"><button class="wo-btn" id="wo-details" type="button">Details</button>' + sw + "</span>";
+    }
+    const name = $("wo-name"), details = $("wo-details"), sw2 = $("wo-switch");
+    if (name) name.addEventListener("click", () => showSection("summary"));
+    if (details) details.addEventListener("click", () => showSection("summary"));
+    if (sw2) sw2.addEventListener("click", () => toggleWoPop());
+  }
+
+  function closeWoPop() {
+    const pop = $("wo-pop"), sw = $("wo-switch");
+    if (pop) pop.hidden = true;
+    if (sw) sw.setAttribute("aria-expanded", "false");
+  }
+
+  function toggleWoPop() {
+    const pop = $("wo-pop"), sw = $("wo-switch");
+    if (!pop || !sw) return;
+    if (!pop.hidden) { closeWoPop(); sw.focus(); return; }
+    pop.innerHTML = "";
+    const head = document.createElement("div");
+    head.className = "wo-pop-head";
+    head.textContent = "Switch to";
+    pop.appendChild(head);
+    woArchives.filter((a) => a.name !== woState.listed).slice(0, 8).forEach((a) => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "wo-pop-item";
+      const label = a.display_name || a.name;
+      b.innerHTML = '<span class="wo-pop-name">' + escapeHtml(label) + "</span>" +
+        (a.is_demo ? ' <span class="demo-badge">Demo data</span>' : "") +
+        '<span class="wo-pop-facts">' + escapeHtml(woPlural(woItems(a), "item")) +
+        (a.mtime ? " · " + escapeHtml(whenRelative(a.mtime)) : "") + "</span>";
+      b.addEventListener("click", () => {
+        closeWoPop();
+        // Stay where the work is: in the Reader, switching shows the other
+        // archive there; anywhere else, show what the new one holds.
+        const inReader = !$("panel-reader").hidden;
+        openArchive(a.name, label, null, inReader ? "reader" : "summary");
+      });
+      pop.appendChild(b);
+    });
+    const all = document.createElement("button");
+    all.type = "button";
+    all.className = "wo-pop-item wo-pop-all";
+    all.textContent = "All archives…";
+    all.addEventListener("click", () => { closeWoPop(); showSection("archives"); });
+    pop.appendChild(all);
+    pop.hidden = false;
+    sw.setAttribute("aria-expanded", "true");
+    const first = pop.querySelector(".wo-pop-item");
+    if (first) first.focus();
+  }
+
+  function wireWhatsOpen() {
+    const pop = $("wo-pop");
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape" && pop && !pop.hidden) { closeWoPop(); const s = $("wo-switch"); if (s) s.focus(); }
+    });
+    document.addEventListener("mousedown", (e) => {
+      if (pop && !pop.hidden && !pop.contains(e.target) && !(e.target.closest && e.target.closest("#wo-switch"))) closeWoPop();
+    });
+    if (pop) pop.addEventListener("keydown", (e) => {
+      if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
+      const items = Array.from(pop.querySelectorAll(".wo-pop-item"));
+      const at = items.indexOf(document.activeElement);
+      const next = items[(at + (e.key === "ArrowDown" ? 1 : -1) + items.length) % items.length];
+      if (next) { e.preventDefault(); next.focus(); }
+    });
+  }
+
+  // ---- First-run welcome ----
+  function updateWelcome() {
+    const box = $("ov-welcome");
+    if (!box) return;
+    const empty = woState.known && !woState.name && woArchives.length === 0;
+    box.hidden = !(empty && !welcomeDismissed());
+    const cap = $("welcome-capture");
+    if (cap) cap.hidden = !!($("settings-archive-only") || {}).checked;
+  }
+
+  function wireWelcome() {
+    const goto = (id, fn) => { const b = $(id); if (b) b.addEventListener("click", fn); };
+    goto("welcome-capture", () => showSection("select"));
+    goto("welcome-open", () => {
+      showSection("archives");
+      const drop = $("archive-drop");
+      if (drop) drop.scrollIntoView({ block: "center" });
+      const choose = $("archive-choose");
+      if (choose) choose.focus();
+    });
+    goto("welcome-demo", () => { const b = $("ov-demo"); if (b) b.click(); });
+    goto("welcome-dismiss", () => {
+      try { localStorage.setItem(WELCOME_KEY, "1"); } catch (_) {}
+      const box = $("ov-welcome");
+      if (box) box.hidden = true;
+    });
+  }
+
+  // ---- "?" links: open the Manual at an anchor ----
+  function openManualAt(anchor) {
+    if (xd) closeExportDialog();
+    showSection("manual");
+    const target = anchor ? document.getElementById(anchor) : null;
+    if (target) {
+      target.scrollIntoView({ block: "start" });
+      // The heading's id is on an empty <a>; move reading focus to its parent.
+      const heading = target.parentElement;
+      if (heading && heading.tabIndex < 0) heading.tabIndex = -1;
+      if (heading && heading.focus) heading.focus({ preventScroll: true });
+    } else {
+      window.scrollTo(0, 0);
+    }
+  }
+  function wireHelpLinks() {
+    document.addEventListener("click", (event) => {
+      const a = event.target.closest && event.target.closest("a[data-manual]");
+      if (!a) return;
+      event.preventDefault();
+      openManualAt(a.dataset.manual);
+    });
+    // The manual's own contents and "How do I" links are in-page anchors; the
+    // page is not hash-routed, so scroll them ourselves and keep the tab.
+    const manual = document.querySelector("article.manual");
+    if (manual) manual.addEventListener("click", (event) => {
+      const a = event.target.closest && event.target.closest('a[href^="#man-"]');
+      if (!a) return;
+      const target = document.getElementById(a.getAttribute("href").slice(1));
+      if (!target) return;
+      event.preventDefault();
+      target.scrollIntoView({ block: "start" });
+    });
+  }
+
+  // ---- Archive summary ----
+  let sumSeq = 0;
+  function sumSize(bytes) {
+    const n = Number(bytes) || 0;
+    return n >= 1048576 ? "about " + Math.round(n / 1048576) + " MB" : "under 1 MB";
+  }
+  function sumCost(node) {
+    return "about " + woPlural(node.pages, "page") + " · " + sumSize(node.size) + " as PDF";
+  }
+  function sumNode(node, depth) {
+    const kids = (node.children || []).filter((c) => c.level !== "chunk");
+    const label = '<span class="sn-title">' + escapeHtml(node.title || "(untitled)") + "</span>" +
+      (node.level === "community" ? ' <span class="sn-kind">' + (depth > 1 ? "subcommunity" : "community") + "</span>" : "") +
+      '<span class="sn-facts">' + escapeHtml(woPlural(node.items, "item")) + " · " + escapeHtml(sumCost(node)) + "</span>";
+    if (!kids.length) {
+      const li = document.createElement("li");
+      li.className = "sn-leaf";
+      li.innerHTML = '<div class="sn-row">' + label + "</div>";
+      return li;
+    }
+    const li = document.createElement("li");
+    const d = document.createElement("details");
+    d.open = depth <= 1 || node.level === "community";
+    d.innerHTML = '<summary class="sn-row">' + label + "</summary>";
+    const ul = document.createElement("ul");
+    ul.className = "sn-tree";
+    kids.forEach((k) => ul.appendChild(sumNode(k, depth + 1)));
+    d.appendChild(ul);
+    li.appendChild(d);
+    return li;
+  }
+
+  function sumDates(info) {
+    const groups = (info && info.summary && info.summary.groups) || [];
+    const stamps = groups.map((g) => g.captured_at).filter(Boolean).map((s) => new Date(s)).filter((d) => !isNaN(d.getTime()));
+    const fmt = (d) => d.toLocaleDateString(undefined, { year: "numeric", month: "long", day: "numeric" });
+    if (!stamps.length) return info && info.mtime ? "Last changed " + whenRelative(info.mtime) : "";
+    const first = new Date(Math.min.apply(null, stamps)), last = new Date(Math.max.apply(null, stamps));
+    return fmt(first) === fmt(last) ? "Captured " + fmt(first) : "First captured " + fmt(first) + " · last updated " + fmt(last);
+  }
+
+  async function loadSummary() {
+    const seq = ++sumSeq;
+    const body = $("sum-body"), actions = $("sum-actions");
+    if (!body) return;
+    await refreshWhatsOpen();
+    if (seq !== sumSeq) return;
+    const title = $("sum-title"), sub = $("sum-sub"), demo = $("sum-demo");
+    if (!woState.name) {
+      title.textContent = "Archive details";
+      sub.textContent = "";
+      demo.hidden = true;
+      actions.hidden = true;
+      body.innerHTML = '<p class="foot-note">No archive is open. <button class="btn" type="button" data-goto="archives">Choose one in Archives</button></p>';
+      return;
+    }
+    title.textContent = woLabel();
+    demo.hidden = !woState.demo;
+    sub.textContent = [sumDates(woState.info), woState.listed ? "" : "Opened from outside the archives folder"].filter(Boolean).join(" · ");
+    actions.hidden = false;
+    const archiveOnly = !!($("settings-archive-only") || {}).checked;
+    $("sum-extend").hidden = !woState.listed || archiveOnly;
+    body.innerHTML = '<p class="foot-note"><span class="spin" style="display:inline-block;vertical-align:-2px;margin-right:7px;"></span>Reading what is inside…</p>';
+    let data = null, status = 0;
+    try {
+      const r = await fetch("/api/contents");
+      status = r.status;
+      if (r.ok) data = await r.json();
+    } catch (_) { status = -1; }
+    if (seq !== sumSeq) return;
+    if (!data) {
+      body.innerHTML = '<p class="foot-note">' + (status === 503
+        ? "This archive is still being read. Give it a moment, then check again."
+        : "What is inside could not be read just now. Check that this tool is still running, then try again.") +
+        ' <button class="btn" type="button" id="sum-retry">Try again</button></p>';
+      const retry = $("sum-retry");
+      if (retry) retry.addEventListener("click", loadSummary);
+      return;
+    }
+    const root = data.tree || {};
+    const frag = document.createDocumentFragment();
+    const total = document.createElement("p");
+    total.className = "sum-total";
+    total.innerHTML = "<b>" + escapeHtml(woPlural(root.items || 0, "item")) + "</b> in all · " + escapeHtml(sumCost(root)) +
+      ' <span class="foot-note">Page and size figures are estimates for a single PDF.</span>';
+    frag.appendChild(total);
+    const kids = (root.children || []).filter((c) => c.level !== "chunk");
+    if (kids.length) {
+      const h = document.createElement("h2");
+      h.className = "sum-h";
+      h.textContent = "What is inside";
+      frag.appendChild(h);
+      const ul = document.createElement("ul");
+      ul.className = "sn-tree sn-root";
+      kids.forEach((k) => ul.appendChild(sumNode(k, 1)));
+      frag.appendChild(ul);
+    }
+    const largest = data.largest || [];
+    if (largest.length) {
+      const h = document.createElement("h2");
+      h.className = "sum-h";
+      h.textContent = "The largest items";
+      frag.appendChild(h);
+      const p = document.createElement("p");
+      p.className = "foot-note";
+      p.textContent = "Worth knowing about before you export: these take the most room.";
+      frag.appendChild(p);
+      const ol = document.createElement("ol");
+      ol.className = "sum-largest";
+      largest.forEach((it) => {
+        const li = document.createElement("li");
+        li.innerHTML = '<span class="sn-title">' + escapeHtml(it.title || "(untitled)") + "</span>" +
+          (it.in ? ' <span class="sn-kind">in ' + escapeHtml(it.in) + "</span>" : "") +
+          '<span class="sn-facts">about ' + escapeHtml(woPlural(it.pages, "page")) + " · " + escapeHtml(sumSize(it.size)) + "</span>";
+        ol.appendChild(li);
+      });
+      frag.appendChild(ol);
+    }
+    body.innerHTML = "";
+    body.appendChild(frag);
+  }
+
+  function wireSummary() {
+    const read = $("sum-read"), exp = $("sum-export"), ext = $("sum-extend");
+    if (read) read.addEventListener("click", () => {
+      showSection("reader");
+      setReaderSource(woLabel());
+      if (typeof enterReaderReal === "function") enterReaderReal(undefined, { reveal: true });
+    });
+    if (exp) exp.addEventListener("click", () => {
+      if (woState.listed) openExportDialog({ name: woState.listed, label: woLabel(), opener: exp });
+      else openExportDialog({ name: woState.name, label: woLabel(), opener: exp, fromReader: true });
+    });
+    if (ext) ext.addEventListener("click", () => { if (woState.listed) openArchiveForUpdate(woState.listed); });
+  }
+
   function boot() {
     initTheme();
     loadVersion();
@@ -8593,7 +10000,12 @@
     wireSelectionToolbar();
     wireDevExport();
     wireArchiveFilter();
-    wirePdfPicker();
+    wireExportDialog();
+    wireTray();
+    wireWhatsOpen();
+    wireWelcome();
+    wireHelpLinks();
+    wireSummary();
     wireAuthorSegments();
     loadShellIdentity();
     // Before the first screen is chosen: the settings decide which sections
@@ -8604,6 +10016,7 @@
     wireManual();
     loadDemoChips();
     loadRecentArchives();
+    refreshWhatsOpen();
     showSection("overview");
   }
 

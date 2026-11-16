@@ -140,11 +140,11 @@ def test_the_readers_developer_format_buttons_open_the_dialog():
     export with their format chosen, and nothing in the Reader writes an
     export on its own."""
     for fmt in ("obsidian", "jekyll", "hugo"):
-        assert f'id="r-export-{fmt}" data-devx-format="{fmt}"' in HTML
+        assert f'name="xd-format" value="{fmt}"' in HTML
     assert 'id="r-dev-html-mode"' not in HTML and 'id="r-dev-export-result"' not in HTML
     assert "exportDevFormat" not in JS
-    wire = _function("wireDevExport")
-    assert "openDevExportForReader(button.dataset.devxFormat)" in wire
+    go = _function("xdGo")
+    assert "openDevExportForReader(format)" in go
     reader = _function("openDevExportForReader")
     assert '"/api/current-archive"' in reader and '"/api/ingest"' not in reader
     assert "current.archive_name" in reader

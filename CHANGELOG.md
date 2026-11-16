@@ -1,9 +1,237 @@
 # Changelog
 
 Notable changes to `connections-export`, newest first. Versions follow
-[semantic versioning](https://semver.org/), and while the major version is 0
-the archive format may still change between minor versions — the format's own
-version is recorded inside every archive.
+[semantic versioning](https://semver.org/). Since 1.0.0 the archive format
+changes incompatibly only with a new major version; the format's own version
+is recorded inside every archive.
+
+## 1.0.0 — 2026-11-16
+
+The first stable release. Everything from the 0.2.0 betas, listed below, in
+one version: large archives exported to PDF in parts with a constant memory
+footprint, several PDFs split along communities and apps, content fitted to
+the printed page, a new cover, and an Export dialog and activity tray in the
+console. This version has been used to export single PDFs of more than 6,000
+pages from a real archive.
+
+**Fitting content to the page is a best effort.** Pages written for a
+scrolling browser window are reflowed, stacked or scaled so that nothing is
+cut off, and the manual lists every step ("How content is made to fit the
+page"). How well that works depends heavily on how a page was laid out, and
+no set of rules can anticipate every layout an author has invented. The
+content itself is never changed; the original page, as captured, stays in the
+archive and in the Reader.
+
+**From 1.0.0 on, the archive format is stable within a major version**: any
+1.x reads every archive written by a 1.x, and a change that would break that
+comes with 2.0.
+
+### Added
+- **A banner.** The console's Overview and the README open with the
+  connections-export banner: content from Connections kept safe in an archive
+  and turned into PDFs, notes and sites.
+- **A PDF of any size is assembled without holding it in memory.** Joining
+  the parts of a large PDF -- and adding bookmarks and attachments to any PDF
+  -- used to take two to three times the size of the result in memory (858 MB
+  for a 412 MB PDF). The export now copies Chromium's output straight from
+  file to file and rewrites only the small pieces it has to: the same 412 MB
+  PDF is assembled in 55 MB, whatever its size. The finished PDF is written
+  straight to its file rather than handed around in memory.
+- **A welcome, a "what's open" bar, and archive details.** On a first run (no
+  archive open and none on this computer) the Overview opens with three clear
+  starts: *Capture from Connections*, *Open an archive someone gave me*, and a
+  labelled *Try it with demo data*; "Not now" is remembered. A bar at the top
+  of every screen names the archive the Reader and Export act on, with how
+  many items it holds and when it was updated, and a *Switch archive* list.
+  Demo archives wear a "Demo data" badge there, on their cards and on their
+  details page. Every archive card has a **Details** button: what is inside
+  (communities, subcommunities, apps and wikis, blogs, forums, each with its
+  items and "about N pages, about M MB as PDF"), the largest items, when it
+  was captured, and Read, Export and Extend or update.
+- **Help where you need it.** The manual now starts with "How do I…" (capture a
+  community, open an archive someone sent, export one PDF or several, find
+  exports, update later, what to do if an export runs out of memory), and the
+  Export dialog, the Settings sections and archive details have a "?" that
+  opens the manual at the right place.
+- **An activity tray.** A small "Nothing running" / "PDF 42%" indicator at the
+  foot of the sidebar shows what is running -- a capture (with a link to its
+  live view) and PDF exports with progress, "File k of n", time so far, an
+  estimate of the time left when it can be worked out, and Cancel. Reload the
+  page, or open a second tab, and a running export is picked up again where it
+  is.
+- **Finish notices.** When a PDF you started finishes while you are in another
+  tab, the tab title says so, and, if you opted in once ("Notify me when long
+  exports finish"), the browser shows a notification.
+- **Recent exports** on the Archives page: each PDF, ZIP or set of PDFs saved
+  beside your archives, with when it was made, Download again and Show in
+  folder.
+- **Copy details** on error messages copies what support needs (the raw
+  answer, the request, the time and the version).
+- **One Export dialog for every format.** "Export..." on an archive in the
+  Archives list and in the Reader's Export menu open the same dialog: the
+  whole archive, chosen components or the open item, as one PDF, several PDFs
+  (split automatically, per community, per app or per container, with optional
+  page and size limits per file) or an Obsidian, Jekyll or Hugo export. It
+  shows the proposed files and an estimate of pages, size and time before
+  anything is made, warns when the machine is short of memory or disk, and
+  remembers your choices per archive. When it finishes, the files are already
+  saved beside the archive; the panel offers Download and Show in folder.
+- **PDF exports are saved beside their archive.** Each export is written to a
+  folder named after the archive with `-pdf` added (the archive list knows it
+  is not an archive), and downloaded from there -- a large export no longer
+  has to fit in memory or survive a browser download alone. The console can
+  show the folder in your file manager.
+- **Export a PDF straight from the Archives page.** Every archive in the list
+  has its own Export PDF button, with the same choices as the Reader (comments,
+  external images, open with bookmarks). It makes the whole archive's PDF with
+  the same progress panel and Cancel, without opening the Reader first.
+- **A captured community now records which community it sits under.** Each
+  captured community's own entry is archived, and a subcommunity's link to its
+  parent is read from it, so an export knows the community tree -- the basis
+  for splitting a PDF along a parent and its subcommunities. Archives made
+  earlier simply have no parent recorded.
+- **Large PDF exports are laid out in parts and joined into one document.**
+  The PDF used to be laid out in one piece, and the browser's memory grew with
+  it until a large archive ran out (5 GB for 3,300 pages). Above the *PDF
+  part size* the export is now laid out part by part and the parts joined:
+  page numbers, "page N of M" footers, the running section name, the table of
+  contents, bookmarks and every link -- including links from one part into
+  another -- read exactly as in a one-piece PDF. The same 3,300 pages now need
+  1.8 GB and take under 3 minutes instead of 16. A part that still runs out of
+  memory is split smaller and tried again; only an item too large on its own
+  stops the export, and the message names it.
+- **PDF export shows how far it has got, and can be cancelled.** Exporting a
+  large archive used to show only a spinner and a clock for many minutes. The
+  console now keeps a small panel in the corner (and the percentage on the
+  Export button) with a progress bar by pages, what is happening, "Part 2 of
+  5" when the export is laid out in parts, the time so far, and a Cancel
+  button. `connections-export pdf` prints the same steps to the terminal.
+- **Large PDFs adapt to the memory your machine has free.** At the start of
+  each export the tool reads how much memory is free and lays the document
+  out in parts that fit comfortably, so nobody has to tune a number. *PDF
+  part size (MB)* (Settings, `--part-size-mb`, `pdf_part_size_mb`) is empty
+  by default; set it only to force a size, or 0 for one piece.
+- **An export says what could go wrong before it starts.** Not enough disk
+  space, no usable browser, or very little free memory are reported before
+  the export begins, not minutes into it.
+- **Running out of memory is now said plainly.** When the browser runs out of
+  memory the export no longer just stops: the console shows a "Not enough
+  memory" message saying what to try, and the command line prints it and exits
+  with an error instead of a traceback.
+
+### Changed
+- **Screenshots side by side are printed one after another, at full width.**
+  A table whose pictures its columns would squeeze below 60% of their own
+  width -- a German column beside an English one, each with screenshots --
+  prints its cells one after another. Tables of text, or with small pictures,
+  stay side by side. The manual lists it among the fitting steps.
+- **A new cover.** The first page is named for what the export contains --
+  the community, the wiki, blog or forum, or the system it came from --
+  and lists what is inside with the number of pages, posts, topics and
+  files, the source and the date. It shows the community's picture when the
+  archive holds one, and carries no running header or footer. The PDF's own
+  title is the same name. Two new style tokens, `accent` and
+  `cover_title_size`, set its colour and title size.
+- **A design pass over the console.** Message dialogs now have one clear
+  "Close" button instead of both "Close" and "OK"; the largest items on an
+  archive summary keep their container names' capitals; a faint shadow no
+  longer shows along the right edge of every page; Settings fields match the
+  rest of the console; and the paste box on Archives fits a phone screen.
+- **The "what's open" bar updates when you export from an archive card.**
+  Opening the Export dialog from the Archives list now names that archive in
+  the bar instead of saying "No archive open". "Download again" in Recent
+  exports looks like the button it is, and the paste box on Archives matches
+  the other fields.
+- **Settings are split into everyday and Advanced.** Sign-in method, the PDF
+  time limit, PDF part size and small external images moved under a collapsed
+  "Advanced" section, each explained with an example. The PDF part size can be
+  left empty, meaning automatic (from free memory), and saves that way.
+- **One PDF** now says the name of the file it will make.
+- **Error messages say what happened and what to try**, without jargon: failed
+  PDFs, a missing browser, archives that will not open, a capture that will not
+  start or sign in, bad paths and links, zip and delete failures. A capture
+  that the console refuses to start now says why instead of showing an empty
+  run.
+- **Attachments are listed in the PDF, not carried inside it.** Each page
+  attachment used to be a link whose address was the whole file, so every
+  attachment of the export passed through the browser's memory and ended up
+  in the PDF inside a link most viewers cannot open -- enough, on a large
+  archive, to exhaust the machine. The PDF now lists each attachment with its
+  size; the files themselves are in the export package. Asked to, the export
+  attaches them to the PDF as real file attachments instead, which viewers
+  show in their attachments panel.
+- **A PDF export keeps its images on disk, not in memory,** while the browser
+  lays the document out.
+- **The demo's content now links across the whole export.** Every wiki page,
+  blog post, forum topic and Highlights page carries a short "Related
+  elsewhere in this community" paragraph linking to content far away in
+  document order: across wikis, and between the wiki, blogs and forums, with
+  the first container linking to the last and back. A large export rendered in
+  separate parts can now be checked for links that survive being stitched
+  together.
+
+### Fixed
+- **A table keeps its columns over a page break.** Each copy of a continued
+  row worked its columns out again from what it held, so a column whose text
+  had ended collapsed and the other took the whole width -- a screenshot in
+  it at a quarter of the page on one page, full width on the next. Column
+  widths are now fixed before the pages are made.
+- **Nothing is lost where a page breaks.** The engine that divides a PDF into
+  pages resumed after a break by searching for the text it had just printed,
+  and took the first place it was found. In a paragraph or table cell whose
+  text runs between screenshots, links or bold words, the same words often
+  occur earlier, so a page could resume at the wrong place: content was
+  printed twice and what followed it never, sometimes the whole second column
+  of a two-column table. The engine is corrected as it is loaded, and the
+  laid-out text is checked against the source in the tests, character for
+  character.
+- **A page's print styles no longer widen it after it has been fitted.**
+  Pages are laid out as they are printed, in print mode and at the width of
+  the sheet, so styles a page has for printing, or for a narrow window, are
+  in effect while it is fitted to the page.
+- **Tables whose cells ask for more width than the table no longer run off the
+  page.** When a table would not fit, the widths its author gave the table,
+  its columns and its cells are set aside and it lays out to the page. A box
+  placed far to one side goes back into the text, a picture in a narrow cell
+  is shrunk instead of the table around it, and whatever still cannot fit is
+  scaled down as a whole, with no lower limit -- and a last check on every
+  laid-out page shrinks anything that still reaches past it. Nothing is cut
+  off. The manual describes each step ("How content is made to fit the page").
+- **The archives folder is remembered.** It was the one setting kept only
+  while the console ran, so every restart -- an update most visibly -- pointed
+  it back at the default folder. It is now saved with the other settings; if
+  the saved folder is missing at start-up (a disconnected drive), Settings says
+  so instead of quietly showing the default. Settings also says when a typed
+  folder has not been saved yet, and saving other settings leaves it alone.
+- **`just console` starts on Linux without Kerberos headers.** Signing in as
+  yourself compiles Kerberos there, and without the system's headers the
+  install failed and the console never started. It now starts without that
+  part and says how to add it (`sudo apt-get install libkrb5-dev`); demo data
+  and archives need no sign-in.
+- **Phone-width screens.** Archive cards no longer run off the side, and the
+  sidebar shrinks to icons on a narrow window so the page keeps its room.
+- **Starting the console no longer ends on what looks like an error.** The
+  browser asks for a site icon on its own, and the console had none, so the
+  last line in the terminal was a "404 Not Found" for `/favicon.ico`. Where
+  the browser had opened behind other windows, that line was all anyone saw,
+  and it read as the start-up failing. The console now has an icon, and once
+  the browser is opened the terminal says so plainly: the console is
+  running, it may be behind other windows, here is its address, keep this
+  window open and press Ctrl+C to stop. If no browser could be opened, it
+  says that and gives the address to open.
+- **Links between apps work in the PDF.** A link from a wiki page to a blog
+  post, a forum topic, a Highlights page or a captured file was resolved
+  correctly, then written into the PDF as a jump to a wiki page that does
+  not exist, so it went nowhere. Each now lands on its target; a link to
+  something outside the exported selection keeps its address instead.
+
+### Documentation
+- **How to update, and why an old version can keep starting.** The README has
+  an *Updating* section: the command for each way of installing, how to try a
+  beta, and the usual reasons the old version still starts -- a console left
+  running, `uv run` starting a project's own locked copy instead of the
+  installed tool, a beta install split over two commands, another copy found
+  first. The beta pre-release notes give the same one-line install.
 
 ## 0.1.17 — 2026-09-29
 

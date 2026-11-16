@@ -57,23 +57,39 @@ def _page(page_id: str, /, **kwargs) -> DerivedPage:
 # --- 2.1: hierarchy + ordinal order, depth-first, stable anchors -----------
 
 
-def test_title_page_names_the_export_by_app():
-    from connections_export.derive.model import DerivedBlog, DerivedForum, DerivedWiki
+def test_title_page_is_named_for_its_content():
+    from connections_export.derive.model import (
+        DerivedBlog,
+        DerivedCommunity,
+        DerivedForum,
+        DerivedWiki,
+    )
+    from connections_export.pdf.html import cover_title
 
     forum = DerivedForum(id="f", title="Support Forum")
-    html = render_html(Interchange(forums=[forum]), blob_bytes=_no_blobs)
-    assert "HCL Forum Export" in html and "HCL Wiki Export" not in html
-    assert "Support Forum" in html  # not the uuid
+    assert cover_title(Interchange(forums=[forum])) == ("Forum archive", "Support Forum")
+    assert "Support Forum" in render_html(Interchange(forums=[forum]), blob_bytes=_no_blobs)
 
     blog = DerivedBlog(id="b", handle="team", title="Team Blog")
-    assert "HCL Blog Export" in render_html(Interchange(blogs=[blog]), blob_bytes=_no_blobs)
+    assert cover_title(Interchange(blogs=[blog])) == ("Blog archive", "Team Blog")
 
     wiki = DerivedWiki(id="w", label="w", title="W", root_page_ids=[], pages={})
-    assert "HCL Wiki Export" in render_html(Interchange(wikis=[wiki]), blob_bytes=_no_blobs)
+    # A few containers: their names together.
+    assert cover_title(Interchange(wikis=[wiki], forums=[forum]))[1] == "W · Support Forum"
 
-    # a mixed export is app-neutral
-    mixed = render_html(Interchange(wikis=[wiki], forums=[forum]), blob_bytes=_no_blobs)
-    assert "HCL Connections Export" in mixed
+    # One community with a subcommunity: the community.
+    parent = DerivedCommunity(id="c1", title="Engineering")
+    child = DerivedCommunity(id="c2", title="Engineering Tools", parent_id="c1")
+    kicker, title = cover_title(Interchange(wikis=[wiki], communities=[parent, child]))
+    assert title == "Engineering" and "1 subcommunity" in kicker
+
+    # Many containers and no community: the system they came from.
+    many = [DerivedForum(id=str(n), title=f"F{n}") for n in range(5)]
+    ix = Interchange(base_url="https://intranet.example.com/x", forums=many)
+    assert cover_title(ix)[1] == "intranet.example.com"
+
+    for ix in (Interchange(forums=[forum]), Interchange(wikis=[wiki], forums=[forum])):
+        assert "HCL" not in render_html(ix, blob_bytes=_no_blobs).split("</section>", 1)[0]
 
 
 def test_print_safety_css_keeps_wide_content_within_the_page():
@@ -114,13 +130,13 @@ def test_chrome_false_drops_cover_and_toc_but_keeps_body():
     ix = Interchange(wikis=[wiki])
 
     full = render_html(ix, blob_bytes=_no_blobs)
-    assert "Table of contents" in full and "HCL Wiki Export" in full
+    assert "Table of contents" in full and 'id="title-page"' in full
 
     # The live-preview tiles: body only, no cover, no TOC -- but the page's
     # own content and anchor still render.
     bare = render_html(ix, blob_bytes=_no_blobs, chrome=False)
     assert "Table of contents" not in bare
-    assert "HCL Wiki Export" not in bare
+    assert 'id="title-page"' not in bare
     assert 'id="p-p"' in bare and "welcome" in bare
 
 

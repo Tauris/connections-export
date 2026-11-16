@@ -26,6 +26,7 @@ from __future__ import annotations
 import html
 import random
 
+from connections_export.fakeserver import crosslinks
 from connections_export.fakeserver.content import page_comment
 from connections_export.fakeserver.model import (
     FakeAttachment,
@@ -748,7 +749,27 @@ def _links_showcase_html(*, wiki_label: str, target_label: str, target_title: st
 def build_prototype_wikiset() -> WikiSet:
     """The curated, believable demo dataset as a `WikiSet` -- what
     `hcl-serve --demo` crawls, so the demo shows convincing, topic-true
-    content produced by the real pipeline."""
+    content produced by the real pipeline.
+
+    Every page also gets a "Related elsewhere" paragraph linking to distant
+    content in other wikis, blogs and forums (`crosslinks`), so the demo holds
+    links that span the whole export."""
+    # Lazy: `gui.demo` imports this module, and the recipe is the one place the
+    # demo's blog/forum shape is defined.
+    from connections_export.gui.demo import demo_synth_seed  # noqa: PLC0415
+
+    wikiset = raw_wikiset()
+    items = crosslinks.catalogue(demo_synth_seed())
+    for wiki in wikiset.wikis:
+        for page in wiki.pages:
+            page.body_html += crosslinks.paragraph(
+                crosslinks.related(items, f"wiki:{wiki.label}/{page.label}"), page.title
+            )
+    return wikiset
+
+
+def raw_wikiset() -> WikiSet:
+    """The curated wikis without the cross-link paragraphs."""
     rng = random.Random(0xC0FFEE)
     ids = _IdFactory(rng)
     clock = _Clock(1_767_225_600)  # fixed base (2026-01-01T00:00:00Z), never wall clock

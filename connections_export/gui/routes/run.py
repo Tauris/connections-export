@@ -377,8 +377,11 @@ def register(
                         str(exc)
                         if isinstance(exc, AuthError)
                         else (
-                            f"auth mode {config.auth_mode!r} could not prepare a session "
-                            f"(a real handshake isn't wired up yet): {exc}"
+                            "Signing in to the deployment did not work. Check that you are "
+                            "signed in to this computer with the account that can open "
+                            "Connections, that the address is right, and that you can reach "
+                            f"it from here, then start again. (Sign-in method "
+                            f"{config.auth_mode!r}: {exc})"
                         )
                     ),
                 ),
@@ -679,7 +682,14 @@ def register(
         into_dir = resolve_archive(support.ARCHIVES_BASE, body.into) if body.into else None
         if body.into and into_dir is None:
             return JSONResponse(
-                {"status": "error", "detail": f"no such archive: {body.into}"}, status_code=404
+                {
+                    "status": "error",
+                    "detail": (
+                        "That archive can't be found any more. It may have been moved or "
+                        "deleted. Refresh the list and try again."
+                    ),
+                },
+                status_code=404,
             )
         archive_base = _archive_base_url(into_dir) if into_dir is not None else None
         if not effective_base_url and archive_base:
@@ -713,7 +723,10 @@ def register(
                 )
                 detail = (
                     f"{came_from} Updating it needs that deployment, and no address was "
-                    "given — refusing rather than writing demo content into it."
+                    "given — refusing rather than writing demo content into it. Nothing in the "
+                    "archive was "
+                    "changed. Drop a link from that deployment onto the Select screen and try "
+                    "again."
                 )
             else:
                 detail = (
@@ -752,7 +765,10 @@ def register(
                     "status": "error",
                     "detail": (
                         f"{came_from} Updating it needs that deployment, and no address was "
-                        "given — refusing rather than writing demo content into it."
+                        "given — refusing rather than writing demo content into it. Nothing in "
+                        "the archive was "
+                        "changed. Drop a link from that deployment onto the Select screen and "
+                        "try again."
                     ),
                 },
                 status_code=409,

@@ -537,7 +537,7 @@ def is_demo_archive(name: str) -> bool:
 #: The folder-name endings the developer-format exports are written under
 #: (`gui/routes/ingest.py`), beside the archive they came from -- which puts
 #: them in the archives folder whenever the archive is there.
-EXPORT_FOLDER_SUFFIXES = ("-hugo-content", "-jekyll-site", "-obsidian-vault")
+EXPORT_FOLDER_SUFFIXES = ("-hugo-content", "-jekyll-site", "-obsidian-vault", "-pdf")
 
 #: What an archive or a package holds at its root, whatever its name.
 _ARCHIVE_MARKERS = ("manifest.jsonl", "interchange.json")

@@ -186,7 +186,7 @@ def test_the_console_offers_hugo_and_the_page_content_choice():
     html = (static / "console.html").read_text(encoding="utf-8")
     script = (static / "console.js").read_text(encoding="utf-8")
 
-    assert 'id="r-export-hugo"' in html and "Export Hugo content" in html
+    assert 'name="xd-format" value="hugo"' in html and "Hugo content" in html
     assert 'id="devx-html-mode"' in html
     for value, label in (
         ("", "Default for the format"),
@@ -198,7 +198,7 @@ def test_the_console_offers_hugo_and_the_page_content_choice():
         assert f'<option value="{value}"' in html and f">{label}</option>" in html
     assert "Obsidian, Jekyll and Hugo are independent, third-party applications" in html
     assert "html_mode: mode || null" in script
-    assert 'data-devx-format="hugo"' in html and "openDevExportForReader" in script
+    assert 'name="xd-format" value="hugo"' in html and "openDevExportForReader" in script
 
 
 def test_the_starter_sites_front_page_layout_is_written_and_reported(tmp_path):

@@ -204,6 +204,9 @@ class _SettingsRequest(BaseModel):
     #: Running header/footer settings (see `connections_export.pdf.marks`).
     pdf_marks: dict[str, str] = Field(default_factory=dict)
     pdf_timeout: float = 120.0
+    #: Megabytes of document laid out at once; 0 means the whole document.
+    #: None = automatic, from the memory available (`pdf.memory`).
+    pdf_part_size_mb: float | None = None
     #: Size at or below which an external image counts as an icon in text.
     pdf_small_image_px: int = 48
 

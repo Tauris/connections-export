@@ -100,10 +100,12 @@ def test_browser_fidelity_page_titles_carry_the_sectitle_class():
 def test_document_title_is_a_meaningful_name():
     ix = _tiny_interchange()
     out = pdf_html.render_html(ix, blob_bytes=_no_blobs)
-    assert "<title>HCL Connections Export</title>" in out
+    # Named for what it contains -- the cover's title -- not for the tool.
+    assert f"<title>{pdf_html.cover_title(ix)[1]}</title>" in out
+    assert "HCL" not in out.split("<title>", 1)[1].split("</title>", 1)[0]
 
 
-def test_document_title_includes_base_url_when_present():
+def test_document_title_is_the_content_not_the_address():
     ix = Interchange(
         base_url="https://connections.example.com",
         wikis=[
@@ -117,8 +119,9 @@ def test_document_title_includes_base_url_when_present():
         ],
     )
     out = pdf_html.render_html(ix, blob_bytes=_no_blobs)
-    assert "<title>HCL Connections Export" in out
-    assert "connections.example.com" in out
+    assert "<title>Wiki One</title>" in out
+    # The address is on the cover, as where the content came from.
+    assert "https://connections.example.com" in out.split('id="title-page"', 1)[1]
 
 
 # --- cover page -------------------------------------------------------------
@@ -127,6 +130,14 @@ def test_document_title_includes_base_url_when_present():
 # app-aware heading (`_export_heading`) and the Chromium footer fix and so
 # could not be rebased: only the cover's layout and its counts line are
 # carried over, onto master's heading and name lines.
+
+
+def _cover_text(html: str) -> str:
+    """The cover's words, as a reader sees them: tags gone, spaces collapsed."""
+    import re
+
+    cover = html.split('id="title-page"', 1)[1].split("</section>", 1)[0]
+    return " ".join(re.sub(r"<[^>]+>", " ", cover.split(">", 1)[1]).split())
 
 
 def _cover_interchange() -> Interchange:
@@ -146,10 +157,10 @@ def _cover_interchange() -> Interchange:
 def test_cover_counts_items_and_pluralizes_them():
     html = pdf_html.render_html(_cover_interchange(), blob_bytes=_no_blobs)
 
-    # One wiki, two pages: singular and plural both come from the same helper.
-    assert "1 wiki" in html
-    assert "2 pages" in html
-    assert "1 wikis" not in html
+    # One wiki, two pages: the wiki is the title, the pages a figure.
+    text = _cover_text(html)
+    assert "Wiki archive Engineering Handbook" in text
+    assert "2 pages" in text
 
 
 def test_cover_starts_its_own_page():
@@ -157,27 +168,26 @@ def test_cover_starts_its_own_page():
     branch added it inline because neither `_STYLE` defines `#title-page`."""
     html = pdf_html.render_html(_cover_interchange(), blob_bytes=_no_blobs)
 
-    cover = html.split('id="title-page"', 1)[1].split("</section>", 1)[0]
-    assert "page-break-after: always" in cover
+    assert "page-break-after: always" in pdf_html.COVER_CSS
+    assert "#title-page" in html.split("</head>", 1)[0]
 
 
-def test_cover_keeps_the_app_aware_heading_and_content_names():
-    """The port must not regress `_export_heading` (6a13282) or drop the
-    titles the cover already listed -- the counts line is additive."""
+def test_cover_names_the_content_and_where_it_came_from():
     html = pdf_html.render_html(_cover_interchange(), blob_bytes=_no_blobs)
+    cover = html.split('id="title-page"', 1)[1].split("</section>", 1)[0]
 
-    assert "HCL Wiki Export" in html
-    assert "Engineering Handbook" in html
-    assert "Source: https://connections.example.com" in html
+    assert "Engineering Handbook" in cover
+    assert "Wiki archive" in cover
+    assert "https://connections.example.com" in cover
+    assert "HCL" not in cover
 
 
 def test_browser_fidelity_cover_is_styled_too():
-    """Both render paths share `_render_title_page`, which is why the cover
-    is styled inline rather than through either `_STYLE` block."""
-    cover = pdf_bf._render_title_page(_cover_interchange(), "2026-01-01")
+    """Both render paths share `_render_title_page` and its stylesheet."""
+    out = pdf_bf.render_html_browser(_cover_interchange(), _no_blobs)
 
-    assert "page-break-after: always" in cover
-    assert "1 wiki" in cover
+    assert pdf_html.COVER_CSS in out.split("</head>", 1)[0]
+    assert 'id="title-page"' in out
 
 
 def test_cover_counts_posts_and_topics_not_just_wiki_pages():
@@ -205,10 +215,10 @@ def test_cover_counts_posts_and_topics_not_just_wiki_pages():
     )
 
     blog_html = pdf_html.render_html(Interchange(blogs=[blog]), blob_bytes=_no_blobs)
-    assert "3 posts" in blog_html
+    assert "3 posts" in _cover_text(blog_html)
 
     forum_html = pdf_html.render_html(Interchange(forums=[forum]), blob_bytes=_no_blobs)
-    assert "2 topics" in forum_html
+    assert "2 topics" in _cover_text(forum_html)
 
 
 def test_toc_page_numbers_do_not_float_out_of_the_flow():

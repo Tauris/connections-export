@@ -96,6 +96,8 @@ def test_the_browser_waits_until_something_is_listening(monkeypatch):
 
     opened: list = []
     monkeypatch.setattr(cli.webbrowser, "open", lambda url: opened.append(url) or True)
+    # The note printed after opening must not land in a later test's output.
+    monkeypatch.setattr(cli, "_REASSURE_AFTER_SECONDS", 0)
 
     listener = socket.socket()
     listener.bind(("127.0.0.1", 0))
@@ -135,3 +137,48 @@ def test_serve_does_not_open_a_browser_unless_asked(monkeypatch):
     cli.serve_main(["--demo"], run=lambda *a, **kw: None)
 
     assert opened == []
+
+
+def _open_against_a_listener(monkeypatch, *, browser_opens: bool) -> list[str]:
+    """Run the open-when-listening thread against a real listener and return
+    what it printed."""
+    import socket
+    import time
+
+    printed: list[str] = []
+    monkeypatch.setattr(cli, "_REASSURE_AFTER_SECONDS", 0)
+    monkeypatch.setattr(cli, "_open_in_browser", lambda url: browser_opens)
+    monkeypatch.setattr(
+        "builtins.print", lambda *a, **_kw: printed.append(" ".join(str(x) for x in a))
+    )
+    listener = socket.socket()
+    listener.bind(("127.0.0.1", 0))
+    port = listener.getsockname()[1]
+    listener.listen(1)
+    try:
+        cli._open_browser_when_listening("127.0.0.1", port)
+        deadline = time.monotonic() + 5
+        while not printed and time.monotonic() < deadline:
+            time.sleep(0.05)
+    finally:
+        listener.close()
+    return printed
+
+
+def test_opening_the_browser_ends_on_a_reassuring_line(monkeypatch):
+    """Where the browser came up out of sight, the last terminal line was all
+    anyone saw -- and when that was a 404 for the icon, people took it for a
+    failed start. The last word is now that it is running, and where."""
+    printed = _open_against_a_listener(monkeypatch, browser_opens=True)
+    assert len(printed) == 1
+    assert "the console is running" in printed[0]
+    assert "behind other windows" in printed[0]
+    assert "http://127.0.0.1:" in printed[0]
+    assert "Ctrl+C" in printed[0]
+
+
+def test_when_no_browser_opens_it_says_to_open_the_address(monkeypatch):
+    printed = _open_against_a_listener(monkeypatch, browser_opens=False)
+    assert len(printed) == 1
+    assert "no browser could be opened" in printed[0]
+    assert "Open http://127.0.0.1:" in printed[0]

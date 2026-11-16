@@ -127,6 +127,7 @@
   .sb-collapse { background: none; border: 0; color: var(--ink-faint); cursor: pointer; align-self: flex-end; font-size: 14px; }
   #app-main { flex: 1; min-width: 0; }
   .section-panel[hidden] { display: none; }
+  .btn[hidden] { display: none; }
   /* People switch views to get somewhere, so only the arriving panel is
      animated and the outgoing one is hidden at once -- exit choreography
      here would just be latency. */
@@ -444,11 +445,11 @@
   .scrim.show { transition: opacity var(--dur-base) var(--ease-out); }
   .scrim.show { opacity: 1; pointer-events: auto; }
   .drawer { position: fixed; top: 0; right: 0; height: 100%; width: min(560px, 94vw); z-index: 50;
-    background: var(--g1); border-left: 1px solid var(--line); box-shadow: -20px 0 50px -20px rgba(0,0,0,0.7);
+    background: var(--g1); border-left: 1px solid var(--line); box-shadow: none;
     transform: translateX(100%); transition: transform var(--dur-quick) var(--ease-in); display: flex; flex-direction: column; }
   /* Leaving is snappier than arriving (220ms out, 320ms in): dismissing must
      never feel slower than opening. */
-  .drawer.show { transform: none; transition: transform var(--dur-panel) var(--ease-out); }
+  .drawer.show { box-shadow: -20px 0 50px -20px rgba(0,0,0,0.7); transform: none; transition: transform var(--dur-panel) var(--ease-out); }
   .drawer.opening .dhead, .drawer.opening .dbody > .dsection { animation: dsec-in 200ms var(--ease-out) both; }
   .drawer.opening .dbody > .dsection:nth-child(1) { animation-delay: 40ms; }
   .drawer.opening .dbody > .dsection:nth-child(2) { animation-delay: 80ms; }
@@ -895,7 +896,11 @@
   .settings-row .v.good { color: var(--good); }
   .settings-row .v.warn { color: var(--warn); }
   .settings-field { display: flex; flex-direction: column; gap: var(--sp-2); color: var(--ink-faint); font-size: 12px; }
-  .settings-field input, .settings-field select { width: 100%; box-sizing: border-box; }
+  .settings-field input, .settings-field select { width: 100%; box-sizing: border-box; min-height: 36px;
+    padding: 0 var(--sp-3); border-radius: var(--radius-sm); border: 1px solid var(--line);
+    background: var(--g1); color: var(--ink); }
+  .settings-field input:focus, .settings-field select:focus { outline: none; border-color: var(--accent-line);
+    box-shadow: 0 0 0 3px var(--accent-soft); }
   .settings-actions { display: flex; align-items: center; gap: var(--sp-3); margin-top: var(--sp-1); }
   #set-pdf-detail { margin-top: 2px; }
 
@@ -1683,7 +1688,12 @@ details.advanced > summary::-webkit-details-marker { display: none; }
 .archive-drop-main b { font-family: var(--sans); }
 .archive-drop-main p { margin: var(--sp-1) 0 0; }
 .archive-drop-actions { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; }
-.archive-drop-actions input[type="text"] { min-width: 18rem; }
+.archive-drop-actions input[type="text"] { min-width: 18rem; 
+  min-height: 36px; padding: 0 var(--sp-3); border-radius: var(--radius-sm); border: 1px solid var(--line);
+  background: var(--g1); color: var(--ink); font-size: var(--fs-helper); }
+.archive-drop-actions input[type="text"]:focus { outline: none; border-color: var(--accent-line);
+  box-shadow: 0 0 0 3px var(--accent-soft); }
+@media (max-width: 520px) { .archive-drop-actions { width: 100%; } .archive-drop-actions input[type="text"] { min-width: 0; width: 100%; box-sizing: border-box; } }
 /* Armed while something is being dragged anywhere over the page -- the whole
    page is the drop target, so the zone reports that rather than pretending to
    be the only place that works. */
@@ -1736,3 +1746,286 @@ details.advanced > summary::-webkit-details-marker { display: none; }
 .archive-repair-banner.is-done { border-color: var(--ok-border, #2e8b57); border-left-color: var(--ok-border, #2e8b57); background: var(--ok-bg, rgba(46, 139, 87, 0.08)); }
 .archive-repair-banner.is-running .repair-banner-icon { animation: repair-pulse 1.1s ease-in-out infinite; }
 @keyframes repair-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+
+/* PDF export progress: stays on screen while a render runs (minutes, on a
+   large archive), in the corner so the work underneath stays usable. */
+.pdf-progress { position: fixed; right: var(--sp-5, 20px); bottom: var(--sp-5, 20px); z-index: 60; width: min(360px, calc(100vw - 32px));
+  padding: var(--sp-3) var(--sp-4); border-radius: var(--radius); background: var(--g1); color: var(--ink);
+  border: 1px solid var(--accent-line); box-shadow: 0 12px 32px -12px rgba(0,0,0,0.5); display: flex; flex-direction: column; gap: var(--sp-2); }
+.pdf-progress[hidden] { display: none; }
+.pdf-progress .pp-head { display: flex; align-items: center; gap: var(--sp-2); font-weight: 600; font-size: 13px; }
+.pdf-progress .pp-head .spacer { flex: 1; }
+.pdf-progress .pp-time { font-family: var(--mono); font-variant-numeric: tabular-nums; font-weight: 400; color: var(--ink-dim); }
+.pdf-progress .pp-msg { font-size: 12px; color: var(--ink-dim); min-height: 1.4em; }
+.pdf-progress .pp-bar { height: 6px; border-radius: 999px; background: var(--g2); overflow: hidden; border: 1px solid var(--line-soft); position: relative; }
+.pdf-progress .pp-fill { height: 100%; width: 0; background: linear-gradient(90deg, var(--accent-2), var(--accent)); transition: width 0.5s cubic-bezier(.4,0,.2,1); }
+.pdf-progress .pp-bar.indeterminate .pp-fill { width: 35%; position: absolute; animation: pp-slide 1.4s var(--ease-inout, ease-in-out) infinite; }
+@keyframes pp-slide { from { left: -35%; } to { left: 100%; } }
+.pdf-progress .pp-meta { display: flex; justify-content: space-between; font-size: 12px; color: var(--ink-dim); }
+@media (prefers-reduced-motion: reduce) { .pdf-progress .pp-bar.indeterminate .pp-fill { animation: none; left: 0; width: 100%; opacity: 0.5; } .pdf-progress .pp-fill { transition: none; } }
+
+/* Export PDF on an archive's row: the Reader's export menu, in miniature. */
+
+/* The Export dialog: one place to choose what to export, in which format and
+   how many PDFs. The heading and the footer (estimate and buttons) stay in
+   view; only the choices between them scroll, and only when they are long. */
+.modal.xdlg { width: min(640px, 100%); max-height: calc(100vh - 2 * var(--sp-4)); padding: 0; gap: 0;
+  overflow: hidden; }
+.xd-head { flex: none; padding: var(--sp-5, 20px) var(--sp-6) var(--sp-3); border-bottom: 1px solid var(--line-soft); }
+.xd-sub { margin: var(--sp-1) 0 0; font-size: var(--fs-helper); color: var(--ink-dim);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.xd-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: var(--sp-4) var(--sp-6);
+  display: flex; flex-direction: column; gap: var(--sp-4); }
+.xd-group { border: 0; margin: 0; padding: 0; min-width: 0; display: flex; flex-direction: column; gap: var(--sp-2); }
+.xd-group legend { padding: 0; margin-bottom: var(--sp-2); font-size: var(--fs-helper); font-weight: 600; color: var(--ink); }
+.xd-choice { display: flex; align-items: flex-start; gap: var(--sp-2);
+  font-size: var(--fs-helper); color: var(--ink); cursor: pointer; line-height: 1.45; }
+.xd-choice input { margin: 3px 0 0; flex: none; }
+.xd-text { min-width: 0; }
+.xd-choice[hidden] { display: none; }
+.xd-hint { font-size: var(--fs-meta); color: var(--ink-faint); }
+.xd-note { margin: 0; font-size: var(--fs-helper); color: var(--ink-dim); line-height: 1.5; }
+#xd-dev[hidden], #xd-pdf[hidden], .xd-split[hidden], .xd-files[hidden] { display: none; }
+.xd-split { display: flex; flex-direction: column; gap: var(--sp-3); margin: var(--sp-1) 0 0 1.6em;
+  padding-left: var(--sp-3); border-left: 2px solid var(--line-soft); }
+.xd-field { display: flex; flex-direction: column; gap: var(--sp-1); font-size: var(--fs-helper); color: var(--ink-dim); }
+.xd-field.inline { flex-direction: row; align-items: center; flex-wrap: wrap; gap: var(--sp-2); }
+.xd-field select, .xd-field input[type="number"] { min-height: 32px; font: inherit; color: var(--ink);
+  background: var(--g2); border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 0 var(--sp-2); }
+.xd-field input[type="number"] { width: 6.5em; }
+.xd-field select { max-width: 100%; }
+.xd-limits { display: flex; flex-direction: column; gap: var(--sp-2); }
+.xd-files h3 { margin: 0 0 var(--sp-2); font-size: var(--fs-helper); font-weight: 600; color: var(--ink); }
+.xd-file-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column;
+  border: 1px solid var(--line-soft); border-radius: var(--radius-sm); max-height: 220px; overflow-y: auto; }
+.xd-file-list li { padding: var(--sp-2) var(--sp-3); font-size: var(--fs-helper); color: var(--ink-dim); }
+.xd-file-list li + li { border-top: 1px solid var(--line-soft); }
+.xd-file-list summary { cursor: pointer; display: flex; flex-wrap: wrap; gap: var(--sp-1) var(--sp-3); align-items: baseline; }
+.xd-file-list summary b { color: var(--ink); font-weight: 600; min-width: 0; overflow-wrap: anywhere; }
+.xd-file-list ul { margin: var(--sp-1) 0 0; padding-left: 1.2em; font-size: var(--fs-meta); }
+.xd-file-list .xd-nums { font-size: var(--fs-meta); color: var(--ink-faint); font-variant-numeric: tabular-nums; }
+.xd-foot { flex: none; padding: var(--sp-3) var(--sp-6) var(--sp-4); border-top: 1px solid var(--line-soft);
+  background: var(--g1); display: flex; flex-direction: column; gap: var(--sp-3); }
+.xd-summary { display: flex; flex-direction: column; gap: var(--sp-1); min-height: 2.9em; }
+.xd-summary p { margin: 0; font-size: var(--fs-helper); }
+.xd-estimate { color: var(--ink); font-weight: 600; }
+.xd-where { color: var(--ink-dim); overflow-wrap: anywhere; }
+.xd-where .mono { color: var(--ink); }
+.xd-foot[data-dev="1"] .xd-summary { visibility: hidden; }
+#xd-body:focus-visible, .xd-choice:focus-within { outline: none; }
+.xd-choice input:focus-visible, .xd-field select:focus-visible, .xd-field input:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 2px; }
+@media (max-width: 560px) {
+  .xd-head, .xd-body, .xd-foot { padding-left: var(--sp-4); padding-right: var(--sp-4); }
+  .xd-split { margin-left: 0; }
+}
+
+/* A finished export, in the same corner panel that showed its progress. */
+.pdf-progress .pp-close { border: 0; background: transparent; color: var(--ink-dim); cursor: pointer;
+  font-size: 18px; line-height: 1; padding: 0 var(--sp-1); border-radius: var(--radius-sm); }
+.pdf-progress .pp-close:hover { color: var(--ink); }
+.pdf-progress .pp-close:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.pdf-progress .pp-close[hidden], .pdf-progress [hidden] { display: none; }
+.pdf-progress .pp-running, .pdf-progress .pp-done { display: flex; flex-direction: column; gap: var(--sp-2); }
+.pdf-progress .pp-done p { margin: 0; font-size: 13px; color: var(--ink); }
+.pdf-progress .pp-done .pp-sub { color: var(--ink-dim); font-size: 12px; }
+.pdf-progress .pp-done-files { list-style: none; margin: 0; padding: 0; max-height: 140px; overflow-y: auto;
+  font-size: 12px; color: var(--ink-dim); display: flex; flex-direction: column; gap: 2px; }
+.pdf-progress .pp-done-files li { display: flex; justify-content: space-between; gap: var(--sp-3); }
+.pdf-progress .pp-done-files span:first-child { overflow-wrap: anywhere; color: var(--ink); }
+.pdf-progress .pp-actions { display: flex; flex-wrap: wrap; gap: var(--sp-2); }
+.pdf-progress .pp-folder { font-size: 12px; color: var(--ink-dim); display: flex; flex-wrap: wrap; gap: var(--sp-2); align-items: center; }
+.pdf-progress .pp-folder .mono { color: var(--ink); overflow-wrap: anywhere; font-size: 12px; }
+
+.xd-checks { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--sp-2); }
+.xd-checks[hidden] { display: none; }
+.xd-checks li { padding: var(--sp-2) var(--sp-3); border-radius: var(--radius-sm); font-size: var(--fs-helper);
+  line-height: 1.45; border: 1px solid var(--line-soft); color: var(--ink-dim); }
+.xd-checks li.is-error { color: var(--ink); background: var(--crit-soft); border-color: var(--crit); }
+.xd-checks li.is-warning { color: var(--ink); background: var(--g2); border-color: var(--line); }
+
+a.btn.primary { background: var(--accent-strong); color: var(--accent-ink); border-color: transparent; font-weight: 600;
+  text-decoration: none; display: inline-flex; align-items: center; justify-content: center; min-height: 32px;
+  padding: 0 var(--sp-3); border-radius: var(--radius-sm); cursor: pointer; }
+a.btn.primary:hover { filter: brightness(1.06); }
+.xd-files { margin-top: var(--sp-2); }
+
+/* ---- Activity tray: what is running, at the sidebar foot ---- */
+.sr-only { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden;
+  clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+.sb-activity { display: flex; align-items: center; gap: var(--sp-2); margin: var(--sp-2) 10px 0; padding: var(--sp-2);
+  border-radius: var(--radius-sm); border: 1px solid var(--line-soft); background: transparent; color: var(--ink-dim);
+  font-family: var(--sans); font-size: var(--fs-meta); cursor: pointer; text-align: left; }
+.sb-activity:hover { background: var(--g2); color: var(--ink); }
+.sb-activity:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.sb-activity-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ink-faint); flex: none; }
+.sb-activity.is-busy { color: var(--ink); border-color: var(--accent-line); }
+.sb-activity.is-busy .sb-activity-dot { background: var(--accent); animation: repair-pulse 1.6s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) { .sb-activity.is-busy .sb-activity-dot { animation: none; } }
+#sidebar.collapsed .sb-activity { justify-content: center; margin-left: var(--sp-1); margin-right: var(--sp-1); }
+.activity-pop { position: fixed; left: 12px; bottom: 56px; z-index: 70; width: min(320px, calc(100vw - 24px));
+  max-height: 70vh; overflow-y: auto; padding: var(--sp-3); border-radius: var(--radius); background: var(--g1); color: var(--ink);
+  border: 1px solid var(--line); box-shadow: 0 12px 32px -12px rgba(0,0,0,0.5); }
+.activity-pop[hidden] { display: none; }
+#activity-body { display: flex; flex-direction: column; gap: var(--sp-3); }
+.act-item { display: flex; flex-direction: column; gap: var(--sp-2); font-size: 13px; }
+.act-item .btn { align-self: flex-start; }
+.act-item .pp-bar { height: 6px; border-radius: 999px; background: var(--g2); overflow: hidden; border: 1px solid var(--line-soft); position: relative; }
+.act-item .pp-fill { height: 100%; width: 0; background: linear-gradient(90deg, var(--accent-2), var(--accent)); }
+.act-item .pp-bar.indeterminate .pp-fill { width: 35%; position: absolute; animation: pp-slide 1.4s ease-in-out infinite; }
+.act-meta, .act-idle { font-size: 12px; color: var(--ink-dim); margin: 0; }
+.act-recent { align-self: flex-start; }
+.pdf-progress .pp-eta { font-size: 12px; color: var(--ink-dim); }
+.pdf-progress .pp-eta:empty { display: none; }
+.pdf-progress .pp-notify { font-size: 12px; }
+
+/* ---- Recent exports (Archives page) ---- */
+.recent-exports { margin-top: var(--sp-6, 32px); }
+.recent-exports h2 { font-size: 15px; margin: 0 0 var(--sp-2); }
+.re-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--sp-2); }
+.re-row { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2) var(--sp-3); padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--line-soft); border-radius: var(--radius-sm); background: var(--g1); }
+.re-text { flex: 1 1 260px; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.re-name { font-size: 13px; overflow-wrap: anywhere; }
+.re-actions { display: flex; gap: var(--sp-2); }
+.re-actions { align-items: center; }
+.re-actions a.btn { font-family: var(--sans); font-size: var(--fs-body); font-weight: 500; line-height: 1; min-height: 32px; padding: 0 var(--sp-4);
+  justify-content: center; gap: var(--sp-2); border-radius: var(--radius-sm); border: 1px solid var(--line); background: var(--g1); color: var(--ink); }
+.re-where { flex-basis: 100%; overflow-wrap: anywhere; }
+.re-more { margin-top: var(--sp-2); }
+a.btn:not(.primary) { text-decoration: none; display: inline-flex; align-items: center; }
+
+/* ---- Settings: Advanced ---- */
+.settings-advanced { grid-column: 1 / -1; border: 1px solid var(--line); border-radius: var(--radius); background: var(--g1); }
+.settings-advanced > summary { cursor: pointer; padding: var(--sp-3) var(--sp-4); font-weight: 600; font-size: 13px; }
+.settings-advanced > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.settings-advanced > .foot-note { padding: 0 var(--sp-4); margin: 0; }
+.settings-advanced .settings-body { padding: var(--sp-4); display: flex; flex-direction: column; gap: var(--sp-3); }
+.settings-field .example { display: block; color: var(--ink-faint); }
+
+/* ---- Error details ---- */
+.copy-details { margin-top: var(--sp-2); }
+
+/* ===================== ORIENTATION: what is open, welcome, summary ===================== */
+/* One calm line at the top of every screen: which archive Reader, Export and
+   the summary are acting on. Sticky, so it is never scrolled away. */
+.whats-open { position: sticky; top: 0; z-index: 30; background: color-mix(in oklab, var(--g1) 94%, transparent);
+  backdrop-filter: blur(6px); border-bottom: 1px solid var(--line); }
+.wo-line { display: flex; align-items: center; flex-wrap: wrap; gap: var(--sp-1) var(--sp-3);
+  padding: var(--sp-2) clamp(14px, 3vw, 28px); min-height: 40px; font-size: var(--fs-helper); }
+.wo-icon { color: var(--ink-dim); display: inline-flex; }
+.wo-open { color: var(--ink-dim); }
+.wo-none { color: var(--ink-dim); }
+.wo-name { background: none; border: 0; padding: 0; font: inherit; font-weight: 600; color: var(--ink); cursor: pointer;
+  text-align: left; border-radius: var(--radius-sm); overflow-wrap: anywhere; max-width: 100%; }
+.wo-name:hover { color: var(--accent-strong); text-decoration: underline; }
+.wo-facts { color: var(--ink-dim); }
+.wo-btn { background: none; border: 1px solid transparent; font: inherit; color: var(--accent-strong); cursor: pointer;
+  padding: 2px var(--sp-2); border-radius: var(--radius-sm); }
+.wo-btn:hover { border-color: var(--accent-line); background: var(--accent-soft); }
+.wo-end { margin-left: auto; display: inline-flex; gap: var(--sp-2); flex: none; }
+.wo-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 0 1 auto; min-width: 0; }
+.wo-facts { white-space: nowrap; }
+.wo-line { flex-wrap: nowrap; }
+@media (max-width: 720px) { .wo-line { flex-wrap: wrap; } .wo-name { white-space: normal; } .wo-end { margin-left: 0; } }
+.wo-demo { flex: none; }
+.wo-pop { position: absolute; right: clamp(14px, 3vw, 28px); top: 100%; width: min(380px, calc(100vw - 28px));
+  background: var(--g1); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow);
+  padding: var(--sp-2); display: flex; flex-direction: column; gap: 2px; max-height: 70vh; overflow-y: auto; }
+.wo-pop[hidden] { display: none; }
+.wo-pop-head { font-size: var(--fs-overline); letter-spacing: .09em; text-transform: uppercase; color: var(--ink-faint);
+  padding: var(--sp-1) var(--sp-2); }
+.wo-pop-item { display: flex; flex-direction: column; align-items: flex-start; gap: 1px; text-align: left; width: 100%;
+  background: none; border: 0; font: inherit; color: var(--ink); cursor: pointer; padding: var(--sp-2); border-radius: var(--radius-sm); }
+.wo-pop-item:hover, .wo-pop-item:focus-visible { background: var(--accent-soft); }
+.wo-pop-name { font-weight: 600; overflow-wrap: anywhere; }
+.wo-pop-facts { font-size: var(--fs-meta); color: var(--ink-dim); }
+.wo-pop-all { color: var(--accent-strong); font-weight: 600; }
+.demo-badge + .archive-name { margin-top: 2px; }
+.recent-archive .demo-badge { margin: 2px 0; font-size: 10px; }
+
+/* First-run welcome */
+.welcome { margin: var(--sp-4) 0 var(--sp-8); padding: var(--sp-6); border: 1px solid var(--accent-line);
+  border-radius: var(--radius); background: var(--accent-soft); }
+.welcome[hidden] { display: none; }
+.welcome h2 { margin: 0 0 var(--sp-2); font-size: 22px; letter-spacing: -0.01em; }
+.welcome-lede { margin: 0 0 var(--sp-4); color: var(--ink-dim); max-width: 60ch; }
+.welcome-choices { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--sp-4); }
+.welcome-choice { display: flex; flex-direction: column; align-items: flex-start; gap: var(--sp-2); text-align: left;
+  padding: var(--sp-5, 20px); font: inherit; color: var(--ink); cursor: pointer; background: var(--g1);
+  border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); }
+.welcome-choice[hidden] { display: none; }
+.welcome-choice:hover { border-color: var(--accent); }
+.wc-icon { width: 40px; height: 40px; display: grid; place-items: center; border-radius: var(--radius-sm);
+  background: var(--accent-soft); color: var(--accent-strong); }
+.wc-icon .icon { width: 22px; height: 22px; }
+.wc-title { font-size: 17px; font-weight: 700; }
+.wc-text { color: var(--ink-dim); font-size: var(--fs-helper); line-height: 1.5; }
+.welcome-demo { display: flex; align-items: center; flex-wrap: wrap; gap: var(--sp-3); margin: var(--sp-4) 0 0; }
+.welcome-foot { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: var(--sp-3);
+  margin: var(--sp-3) 0 0; font-size: var(--fs-helper); }
+@media (max-width: 720px) { .welcome-choices { grid-template-columns: 1fr; } .welcome { padding: var(--sp-4); } }
+
+/* "?" help links */
+.help-link { display: inline-grid; place-items: center; width: 20px; height: 20px; border-radius: 50%;
+  border: 1px solid var(--line); color: var(--ink-dim); font-size: 12px; font-weight: 700; text-decoration: none;
+  vertical-align: middle; flex: none; background: var(--g1); }
+.help-link:hover, .help-link:focus-visible { color: var(--accent-strong); border-color: var(--accent-line); background: var(--accent-soft); }
+.xd-head { position: relative; }
+.xd-help { position: absolute; top: var(--sp-4); right: var(--sp-6); }
+@media (max-width: 560px) { .xd-help { right: var(--sp-4); } }
+
+/* Archive summary */
+.summary-wrap { max-width: 980px; margin: 0 auto; padding: var(--sp-8) clamp(14px,3vw,28px) var(--sp-12); }
+.sum-demo { margin: 0 0 var(--sp-4); padding: var(--sp-3) var(--sp-4); border-radius: var(--radius);
+  border: 1px solid color-mix(in oklab, var(--warn), transparent 50%); background: var(--warn-soft); }
+.sum-demo[hidden], .sum-actions[hidden] { display: none; }
+.sum-actions { display: flex; flex-wrap: wrap; gap: var(--sp-2); margin-bottom: var(--sp-5, 20px); }
+.sum-total { margin: 0 0 var(--sp-4); font-size: var(--fs-body); }
+.sum-total .foot-note { display: block; margin-top: 2px; }
+.sum-h { font-size: 15px; margin: var(--sp-5, 20px) 0 var(--sp-2); }
+.sn-tree { list-style: none; margin: 0; padding: 0; }
+.sn-tree .sn-tree { margin-left: var(--sp-5, 20px); border-left: 1px solid var(--line-soft); padding-left: var(--sp-3); }
+.sn-root { border: 1px solid var(--line); border-radius: var(--radius); background: var(--g1); padding: var(--sp-2) var(--sp-3); }
+.sn-tree details > summary { cursor: pointer; list-style: none; }
+.sn-tree details > summary::-webkit-details-marker { display: none; }
+.sn-tree details > summary::before { content: "\25B8"; color: var(--ink-faint); display: inline-block; width: 1.1em; flex: none; }
+.sn-tree details[open] > summary::before { content: "\25BE"; }
+.sn-leaf > .sn-row { padding-left: 1.1em; }
+.sn-row { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px var(--sp-3); padding: var(--sp-2) 0; border-radius: var(--radius-sm); }
+.sn-row:hover { background: var(--accent-soft); }
+.sn-title { font-weight: 600; overflow-wrap: anywhere; }
+.sn-kind { font-size: var(--fs-meta); color: var(--ink-dim); }
+.sn-facts { margin-left: auto; font-size: var(--fs-meta); color: var(--ink-dim); text-align: right; }
+.sum-largest { margin: 0; padding-left: var(--sp-6); display: flex; flex-direction: column; gap: 2px; }
+.sum-largest li { padding: 2px 0; }
+.sum-largest li .sn-facts { margin-left: var(--sp-3); }
+.help-link-text { color: var(--accent-strong); }
+@media (max-width: 560px) { .sn-facts { margin-left: 0; text-align: left; flex-basis: 100%; } }
+
+/* Archive cards at narrow widths: the actions drop under the card's text
+   instead of pushing it off screen. */
+@media (max-width: 720px) {
+  .recent-archive-row { flex-wrap: wrap; }
+  .recent-archive-row .recent-archive { flex: 1 1 60%; }
+  .recent-archive-row .ra-actions { flex: 1 1 100%; flex-wrap: wrap; margin-left: 0; }
+  .recent-archive-row .archive-delete { opacity: 1; }
+}
+
+/* Phone width: the sidebar becomes the same icon rail the collapse button
+   makes, so the page keeps the room instead of being squeezed beside labels. */
+@media (max-width: 720px) {
+  #sidebar { width: 54px; }
+  #sidebar .sb-label, #sidebar .sb-group, #sidebar .sb-collapse, #sidebar .sb-version, #sidebar .sb-identity, #sidebar .sb-status { display: none; }
+  #sidebar .nav-item { justify-content: center; }
+  #sidebar .theme-btn { gap: 0; padding: var(--sp-1); }
+  .wo-pop { left: var(--sp-3); right: var(--sp-3); width: auto; }
+}
+
+/* The banner at the top of the Overview. Its own dark artwork reads on both
+   themes; the frame keeps it from floating on the light one. */
+.ov-banner {
+  display: block; width: 100%; height: auto; aspect-ratio: 1600 / 533;
+  border-radius: var(--radius); margin: 0 0 var(--sp-6);
+  box-shadow: 0 1px 0 var(--line, rgba(0,0,0,0.08)), 0 10px 30px -18px rgba(5, 20, 40, 0.55);
+}

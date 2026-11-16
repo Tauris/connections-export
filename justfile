@@ -21,6 +21,10 @@ sync-sspi:
 test *args:
     uv run pytest {{args}}
 
+# Walk the console's key journeys in a real browser (needs Chromium)
+journeys:
+    uv run pytest tests/e2e -p no:cacheprovider
+
 # Lint
 lint:
     uv run ruff check .
@@ -39,6 +43,27 @@ check:
 # screen to watch the real pipeline run against the synthetic server -- which
 # deployment gets read follows from the URL, so there is no mode to set here.
 # Auto-picks a free port if the given one is busy; `just console 8137` to choose.
+#
+# Signing in as yourself needs the `sspi` extra. On Linux (WSL included) that
+# extra compiles Kerberos against the system's headers; without them the
+# install fails and the console never starts. So there it is used only when
+# the headers are present -- otherwise the console starts without it and says
+# how to add it (`sudo apt-get install libkrb5-dev`). Demo data and archives
+# need no sign-in. Windows and macOS have prebuilt packages and always get it.
+#
+# Start the console in your browser (`just console 8137` to choose the port)
+[unix]
+console port="8000":
+    if [ "$(uname)" = Darwin ] || command -v krb5-config >/dev/null 2>&1; then \
+        uv run --extra sspi connections-export serve --open --port {{port}}; \
+    else \
+        echo "Note: Kerberos headers not found, so signing in as yourself is off for this run." >&2; \
+        echo "      Demo data and archives work. To capture with your own sign-in:" >&2; \
+        echo "      sudo apt-get install libkrb5-dev   (Fedora/RHEL: sudo dnf install krb5-devel)" >&2; \
+        uv run connections-export serve --open --port {{port}}; \
+    fi
+
+[windows]
 console port="8000":
     uv run --extra sspi connections-export serve --open --port {{port}}
 

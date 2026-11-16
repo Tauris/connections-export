@@ -36,8 +36,13 @@ PERSISTED_KEYS = (
     "pdf_style",
     "pdf_marks",
     "pdf_timeout",
+    "pdf_part_size_mb",
     "pdf_small_image_px",
     "archive_only",
+    # The folder the archives live in. It was the one setting held only in
+    # memory, so every restart -- an update most visibly -- quietly pointed
+    # the console back at the default folder.
+    "archives_dir",
 )
 
 

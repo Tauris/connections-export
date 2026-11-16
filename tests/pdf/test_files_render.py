@@ -100,7 +100,8 @@ def test_an_empty_library_renders_nothing():
 def test_the_cover_counts_files():
     html = render_html(Interchange(file_libraries=[_library()]), blob_bytes=_no_blobs)
 
-    assert "2 files" in html
+    cover = html.split('id="title-page"', 1)[1].split("</section>", 1)[0]
+    assert "<b>2</b><span>files</span>" in cover
 
 
 def test_library_pluralizes_properly():

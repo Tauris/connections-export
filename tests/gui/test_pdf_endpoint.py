@@ -214,8 +214,8 @@ def test_reader_has_an_export_pdf_button():
     # the button's markup (DOM) stays on the served HTML, but its wiring
     # to /api/pdf (JS) now lives in console.js.
     js = js_response.text
-    assert 'id="r-pdf"' in html
-    assert 'const pdfUrl = "/api/pdf"' in js
+    assert 'id="r-export-open"' in html
+    assert 'const jobsUrl = "/api/pdf/jobs"' in js
 
 
 def test_pdf_include_exports_exactly_the_chosen_components(tmp_path, monkeypatch):

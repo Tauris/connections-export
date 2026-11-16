@@ -25,7 +25,9 @@ import mimetypes
 import re
 from collections.abc import Callable, Iterator, Mapping
 from contextvars import ContextVar
+from dataclasses import dataclass
 from html import escape as _escape
+from pathlib import Path
 from urllib.parse import urlsplit
 
 import lxml.etree
@@ -107,20 +109,98 @@ def external_images_register(
         _EXTERNAL.reset(token)
 
 
+#: The anchor each rendered item is reached by, keyed by the item's id. Unset
+#: outside a render that opened one: links then keep the historical `#p-` form.
+_ANCHORS: ContextVar[dict[str, str] | None] = ContextVar("link anchors", default=None)
+
+
+def link_anchors(interchange: Interchange) -> dict[str, str]:
+    """Every item this render shows, by id, with the anchor that reaches it.
+
+    Derive resolves a link to whatever the export holds -- a wiki page, a
+    blog post, a forum topic, a Highlights page, a captured file -- and records
+    the target's id only. Each kind is rendered under its own anchor prefix,
+    so writing `#p-` for all of them sent every link between apps nowhere."""
+    anchors: dict[str, str] = {}
+    for wiki in interchange.wikis:
+        for page, _depth in _walk_pages(wiki):
+            anchors.setdefault(page.id, f"p-{page.id}")
+    for blog in interchange.blogs:
+        for post_id in blog.post_ids:
+            if post_id in blog.posts:
+                anchors.setdefault(post_id, f"b-{post_id}")
+    for forum in interchange.forums:
+        for topic_id in forum.topic_ids:
+            if topic_id in forum.topics:
+                anchors.setdefault(topic_id, f"t-{topic_id}")
+    for highlights in interchange.rich_content:
+        for page_id in highlights.page_ids:
+            if page_id in highlights.pages:
+                anchors.setdefault(page_id, f"rc-{page_id}")
+    for library in interchange.file_libraries:
+        for file_id in library.file_ids:
+            if file_id in library.files:
+                anchors.setdefault(file_id, f"f-{file_id}")
+    return anchors
+
+
+@contextlib.contextmanager
+def link_anchor_register(interchange: Interchange) -> Iterator[dict[str, str]]:
+    """Scope one render's link targets (see `link_anchors`)."""
+    anchors = link_anchors(interchange)
+    token = _ANCHORS.set(anchors)
+    try:
+        yield anchors
+    finally:
+        _ANCHORS.reset(token)
+
+
+#: Links to items printed in OTHER files of a set of PDFs: item id -> the
+#: target written into the link (`REMOTE_TARGET`). Unset outside a set.
+_REMOTE: ContextVar[dict[str, str] | None] = ContextVar("remote links", default=None)
+
+#: How a link into another file of a set is written: `#` + this prefix +
+#: `<file index>:<anchor>`. `pdf.sets` turns it into a link to that file.
+REMOTE_TARGET = "hcl-file:"
+
+
+@contextlib.contextmanager
+def remote_link_register(remote: dict[str, str]) -> Iterator[None]:
+    """Within this scope a link to an item in `remote` (id -> target) points
+    into another file of a set instead of falling back to its address."""
+    token = _REMOTE.set(remote)
+    try:
+        yield
+    finally:
+        _REMOTE.reset(token)
+
+
 #: Where a served render's images live. `.invalid` can never resolve, and
 #: the print page's network guard (`browser.block_network`) answers these
 #: from memory -- nothing is fetched.
 SERVED_IMAGE_ORIGIN = "https://images.example.invalid/"
 
-#: A served render's images: address -> (content type, bytes).
-ServedImages = dict[str, tuple[str, bytes]]
+#: A served render's images: address -> (content type, bytes or the path of
+#: the spooled file).
+ServedImages = dict[str, tuple[str, "bytes | Path"]]
+
+
+def served_bytes(entry: tuple[str, bytes | Path]) -> bytes:
+    """The bytes of one served image, wherever they are kept."""
+    body = entry[1]
+    return body if isinstance(body, bytes) else Path(body).read_bytes()
+
 
 #: Unset outside `serving_images`: images are embedded as `data:` URIs.
 _SERVED: ContextVar[ServedImages | None] = ContextVar("served images", default=None)
 
 
+#: Where a spooling render writes its images; unset when they stay in memory.
+_SPOOL: ContextVar[Path | None] = ContextVar("image spool", default=None)
+
+
 @contextlib.contextmanager
-def serving_images() -> Iterator[ServedImages]:
+def serving_images(spool: Path | None = None) -> Iterator[ServedImages]:
     """Within this scope `render_html` lists each image here and refers to it
     by address, instead of writing it into the document as base64.
 
@@ -128,12 +208,18 @@ def serving_images() -> Iterator[ServedImages]:
     it far more slowly than the document grows -- 50 MB of images took
     seconds shy of Playwright's 30-second limit, 150 MB crashed the browser --
     while the same images answered on request load in a few seconds. Outside
-    the scope the document stays self-contained."""
+    the scope the document stays self-contained.
+
+    With `spool`, a folder, each image is written there once and only its path
+    kept: a large archive's images then never sit in memory together. The
+    caller owns the folder and its lifetime (it must outlive the browser)."""
     served: ServedImages = {}
     token = _SERVED.set(served)
+    spool_token = _SPOOL.set(spool)
     try:
         yield served
     finally:
+        _SPOOL.reset(spool_token)
         _SERVED.reset(token)
 
 
@@ -196,8 +282,15 @@ def _image_src(href: str, data: bytes) -> str:
     served = _SERVED.get()
     if served is None:
         return _data_uri(href, data)
-    url = SERVED_IMAGE_ORIGIN + hashlib.sha256(data).hexdigest()
-    served.setdefault(url, (_guess_content_type(href, data), data))
+    digest = hashlib.sha256(data).hexdigest()
+    url = SERVED_IMAGE_ORIGIN + digest
+    if url not in served:
+        spool = _SPOOL.get()
+        body: bytes | Path = data
+        if spool is not None:
+            body = spool / digest
+            body.write_bytes(data)
+        served[url] = (_guess_content_type(href, data), body)
     return url
 
 
@@ -650,13 +743,27 @@ def _link_lookup(links: list[LinkRef]) -> dict[str, LinkRef]:
 
 def _rewrite_links(tree: lxml.html.HtmlElement, links: list[LinkRef]) -> None:
     lookup = _link_lookup(links)
+    anchors = _ANCHORS.get()
     for anchor in tree.xpath("//a[@href]"):
         link = lookup.get(anchor.get("href"))
         if link is None:
             continue
-        if link.scope == "in_export" and link.target_page_id:
-            anchor.set("href", f"#p-{link.target_page_id}")
-            continue
+        target_id = link.target_page_id or link.target_file_id
+        if link.scope == "in_export" and target_id:
+            if anchors is None:
+                if link.target_page_id:
+                    anchor.set("href", f"#p-{link.target_page_id}")
+                    continue
+            elif target_id in anchors:
+                anchor.set("href", f"#{anchors[target_id]}")
+                continue
+            remote = _REMOTE.get()
+            if remote is not None and target_id in remote:
+                anchor.set("href", f"#{remote[target_id]}")
+                continue
+            # In the archive but not in this document (a narrower scope, or a
+            # file whose library is not exported): a jump would lead nowhere,
+            # so it is treated like a link to the deployment below.
         # hcl_deployment/external: keep the resolved URL, and show it
         # visibly too so it survives on paper (the design, "External/
         # deployment link kept visible").
@@ -802,15 +909,63 @@ def _render_comments(comments: list[DerivedComment]) -> str:
 # --- attachments -------------------------------------------------------------
 
 
+class AttachedFiles(list):
+    """The attachments a render chose to attach to the PDF itself:
+    `(name, digest)` in document order, each name unique."""
+
+    def add(self, filename: str, digest: str) -> str:
+        names = {name for name, _digest in self}
+        name, n = filename, 1
+        while name in names:
+            n += 1
+            stem, dot, ext = filename.rpartition(".")
+            name = f"{stem} ({n}).{ext}" if dot and stem else f"{filename} ({n})"
+        self.append((name, digest))
+        return name
+
+
+#: Unset outside `attaching_files`: attachments are listed, not attached.
+_ATTACHED: ContextVar[AttachedFiles | None] = ContextVar("attached files", default=None)
+
+
+@contextlib.contextmanager
+def attaching_files() -> Iterator[AttachedFiles]:
+    """Within this scope each captured attachment is recorded for attaching
+    to the finished PDF (`pdf.paged.attach_files`), and listed as attached."""
+    attached = AttachedFiles()
+    token = _ATTACHED.set(attached)
+    try:
+        yield attached
+    finally:
+        _ATTACHED.reset(token)
+
+
 def _render_attachment(attachment: DerivedAttachment, blob_bytes: BlobBytes) -> str:
-    filename = _escape(attachment.filename or attachment.id)
+    """One attachment: its name and size, never its bytes.
+
+    Never a link whose address IS the file, base64-encoded into the document:
+    every attachment of the export would go through the browser's memory and
+    into the PDF inside a link most viewers cannot open, and a large archive's
+    attachments alone can exhaust the machine. The files are in the export
+    package; asked to, the renderer attaches them to the PDF as real file
+    attachments instead (`attaching_files`)."""
+    raw_name = attachment.filename or attachment.id
+    filename = _escape(raw_name)
     data = None
+    digest = None
     if attachment.asset.present and attachment.asset.blob_hash:
         digest = _blob_digest(attachment.asset.blob_hash)
         data = blob_bytes(digest) if digest else None
-    if data is not None:
-        uri = _data_uri(attachment.asset.original_href, data)
-        return f'<li><a href="{uri}" download="{filename}">{filename}</a></li>'
+    if data is not None and digest is not None:
+        note = _human_size(len(data))
+        attached = _ATTACHED.get()
+        if attached is not None:
+            name = attached.add(raw_name, digest)
+            if name != raw_name:
+                note += f" &middot; attached as {_escape(name)}"
+            else:
+                note += " &middot; attached to this PDF"
+        return f'<li>{filename} <span class="hcl-attachment-meta">({note})</span></li>'
     marker = f'<span class="hcl-missing-attachment">[{NOT_CAPTURED_ATTACHMENT_MARKER}]</span>'
     return f"<li>{filename} {marker}</li>"
 
@@ -893,6 +1048,18 @@ def _render_external_content(register: _ExternalRegister) -> str:
 
 
 def _render_toc(interchange: Interchange, *, external_content: bool = False) -> str:
+    return (
+        _TOC_OPEN
+        + "".join(_toc_blocks(interchange, external_content=external_content))
+        + _TOC_CLOSE
+    )
+
+
+_TOC_OPEN = '<nav id="toc">'
+_TOC_CLOSE = "</nav>"
+
+
+def _toc_blocks(interchange: Interchange, *, external_content: bool = False) -> list[str]:
     """The table of contents, pre-split into page-sized blocks.
 
     Container names are list ITEMS, not headings: a heading between lists is a
@@ -951,7 +1118,7 @@ def _render_toc(interchange: Interchange, *, external_content: bool = False) -> 
     # standalone heading: a heading of its own is a block paged.js can drop at
     # a page boundary -- which it did, taking the title with it and leaving a
     # blank page where it had been.
-    return '<nav id="toc">' + "".join(blocks) + "</nav>"
+    return blocks
 
 
 # --- page sections -------------------------------------------------------
@@ -987,13 +1154,27 @@ def _render_page_section(
     )
 
 
-def _render_wiki(wiki: DerivedWiki, blob_bytes: BlobBytes, *, include_comments: bool = True) -> str:
+def _wiki_pieces(wiki: DerivedWiki, blob_bytes: BlobBytes, *, include_comments: bool = True):
+    """The wiki as `(open tag, heading, items, close tag)`, items rendered
+    only as they are taken -- see `_Container`."""
     heading = _escape(wiki.title or wiki.label)
-    sections = "".join(
-        _render_page_section(page, depth, blob_bytes, include_comments=include_comments)
+    items = (
+        (
+            _render_page_section(page, depth, blob_bytes, include_comments=include_comments),
+            page.title or page.label or page.id,
+        )
         for page, depth in _walk_pages(wiki)
     )
-    return f'<section class="hcl-wiki"><h1 data-outline="1">{heading}</h1>{sections}</section>'
+    return _Container(
+        '<section class="hcl-wiki">',
+        f'<h1 data-outline="1">{heading}</h1>',
+        items,
+        wiki.title or wiki.label,
+    )
+
+
+def _render_wiki(wiki: DerivedWiki, blob_bytes: BlobBytes, *, include_comments: bool = True) -> str:
+    return _wiki_pieces(wiki, blob_bytes, include_comments=include_comments).join()
 
 
 # --- blogs & forums ----------------------------------------------------------
@@ -1067,15 +1248,30 @@ def _render_blog(
     *,
     include_comments: bool = True,
 ) -> str:
-    heading = _escape(blog.title or blog.handle or blog.id)
-    posts = "".join(
-        _render_blog_post(
-            blog.posts[post_id], blob_bytes, scope_body, include_comments=include_comments
+    return _blog_pieces(blog, blob_bytes, scope_body, include_comments=include_comments).join()
+
+
+def _blog_pieces(
+    blog: DerivedBlog,
+    blob_bytes: BlobBytes,
+    scope_body: ScopeBody = _identity_scope,
+    *,
+    include_comments: bool = True,
+):
+    name = blog.title or blog.handle or blog.id
+    items = (
+        (
+            _render_blog_post(
+                blog.posts[post_id], blob_bytes, scope_body, include_comments=include_comments
+            ),
+            blog.posts[post_id].title or post_id,
         )
         for post_id in blog.post_ids
         if post_id in blog.posts
     )
-    return f'<section class="hcl-blog"><h1 data-outline="1">{heading}</h1>{posts}</section>'
+    return _Container(
+        '<section class="hcl-blog">', f'<h1 data-outline="1">{_escape(name)}</h1>', items, name
+    )
 
 
 def _render_forum_reply(
@@ -1181,7 +1377,8 @@ def _render_file_library(library, blob_bytes: BlobBytes) -> str:
         folders = ", ".join(sorted(folder_names.get(fid, fid) for fid in item.folder_ids))
         captured = item.asset is not None and item.asset.present
         rows.append(
-            "<tr>"
+            # The anchor a link to this document lands on.
+            f'<tr id="f-{_escape(item.id)}">'
             f"<td>{_escape(item.name or item.id)}</td>"
             f'<td class="hcl-file-meta">{_escape(folders)}</td>'
             f'<td class="hcl-file-meta">{_escape(_human_size(item.size))}</td>'
@@ -1212,13 +1409,24 @@ def _render_file_library(library, blob_bytes: BlobBytes) -> str:
 def _render_forum(
     forum: DerivedForum, blob_bytes: BlobBytes, scope_body: ScopeBody = _identity_scope
 ) -> str:
-    heading = _escape(forum.title or forum.id)
-    topics = "".join(
-        _render_forum_topic(forum.topics[topic_id], blob_bytes, scope_body)
+    return _forum_pieces(forum, blob_bytes, scope_body).join()
+
+
+def _forum_pieces(
+    forum: DerivedForum, blob_bytes: BlobBytes, scope_body: ScopeBody = _identity_scope
+):
+    name = forum.title or forum.id
+    items = (
+        (
+            _render_forum_topic(forum.topics[topic_id], blob_bytes, scope_body),
+            forum.topics[topic_id].title or topic_id,
+        )
         for topic_id in forum.topic_ids
         if topic_id in forum.topics
     )
-    return f'<section class="hcl-forum"><h1 data-outline="1">{heading}</h1>{topics}</section>'
+    return _Container(
+        '<section class="hcl-forum">', f'<h1 data-outline="1">{_escape(name)}</h1>', items, name
+    )
 
 
 def _render_rich_content_page(
@@ -1256,11 +1464,22 @@ def _render_rich_content(
     otherwise -- a reader counting three pages has no way to know a fourth
     space was set aside and left empty.
     """
+    pieces = _rich_content_pieces(highlights, blob_bytes, scope_body)
+    return pieces.join() if pieces is not None else ""
+
+
+def _rich_content_pieces(
+    highlights, blob_bytes: BlobBytes, scope_body: ScopeBody = _identity_scope
+):
     if not highlights.page_ids:
-        return ""
-    heading = _escape(highlights.title or "Highlights")
-    pages = "".join(
-        _render_rich_content_page(highlights.pages[page_id], blob_bytes, scope_body)
+        return None
+    name = highlights.title or "Highlights"
+    heading = _escape(name)
+    items = (
+        (
+            _render_rich_content_page(highlights.pages[page_id], blob_bytes, scope_body),
+            highlights.pages[page_id].title or page_id,
+        )
         for page_id in highlights.page_ids
         if page_id in highlights.pages
     )
@@ -1272,7 +1491,9 @@ def _render_rich_content(
         if empty > 0
         else ""
     )
-    return f'<section class="hcl-rc"><h1 data-outline="1">{heading}</h1>{note}{pages}</section>'
+    return _Container(
+        '<section class="hcl-rc">', f'<h1 data-outline="1">{heading}</h1>{note}', items, name
+    )
 
 
 # --- print CSS -------------------------------------------------------------
@@ -1324,12 +1545,77 @@ def style_overrides_css(overrides: dict[str, str]) -> str:
     return f":root {{ {body} }}"
 
 
+#: The cover's stylesheet, the end of `_STYLE` and written in its design
+#: tokens. `browser_fidelity` appends it to its own stylesheet, which defines
+#: the same tokens.
+#: Its height is fixed below the A4 text block, so the cover never spills
+#: onto a second sheet.
+COVER_CSS = """
+#title-page {
+  break-after: page; page-break-after: always;
+  box-sizing: border-box; height: 250mm; margin: 0;
+  display: flex; flex-direction: column;
+  border-top: 4mm solid var(--pdf-accent);
+  padding-top: 16mm; text-align: left; color: var(--pdf-text);
+}
+#title-page .cover-logo {
+  width: 22mm; height: 22mm; object-fit: cover; border-radius: 50%;
+  margin: 0 0 8mm; display: block;
+}
+#title-page .cover-kicker {
+  margin: 0 0 3mm; font-size: 9pt; font-weight: 700; letter-spacing: 0.16em;
+  text-transform: uppercase; color: var(--pdf-accent);
+}
+#title-page h1.cover-title {
+  margin: 0; font-size: var(--pdf-cover-title-size); line-height: 1.12;
+  font-weight: 700; letter-spacing: -0.01em; overflow-wrap: anywhere;
+}
+#title-page .cover-rule {
+  width: 28mm; height: 0; border: 0; border-top: 1.2mm solid var(--pdf-accent);
+  margin: 9mm 0 9mm;
+}
+#title-page .cover-contents { list-style: none; margin: 0; padding: 0; }
+#title-page .cover-contents li {
+  display: flex; gap: 4mm; align-items: baseline; padding: 1.6mm 0;
+  border-bottom: 0.3mm solid var(--pdf-rule); font-size: 11pt;
+}
+#title-page .cover-contents .cover-app {
+  flex: 0 0 26mm; font-size: 8pt; font-weight: 700; letter-spacing: 0.12em;
+  text-transform: uppercase; color: var(--pdf-muted);
+}
+#title-page .cover-more { color: var(--pdf-muted); font-style: italic; }
+#title-page .cover-figures {
+  display: flex; flex-wrap: wrap; gap: 6mm 12mm; margin: 12mm 0 0;
+}
+#title-page .cover-figure b {
+  display: block; font-size: 22pt; line-height: 1; color: var(--pdf-accent);
+  font-variant-numeric: tabular-nums;
+}
+#title-page .cover-figure span {
+  display: block; margin-top: 1.5mm; font-size: 8pt; letter-spacing: 0.12em;
+  text-transform: uppercase; color: var(--pdf-muted);
+}
+#title-page .cover-note { margin: 10mm 0 0; font-size: 10pt; color: var(--pdf-muted); }
+#title-page .cover-meta {
+  margin-top: auto; padding-top: 4mm; border-top: 0.3mm solid var(--pdf-rule);
+  display: flex; flex-wrap: wrap; gap: 3mm 14mm; font-size: var(--pdf-meta-size);
+  color: var(--pdf-muted);
+}
+#title-page .cover-meta dt {
+  font-size: 7.5pt; letter-spacing: 0.12em; text-transform: uppercase; font-weight: 700;
+}
+#title-page .cover-meta dd {
+  margin: 0.5mm 0 0; color: var(--pdf-text); overflow-wrap: anywhere;
+}
+"""
+
 #: The design tokens are the supported surface for changing how a PDF looks.
 #: Everything below is expressed in terms of them, so a reader can override a
 #: handful of names without depending on our rule structure -- and so we can
 #: restyle the internals without breaking anyone. `connections-export style
 #: --dump` writes this stylesheet out, tokens first, for editing.
-_STYLE = """
+_STYLE = (
+    """
 :root {
   /* Type */
   --pdf-font: sans-serif;
@@ -1352,6 +1638,9 @@ _STYLE = """
   --pdf-text: #111;
   --pdf-muted: #444;
   --pdf-rule: #cbd2dc;
+  /* The cover */
+  --pdf-accent: #1f5f8b;
+  --pdf-cover-title-size: 30pt;
 }
 body {
   font-family: var(--pdf-font);
@@ -1393,28 +1682,35 @@ body {
 img, svg, video, canvas, iframe, object, embed {
   max-width: 100% !important; height: auto;
 }
-.page-body, .post-body, .topic-body, .reply-body, .comment-body {
+.page-body, .post-body, .topic-body, .reply-body, .comment-body, .rc-body {
   overflow-wrap: break-word; word-break: break-word;
 }
-.page-body *, .post-body *, .topic-body *, .reply-body *, .comment-body * {
-  max-width: 100%; box-sizing: border-box;
+/* `!important`, and `min-width` too: an author's `min-width: 900px` beats a
+   plain `max-width`, and a page written for a scrolling window often has
+   one. What still cannot fit -- a table wider than its widest words, a
+   positioned box -- is scaled to the page by `pdf.paged` before layout. */
+.page-body *, .post-body *, .topic-body *, .reply-body *, .comment-body *, .rc-body * {
+  max-width: 100% !important; min-width: 0 !important; box-sizing: border-box;
 }
-.page-body pre, .post-body pre, .topic-body pre, .reply-body pre, .comment-body pre {
+.page-body pre, .post-body pre, .topic-body pre, .reply-body pre, .comment-body pre,
+.rc-body pre {
     margin: 0.75em 0 !important; padding: 0.6em !important;
     height: auto !important; min-height: 0 !important; max-height: none !important;
     break-inside: auto !important; page-break-inside: auto !important;
     white-space: pre-wrap !important; overflow-wrap: anywhere; word-break: break-word;
 }
-.page-body code, .post-body code, .topic-body code, .reply-body code, .comment-body code {
+.page-body code, .post-body code, .topic-body code, .reply-body code, .comment-body code,
+.rc-body code {
     max-width: 100%; height: auto !important; min-height: 0 !important;
     white-space: pre-wrap !important; overflow-wrap: anywhere; word-break: break-word;
 }
 .page-body table, .post-body table, .topic-body table,
-.reply-body table, .comment-body table {
+.reply-body table, .comment-body table, .rc-body table {
   table-layout: fixed; border-collapse: collapse;
 }
 .page-body td, .page-body th, .post-body td, .post-body th, .topic-body td,
-.topic-body th, .reply-body td, .reply-body th, .comment-body td, .comment-body th {
+.topic-body th, .reply-body td, .reply-body th, .comment-body td, .comment-body th,
+.rc-body td, .rc-body th {
   overflow-wrap: anywhere; word-break: break-word;
 }
 .hcl-link-url { word-break: break-all; }
@@ -1490,37 +1786,106 @@ img, svg, video, canvas, iframe, object, embed {
   }
 }
 """
+    + COVER_CSS
+)
 
 
 # --- top-level assembly ------------------------------------------------------
 
 
+def _host(base_url: str | None) -> str:
+    """`https://intranet.example.com/x` -> `intranet.example.com`."""
+    if not base_url:
+        return ""
+    from urllib.parse import urlsplit  # noqa: PLC0415
+
+    return urlsplit(base_url).hostname or base_url
+
+
+#: The apps in the order the cover lists them: model field, singular label.
+_COVER_APPS = (
+    ("wikis", "Wiki"),
+    ("blogs", "Blog"),
+    ("forums", "Forum"),
+    ("file_libraries", "Files"),
+    ("rich_content", "Highlights"),
+)
+
+
+def _containers(interchange: Interchange) -> list[tuple[str, object]]:
+    """Every container in the export with its app's label, in cover order."""
+    return [
+        (label, container)
+        for field_name, label in _COVER_APPS
+        for container in getattr(interchange, field_name)
+    ]
+
+
+def _container_name(container) -> str:
+    return (
+        getattr(container, "title", None)
+        or getattr(container, "label", None)
+        or getattr(container, "handle", None)
+        or container.id
+    )
+
+
+def _community_names(interchange: Interchange) -> list[str]:
+    """The communities the export's content belongs to, in first-seen order:
+    from the community records, else from what the containers say."""
+    names = [c.title for c in interchange.communities if c.title]
+    if not names:
+        for _, container in _containers(interchange):
+            title = getattr(container, "community_title", None)
+            if title:
+                names.append(title)
+    return list(dict.fromkeys(names))
+
+
+def _top_communities(interchange: Interchange) -> list[str]:
+    """The communities of the export that are not inside another community
+    of the export -- a community with its subcommunities is one."""
+    ids = {c.id for c in interchange.communities}
+    return list(
+        dict.fromkeys(
+            c.title for c in interchange.communities if c.title and c.parent_id not in ids
+        )
+    )
+
+
+def cover_title(interchange: Interchange) -> tuple[str, str]:
+    """What the export is called: `(kicker, title)`, named for its content.
+
+    One community (with any subcommunities): the community's name. One wiki,
+    blog, forum, ...: its own name. A few communities or containers: their
+    names together. Otherwise the system it came from. The kicker above the
+    title says what kind of thing that name is."""
+    communities = _community_names(interchange)
+    top = _top_communities(interchange) or communities
+    containers = _containers(interchange)
+    if len(top) == 1:
+        inside = len(communities) - 1
+        if inside > 0:
+            return f"Community archive · with {_pluralize(inside, 'subcommunity')}", top[0]
+        return "Community archive", top[0]
+    if len(containers) == 1:
+        label, container = containers[0]
+        return f"{label} archive", _container_name(container)
+    if 1 < len(top) <= 3:
+        return f"Archive of {len(top)} communities", " · ".join(top)
+    if top:
+        return f"Archive of {len(top)} communities", _host(interchange.base_url) or (
+            f"{top[0]} and {len(top) - 1} more"
+        )
+    if 1 < len(containers) <= 3:
+        return "Archive", " · ".join(_container_name(c) for _, c in containers)
+    return "Archive", _host(interchange.base_url) or "Archive"
+
+
 def _document_title(interchange: Interchange) -> str:
-    """The document `<title>` -- rendered into the PDF footer by
-    Chromium's `class="title"` template class (`pdf/browser.py`'s
-    `_FOOTER_TEMPLATE`), so this is the one "name" the footer can
-    actually carry. Per-section running names (the footer showing which
-    wiki page/post/topic a given printed page came from) aren't
-    achievable with Chromium's print engine -- see the `_STYLE` comment
-    above -- so a single, export-level name is what "footer with a name"
-    means here. Includes `base_url` when the interchange carries one, so
-    the footer names *which* deployment this export came from."""
-    if interchange.base_url:
-        return f"HCL Connections Export — {interchange.base_url}"
-    return "HCL Connections Export"
-
-
-def _export_heading(interchange: Interchange) -> str:
-    """The title-page heading, named for what the export actually contains --
-    so a forum export doesn't say "Wiki Export"."""
-    apps = []
-    if interchange.wikis:
-        apps.append("Wiki")
-    if interchange.blogs:
-        apps.append("Blog")
-    if interchange.forums:
-        apps.append("Forum")
-    return f"HCL {apps[0]} Export" if len(apps) == 1 else "HCL Connections Export"
+    """The document `<title>`: the PDF's own title, and `{title}` in its
+    running header and footer. The same name the cover gives the export."""
+    return cover_title(interchange)[1]
 
 
 def _pluralize(count: int, noun: str) -> str:
@@ -1537,77 +1902,84 @@ def _pluralize(count: int, noun: str) -> str:
     return f"{count} {noun}s"
 
 
-#: Inline, because both render paths (`html.py` and `browser_fidelity.py`)
-#: share `_render_title_page` and neither `_STYLE` block defines
-#: `#title-page` -- styling it here reaches both without duplicating a rule
-#: into each. `page-break-after` matters most: without it the cover ran
-#: straight into the first section instead of standing as its own page.
-_COVER_STYLE = (
-    "page-break-after: always; text-align: center; display: flex; "
-    "flex-direction: column; align-items: center; justify-content: center; "
-    # 24cm plus the page margins exceeded an A4 text block, so the cover
-    # spilled a few millimetres onto a second sheet and produced a blank
-    # page 2. 20cm fills the page without reaching its edge.
-    "min-height: 20cm;"
-)
-_COVER_NAMES_STYLE = "margin: 0.4em 0 0; font-size: 1.05em; color: #333;"
-_COVER_COUNTS_STYLE = "margin: 1em 0 0; font-size: 1.1em; color: #555;"
-#: The metadata block sits well below the content lines; the second line
-#: tucks under the first rather than repeating the gap.
-_COVER_META_STYLE = "margin: 2em 0 0.15em; font-size: 0.9em; color: #666;"
-_COVER_META_NEXT_STYLE = "margin: 0.15em 0 0; font-size: 0.9em; color: #666;"
+#: At most this many containers are named on the cover; the rest are counted.
+COVER_LIST_LIMIT = 8
 
 
-def _cover_counts(interchange: Interchange) -> str:
-    """The aggregate line: `1 wiki - 2 blogs - 47 pages`. The page total is
-    the one figure the name lines above cannot convey, which is the reason
-    this line earns its place next to them."""
-    counts = []
-    if interchange.wikis:
-        counts.append(_pluralize(len(interchange.wikis), "wiki"))
-    if interchange.blogs:
-        counts.append(_pluralize(len(interchange.blogs), "blog"))
-    if interchange.forums:
-        counts.append(_pluralize(len(interchange.forums), "forum"))
-    if interchange.file_libraries:
-        counts.append(_pluralize(len(interchange.file_libraries), "file library"))
-    # Each app's own leaf items, so the line still says something new on a
-    # single-container export, where the container count alone would only
-    # repeat the name line above it.
+def _cover_figures(interchange: Interchange) -> list[tuple[int, str]]:
+    """The totals worth a number on the cover: `(count, plural noun)`."""
+    figures = []
     for total, noun in (
         (sum(len(wiki.pages) for wiki in interchange.wikis), "page"),
         (sum(len(blog.posts) for blog in interchange.blogs), "post"),
         (sum(len(forum.topics) for forum in interchange.forums), "topic"),
         (sum(len(library.files) for library in interchange.file_libraries), "file"),
+        (sum(len(rc.pages) for rc in interchange.rich_content), "highlights page"),
     ):
         if total:
-            counts.append(_pluralize(total, noun))
-    if not counts:
+            figures.append((total, _pluralize(total, noun).split(" ", 1)[1]))
+    return figures
+
+
+def _cover_logo(interchange: Interchange, blob_bytes: BlobBytes | None) -> str:
+    """The community's own picture, when the export is of one community and
+    the archive holds it."""
+    if blob_bytes is None or len(interchange.communities) != 1:
         return ""
-    return f'<p style="{_COVER_COUNTS_STYLE}">' + " &middot; ".join(counts) + "</p>"
+    logo = interchange.communities[0].logo
+    if logo is None or not logo.present or not logo.blob_hash:
+        return ""
+    digest = _blob_digest(logo.blob_hash)
+    data = blob_bytes(digest) if digest else None
+    if not data:
+        return ""
+    src = _image_src(logo.original_href or "logo", data)
+    return f'<img class="cover-logo" src="{_escape(src)}" alt="">'
 
 
-def _render_title_page(interchange: Interchange, generated_at: str) -> str:
-    wiki_titles = ", ".join(_escape(wiki.title or wiki.label) for wiki in interchange.wikis)
-    blogs = ", ".join(_escape(blog.title or blog.handle or blog.id) for blog in interchange.blogs)
-    forums = ", ".join(_escape(forum.title or forum.id) for forum in interchange.forums)
-    names = f' style="{_COVER_NAMES_STYLE}"'
-    wikis_p = f"<p{names}>Wikis: {wiki_titles}</p>" if interchange.wikis else ""
-    blogs_p = f"<p{names}>Blogs: {blogs}</p>" if interchange.blogs else ""
-    forums_p = f"<p{names}>Forums: {forums}</p>" if interchange.forums else ""
-    base_url = (
-        f'<p style="{_COVER_META_NEXT_STYLE}">Source: {_escape(interchange.base_url)}</p>'
-        if interchange.base_url
-        else ""
+def _render_title_page(
+    interchange: Interchange,
+    generated_at: str,
+    set_note: str | None = None,
+    blob_bytes: BlobBytes | None = None,
+) -> str:
+    """The cover: what the export is called and what is in it, then where it
+    came from and when -- named for its content, not for the tool."""
+    kicker, title = cover_title(interchange)
+    containers = _containers(interchange)
+    items = "".join(
+        f'<li><span class="cover-app">{_escape(label)}</span>'
+        f"<span>{_escape(_container_name(container))}</span></li>"
+        for label, container in containers[:COVER_LIST_LIMIT]
+    )
+    if len(containers) > COVER_LIST_LIMIT:
+        items += (
+            f'<li><span class="cover-app"></span><span class="cover-more">and '
+            f"{len(containers) - COVER_LIST_LIMIT} more</span></li>"
+        )
+    # A single container is already the title; listing it again says nothing.
+    contents = f'<ul class="cover-contents">{items}</ul>' if len(containers) > 1 else ""
+    figures = "".join(
+        f'<div class="cover-figure"><b>{count:,}</b><span>{_escape(noun)}</span></div>'
+        for count, noun in _cover_figures(interchange)
+    )
+    figures = f'<div class="cover-figures">{figures}</div>' if figures else ""
+    note = f'<p class="cover-note">{_escape(set_note)}</p>' if set_note else ""
+    meta = []
+    if interchange.base_url:
+        meta.append(("Source", interchange.base_url))
+    meta.append(("Exported", generated_at))
+    meta_html = "".join(
+        f"<div><dt>{_escape(name)}</dt><dd>{_escape(value)}</dd></div>" for name, value in meta
     )
     return (
-        f'<section id="title-page" style="{_COVER_STYLE}">'
-        f'<h1 style="font-size: 2.4em; margin: 0; color: #111;">'
-        f"{_escape(_export_heading(interchange))}</h1>"
-        f"{wikis_p}{blogs_p}{forums_p}"
-        f"{_cover_counts(interchange)}"
-        f'<p style="{_COVER_META_STYLE}">Generated: {_escape(generated_at)}</p>'
-        f"{base_url}"
+        '<section id="title-page">'
+        f"{_cover_logo(interchange, blob_bytes)}"
+        f'<p class="cover-kicker">{_escape(kicker)}</p>'
+        f'<h1 class="cover-title">{_escape(title)}</h1>'
+        '<hr class="cover-rule">'
+        f"{contents}{figures}{note}"
+        f'<dl class="cover-meta">{meta_html}</dl>'
         "</section>"
     )
 
@@ -1642,16 +2014,179 @@ def render_html(
     embedding; a not-present or unresolved image is a visible marker,
     never a silent drop.
     """
+    sections: dict[str, list[Piece]] = {name: [] for name in PIECE_SECTIONS}
+    for piece in document_pieces(
+        interchange,
+        blob_bytes=blob_bytes,
+        generated_at=generated_at,
+        include_comments=include_comments,
+        chrome=chrome,
+        style_overrides=style_overrides,
+        extra_css=extra_css,
+        external_images=external_images,
+        small_image_px=small_image_px,
+    ):
+        sections[piece.section].append(piece)
+    return (
+        "<!DOCTYPE html>"
+        '<html lang="en"><head>'
+        + document_head(interchange)
+        + "</head><body>"
+        + "".join(join_pieces(sections[name]) for name in PIECE_SECTIONS)
+        + "</body></html>"
+    )
+
+
+def document_head(interchange: Interchange) -> str:
+    """What goes inside the document's `<head>`."""
+    return (
+        '<meta charset="utf-8">'
+        f"<title>{_escape(_document_title(interchange))}</title>"
+        f"<style>{_STYLE}</style>"
+    )
+
+
+#: Where a piece goes in the document, in order.
+PIECE_SECTIONS = ("front", "body", "external", "tail")
+
+
+@dataclass
+class Piece:
+    """One piece of the document: the cover, a block of the contents, an item
+    (the first of a container carrying the container's heading), a section
+    that is not split further, the external-content list, the reader's
+    styles. Pieces that share a `container` sit inside the same element,
+    opened by `open_tag` and closed by `close_tag`.
+
+    The document is exactly its pieces joined (`join_pieces`) -- which is what
+    lets a large export be laid out a few pieces at a time (`pdf.parts`)
+    without ever holding the whole of it."""
+
+    html: str
+    section: str = "body"
+    container: int | None = None
+    open_tag: str = ""
+    close_tag: str = ""
+    #: What a person would call it, for messages ("“Page” in “Wiki”").
+    label: str = ""
+    kind: str = "item"
+    #: Never cut the document between this piece and the next.
+    glue_next: bool = False
+
+
+def join_pieces(pieces) -> str:
+    """The HTML of `pieces`, in order, inside their containers."""
+    out: list[str] = []
+    current: Piece | None = None
+    for piece in pieces:
+        if current is not None and piece.container != current.container:
+            out.append(current.close_tag)
+            current = None
+        if current is None and piece.container is not None:
+            out.append(piece.open_tag)
+            current = piece
+        out.append(piece.html)
+    if current is not None:
+        out.append(current.close_tag)
+    return "".join(out)
+
+
+class _Container:
+    """A container's markup, its items rendered only as they are taken."""
+
+    def __init__(self, open_tag: str, prefix: str, items, name: str) -> None:
+        self.open_tag = open_tag
+        self.prefix = prefix
+        self.items = items
+        self.name = name
+
+    def join(self) -> str:
+        return self.open_tag + self.prefix + "".join(html for html, _t in self.items) + "</section>"
+
+
+def _container_pieces(container: _Container | None, key: int) -> Iterator[Piece]:
+    if container is None:
+        return
+    first = True
+    for html, title in container.items:
+        label = f"“{title}” in “{container.name}”" if title else f"“{container.name}”"
+        yield Piece(
+            html=(container.prefix + html) if first else html,
+            container=key,
+            open_tag=container.open_tag,
+            close_tag="</section>",
+            label=label,
+        )
+        first = False
+    if first:
+        # No items: the container is one piece of its own.
+        yield Piece(
+            html=container.open_tag + container.prefix + "</section>",
+            label=f"“{container.name}”",
+            kind="section",
+        )
+
+
+def document_pieces(
+    interchange: Interchange,
+    *,
+    blob_bytes: BlobBytes,
+    generated_at: str = DEFAULT_GENERATED_AT,
+    include_comments: bool = True,
+    chrome: bool = True,
+    style_overrides: dict[str, str] | None = None,
+    extra_css: str | None = None,
+    external_images: Mapping[str, bytes | None] | None = None,
+    small_image_px: int | None = None,
+    set_note: str | None = None,
+) -> Iterator[Piece]:
+    """The document `render_html` produces, one piece at a time.
+
+    Body pieces come first, rendered as they are taken; then the external
+    list, the reader's styles, and LAST the front matter -- the contents need
+    to know whether there is an external list, which only the bodies tell.
+    `Piece.section` says where each belongs."""
     # `chrome=False` renders just the body sections -- no cover, no TOC -- for
     # the live per-entity tiles, where each entity is rendered on its own and
     # a repeated cover/TOC per tile would be noise. The real export keeps both.
-    with external_images_register(external_images, small_image_px) as register:
-        body_sections = _render_bodies(interchange, blob_bytes, include_comments=include_comments)
+    key = 0
+    with (
+        external_images_register(external_images, small_image_px) as register,
+        link_anchor_register(interchange),
+    ):
+        # Comments are always ingested/archived; a caller (the PDF export) may
+        # omit them from the rendered document. Forum replies are the thread
+        # body, not secondary commentary, so they are never suppressed.
+        containers = [
+            *(
+                (lambda w=wiki: _wiki_pieces(w, blob_bytes, include_comments=include_comments))
+                for wiki in interchange.wikis
+            ),
+            *(
+                (lambda b=blog: _blog_pieces(b, blob_bytes, include_comments=include_comments))
+                for blog in interchange.blogs
+            ),
+            *((lambda f=forum: _forum_pieces(f, blob_bytes)) for forum in interchange.forums),
+            *(
+                (lambda h=highlights: _rich_content_pieces(h, blob_bytes))
+                for highlights in interchange.rich_content
+            ),
+        ]
+        for make in containers:
+            key += 1
+            yield from _container_pieces(make(), key)
+        for library in interchange.file_libraries:
+            html = _render_file_library(library, blob_bytes)
+            if html:
+                yield Piece(html=html, label=f"“{library.title or 'Files'}”", kind="section")
     external_content = chrome and register.included and bool(register.numbers)
-    title_page = _render_title_page(interchange, generated_at) if chrome else ""
-    toc = _render_toc(interchange, external_content=external_content) if chrome else ""
     if external_content:
-        body_sections += _render_external_content(register)
+        yield Piece(
+            html=_render_external_content(register),
+            section="external",
+            label="the list of external content",
+            kind="external",
+        )
 
     # Both go LAST, after the captured pages' own <style> blocks. Author CSS
     # is emitted inside the body and outranks anything in <head> at equal
@@ -1663,39 +2198,25 @@ def render_html(
         reader_css += f"<style>{style_overrides_css(style_overrides)}</style>"
     if extra_css:
         reader_css += f"<style>{extra_css}</style>"
+    if reader_css:
+        yield Piece(html=reader_css, section="tail", label="the reader's styles", kind="style")
 
-    return (
-        "<!DOCTYPE html>"
-        '<html lang="en"><head><meta charset="utf-8">'
-        f"<title>{_escape(_document_title(interchange))}</title>"
-        f"<style>{_STYLE}</style>"
-        "</head><body>"
-        f"{title_page}{toc}{body_sections}"
-        f"{reader_css}"
-        "</body></html>"
-    )
-
-
-def _render_bodies(
-    interchange: Interchange, blob_bytes: BlobBytes, *, include_comments: bool
-) -> str:
-    # Comments are always ingested/archived; a caller (the PDF export) may omit
-    # them from the rendered document. Forum replies are the thread body, not
-    # secondary commentary, so they are never suppressed.
-    return (
-        "".join(
-            _render_wiki(wiki, blob_bytes, include_comments=include_comments)
-            for wiki in interchange.wikis
+    if chrome:
+        yield Piece(
+            html=_render_title_page(interchange, generated_at, set_note, blob_bytes),
+            section="front",
+            label="the cover",
+            kind="cover",
+            glue_next=True,
         )
-        + "".join(
-            _render_blog(blog, blob_bytes, include_comments=include_comments)
-            for blog in interchange.blogs
-        )
-        + "".join(_render_forum(forum, blob_bytes) for forum in interchange.forums)
-        + "".join(
-            _render_rich_content(highlights, blob_bytes) for highlights in interchange.rich_content
-        )
-        + "".join(
-            _render_file_library(library, blob_bytes) for library in interchange.file_libraries
-        )
-    )
+        key += 1
+        for block in _toc_blocks(interchange, external_content=external_content):
+            yield Piece(
+                html=block,
+                section="front",
+                container=key,
+                open_tag=_TOC_OPEN,
+                close_tag=_TOC_CLOSE,
+                label="the table of contents",
+                kind="toc",
+            )
