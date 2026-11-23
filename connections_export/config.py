@@ -107,6 +107,12 @@ class Config(BaseModel):
     #: an update cheap; the console explains the trade at the point of
     #: choosing.
     recheck_comments: bool = False
+    #: The archive whose selections this run repeats into a new one, by folder
+    #: name -- recorded in the run's metadata (`RunMetadata.captured_again_from`).
+    captured_again_from: str | None = None
+    #: Known defects this run repairs in place, recorded in its run metadata
+    #: (`RunMetadata.repairs`).
+    repairs: list[str] = Field(default_factory=list)
     #: Overrides the cutoff an update would compute for itself. Absent by
     #: default, so a scripted monthly re-run stays correct without anyone
     #: editing a date. Earlier re-checks more, never less.

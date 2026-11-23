@@ -63,6 +63,32 @@ def test_a_job_runs_reports_progress_and_serves_the_file(tmp_path):
     assert "attachment" in file.headers["content-disposition"]
 
 
+def test_inline_image_attachment_choice_reaches_renderer(tmp_path):
+    seen = {}
+
+    def renderer(model, blob_bytes, attach_attachments=False, attach_inline_images=True):
+        seen.update(
+            attach_attachments=attach_attachments,
+            attach_inline_images=attach_inline_images,
+        )
+        return b"%PDF-1.4 job"
+
+    app = _app(tmp_path, renderer)
+
+    async def go():
+        async with _client(app) as c:
+            started = await c.post(
+                "/api/pdf/jobs",
+                params={"attach_attachments": "1", "attach_inline_images": "0"},
+            )
+            job = started.json()["job"]
+            return await _wait(c, job)
+
+    body = asyncio.run(go())
+    assert body["state"] == "done"
+    assert seen == {"attach_attachments": True, "attach_inline_images": False}
+
+
 def test_a_double_without_progress_keeps_the_old_contract(tmp_path):
     app = _app(tmp_path, lambda model, blob_bytes: b"%PDF-1.4 plain")
 

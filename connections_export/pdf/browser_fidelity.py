@@ -185,6 +185,10 @@ body {
 #toc a { text-decoration: none; color: #123; }
 .hcl-wiki > h1 { border-bottom: 2px solid #333; }
 .hcl-missing-image, .hcl-missing-attachment { color: #a00; font-style: italic; }
+.hcl-attachment-download {
+  color: inherit; text-decoration: underline; text-decoration-color: var(--pdf-muted);
+  text-decoration-style: dotted;
+}
 .hcl-link-url { font-size: var(--pdf-meta-size); color: var(--pdf-muted); }
 /* Threaded/indented discussion view -- comments AND forum replies share it. */
 .comment, .forum-reply { border-left: 2px solid #cbd2dc; padding-left: 0.6em; margin-top: 0.5em; }

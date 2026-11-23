@@ -5,6 +5,70 @@ Notable changes to `connections-export`, newest first. Versions follow
 changes incompatibly only with a new major version; the format's own version
 is recorded inside every archive.
 
+## 1.1.0 — 2026-11-23
+
+Forum attachments that were skipped, now captured, and a repair that adds
+them to the archives you already have. Open **Archives** and choose
+**Repair** for an archive that needs it; nothing has to be selected again.
+Zipped archives are now shown as read-only and can be unzipped, and PDFs can
+carry the attachment files themselves.
+
+### Added
+
+- **Repair adds missing forum attachments to the archive you have.** Some
+  attachments to forum topics and replies were skipped by earlier releases.
+  They do not appear as broken links; they are missing without mention. Only
+  attachments are affected. An archive that needs it is offered a repair
+  (banner, list note, `crawl --repair --into`), which explains this and
+  first checks that the server can be contacted, since the files come from
+  there. It works from the feeds the archive stores: a thread with no missing
+  file costs nothing, a thread's page is read only where needed, and each
+  missing file is downloaded once. The banner names the archive, the repair
+  and the thread being worked on, with threads checked, pages read and files
+  added. Stop stops within seconds; what was fetched is kept, and the next
+  repair fetches only what is still missing. A finished repair is recorded,
+  so it is not offered again.
+- **Capture again.** Every archive on the Archives page offers *Capture
+  again*: a new archive of the same deployment, components, community and
+  author scope -- of exactly the held threads, for an archive made from
+  threads. What will be captured is shown before it starts, and the existing
+  archive is left as it is. Repair is the quicker remedy; this is the
+  alternative.
+- **Zipped archives say that they are read-only.** A .zip archive's card is
+  marked *.zip · read-only* and offers **Unzip**: a normal archive folder
+  beside it, the .zip left as it was. Repairing a .zip unzips it first and
+  repairs the folder; the .zip then says *Not repaired* and names the
+  repaired copy. A .zip saved next to its own folder is recognised as that
+  folder's copy, so only the folder is repaired.
+- **Attachments can be opened from the PDF.** With *Attach files*
+  (`--attach-files`), captured wiki and forum attachments are embedded in the
+  PDF; each one's name opens or saves it, and they are also in the viewer's
+  attachments panel. Forum topics and replies list their attachments in the
+  PDF. Originals of images shown inline are attached too, unless *Include
+  original files for images shown inline* is unticked
+  (`--no-attach-inline-images`); the images stay on the page either way.
+
+### Fixed
+
+- **A forum reply's uploaded document is captured, on its own reply.** A
+  reply with a pasted image and an uploaded file (a Word document, say) kept
+  only the image. The feed nests uploaded files in a `snx:field type="file"`
+  element whose download address does not work; the thread's page links the
+  same file through `/forums/ajax/download/...`. Both are now read,
+  recognised as one file by its id, downloaded from the address that works,
+  and listed once, on the post the download address names. Wiki attachment
+  feeds read the same file fields.
+- **Attachments are saved under their names.** Saving an attachment from the
+  Reader produced a file named after its hash, with no extension. It now has
+  the attachment's filename; an image pasted into a post, which the source
+  does not name, is listed as "Pasted image" and saved with the extension its
+  type implies.
+- **Images shown in a post are not listed again as its attachments**, in the
+  Reader or in the PDF.
+- **PDF attachment links are not covered by a paperclip icon.**
+- **Archive list: details and repair notes use the card's full width.**
+  Clicking them still opens the archive.
+
 ## 1.0.0 — 2026-11-16
 
 The first stable release. Everything from the 0.2.0 betas, listed below, in

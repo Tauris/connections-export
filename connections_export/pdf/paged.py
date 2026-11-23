@@ -1196,6 +1196,7 @@ def render_pdf_paged(
     progress: ProgressCallback | None = None,
     part_size_mb: float | None = None,
     attach_attachments: bool = False,
+    attach_inline_images: bool = True,
     member: SetMember | None = None,
     output: Path | None = None,
 ) -> bytes | None:
@@ -1206,9 +1207,12 @@ def render_pdf_paged(
     `chrome=False` drops the cover + TOC (the live per-entity tiles).
     `progress` hears each step (`pdf.progress`). `part_size_mb` bounds how
     much of the document is laid out at once (`pdf.parts`); None means the
-    default, 0 means never split. `attach_attachments` attaches the pages'
-    captured attachments to the PDF as files; otherwise they are listed by
-    name and size.
+    default, 0 means never split. `attach_attachments` embeds captured
+    attachments. By default this also
+    includes original files for images shown inline; set
+    `attach_inline_images=False` to omit those originals while keeping other
+    attachments. Inline images are not repeated in the document's attachment
+    list.
 
     With `output`, the PDF is written there and None returned -- the way to
     make a large one: it is never held in memory. Without, the bytes are
@@ -1221,7 +1225,9 @@ def render_pdf_paged(
         (workdir / "images").mkdir()
         with (
             serving_images(spool=workdir / "images") as served,
-            attaching_files() if attach_attachments else contextlib.nullcontext() as attached,
+            attaching_files(include_inline_images=attach_inline_images)
+            if attach_attachments
+            else contextlib.nullcontext() as attached,
             remote_link_register(member.remote) if member else contextlib.nullcontext(),
         ):
             # One piece at a time, onto disk: the whole document is never in
@@ -1282,6 +1288,13 @@ def render_pdf_paged(
                 output=target,
                 attachments=attachments,
             )
+        if attachments:
+            from connections_export.pdf import join  # noqa: PLC0415
+
+            # Never a reason to lose the PDF: every file is embedded and in the
+            # viewer's attachments panel whether or not each name became a
+            # paperclip, and a name wrapped across a page break is two links.
+            join.rewrite_embedded_attachment_links(target)
         return None if output is not None else target.read_bytes()
 
 

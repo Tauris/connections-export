@@ -564,6 +564,57 @@ def crawl_main(
                 if group.get("kind") and group.get("id"):
                     captured.append({"kind": group["kind"], "id": group["id"], "action": "capture"})
         base_url = base_url or summary.get("base_url")
+        # The forum attachment repair works from what the archive stores and
+        # reads only what is missing (`crawler.repair`); it needs no component
+        # list, so it runs first and, when it was the only repair due, alone.
+        from connections_export.gui.archives import archive_repair_status  # noqa: PLC0415
+
+        due = archive_repair_status(target.root)["repair_keys"]
+        if base_url:
+            # A repair fetches what the original capture missed, so it needs the
+            # server it came from. Asked once, before anything is written.
+            from connections_export.crawler.reach import server_problem  # noqa: PLC0415
+
+            reach_config = config.model_copy(update={"base_url": base_url})
+            if client is None:
+                try:
+                    client = _build_default_client(reach_config, env)
+                except AuthError as error:
+                    print(f"connections-export crawl: {error}", file=sys.stderr)
+                    return 3
+            problem = server_problem(client, base_url)
+            if problem:
+                print(f"connections-export crawl: {problem}", file=sys.stderr)
+                return 4
+        if "forum-attachments" in due and base_url:
+            from connections_export.crawler.repair import (  # noqa: PLC0415
+                repair_forum_attachments,
+            )
+            from connections_export.gui.archives import (  # noqa: PLC0415
+                FORUM_ATTACHMENTS_ISSUE,
+            )
+
+            print(f"connections-export crawl: {FORUM_ATTACHMENTS_ISSUE['explanation']}")
+
+            forum_config = config.model_copy(update={"base_url": base_url})
+            fixed = repair_forum_attachments(
+                config=forum_config,
+                client=client,
+                archive=target,
+                emit=emit,
+                stop_event=stop_event,
+            )
+            print(
+                f"connections-export crawl: repaired forum attachments -- "
+                f"{fixed.threads} threads checked, {fixed.threads_affected} with missing files, "
+                f"{fixed.pages_read} pages read, {fixed.files_fetched} files added"
+                + (f", {fixed.files_missing} could not be fetched" if fixed.files_missing else "")
+            )
+            if fixed.stopped:
+                print("connections-export crawl: stopped; what was fetched is kept.")
+                return 1
+            if "blog-comments" not in due:
+                return 1 if fixed.files_missing else 0
         if not source_run and not legacy_community:
             legacy_community = (summary.get("communities") or [{}])[0].get("id")
         if not captured or not base_url:
@@ -1267,8 +1318,17 @@ def pdf_main(
         "--attach-files",
         dest="attach_attachments",
         action="store_true",
-        help="Attach the pages' attachment files to the PDF. By default they are listed "
-        "by name and size; the files themselves are in the archive.",
+        help="Embed captured attachments, including original files for inline images "
+        "(unless --no-attach-inline-images is set). "
+        "Without this, non-inline attachments are listed by name and size; "
+        "the files themselves are in the archive.",
+    )
+    parser.add_argument(
+        "--no-attach-inline-images",
+        dest="attach_inline_images",
+        action="store_false",
+        default=True,
+        help="With --attach-files, omit original files for images already shown inline.",
     )
     args = parser.parse_args(argv)
 
@@ -1327,6 +1387,7 @@ def pdf_main(
         "external_images": prepare_external_images(model, include=args.external_images),
         "open_bookmarks": args.open_bookmarks,
         "attach_attachments": args.attach_attachments,
+        "attach_inline_images": args.attach_inline_images,
         "progress": _stderr_progress(),
         "part_size_mb": (
             args.part_size_mb

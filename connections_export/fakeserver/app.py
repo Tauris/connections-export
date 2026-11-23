@@ -24,10 +24,12 @@ URLs -- the own wording ("the single *page-feed* URL") matches
 the second, page-scoped shape.
 """
 
+import html
 import re
 from collections.abc import Callable
 from dataclasses import fields, is_dataclass, replace
 from typing import Annotated, Any
+from urllib.parse import quote
 
 import httpx
 from fastapi import FastAPI, HTTPException, Query, Request
@@ -824,19 +826,52 @@ def _register_forum_routes(
         for forum in forumset.forums:
             for topic in forum.topics:
                 if topic.uuid == id:
-                    rows = "".join(
-                        f'<li><a href="{a.enclosure_href}">{a.filename or "attachment"}</a></li>'
-                        for a in getattr(topic, "attachments", []) or []
-                    )
+
+                    def post_html(post) -> str:
+                        rows = "".join(
+                            '<li class="dfAttachment"><a '
+                            f'href="/forums/ajax/download/{post.uuid}/{attachment.uuid}/'
+                            f'{quote(attachment.filename, safe="")}" '
+                            f'title="{html.escape(attachment.filename, quote=True)}">'
+                            f"{html.escape(attachment.filename)}</a></li>"
+                            for attachment in getattr(post, "attachments", []) or []
+                        )
+                        files = f'<ul class="dfAttachments">{rows}</ul>' if rows else ""
+                        return (
+                            f'<div class="post" uuid="{html.escape(post.uuid, quote=True)}">'
+                            f"{post.content_html or ''}{files}</div>"
+                        )
+
                     body = (
                         f"<html><head><title>{topic.title}</title></head><body>"
                         f"<h1>{topic.title}</h1>"
-                        f"{topic.content_html or ''}"
-                        + (f"<ul class='attachments'>{rows}</ul>" if rows else "")
+                        f"{post_html(topic)}"
+                        + "".join(post_html(reply) for reply in topic.replies)
                         + "</body></html>"
                     )
                     return Response(content=body, media_type="text/html")
         return Response(content="not found", media_type="text/plain", status_code=404)
+
+    @api.get("/forums/ajax/download/{post_id}/{file_id}/{filename}")
+    def forum_attachment_route(post_id: str, file_id: str, filename: str):
+        for forum in forumset.forums:
+            for topic in forum.topics:
+                post = next(
+                    (post for post in [topic, *topic.replies] if post.uuid == post_id),
+                    None,
+                )
+                if post is None:
+                    continue
+                attachment = next(
+                    (item for item in post.attachments if item.uuid == file_id),
+                    None,
+                )
+                if attachment is not None:
+                    return Response(
+                        content=attachment.content,
+                        media_type=attachment.content_type,
+                    )
+        raise HTTPException(status_code=404, detail=f"no such forum attachment: {file_id}")
 
     @api.get("/forums/atom/forums")
     def forums_list_route(

@@ -1802,13 +1802,48 @@
     }
   }
 
-  function renderAttachmentsReal(page) {
+  // The name a saved attachment gets: its own, or -- for a file the source
+  // never named, such as an image pasted into a post -- one with the
+  // extension its type implies, so it opens in the right program.
+  const EXT_BY_TYPE = {
+    "image/png": "png", "image/jpeg": "jpg", "image/gif": "gif", "image/webp": "webp",
+    "image/bmp": "bmp", "image/svg+xml": "svg", "application/pdf": "pdf",
+    "application/msword": "doc", "application/vnd.ms-excel": "xls",
+    "application/vnd.ms-powerpoint": "ppt", "application/zip": "zip", "text/plain": "txt",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "docx",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": "xlsx",
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation": "pptx",
+  };
+  function attachmentLabel(att) {
+    if (att.filename) return att.filename;
+    return /^image\//.test(att.content_type || "") ? "Pasted image" : "Attachment " + att.id;
+  }
+  function saveName(name, contentType) {
+    const base = String(name || "attachment").replace(/[\\/:*?"<>|]+/g, "_");
+    if (/\.[A-Za-z0-9]{1,5}$/.test(base)) return base;
+    const ext = EXT_BY_TYPE[String(contentType || "").split(";")[0].trim().toLowerCase()];
+    return ext ? base + "." + ext : base;
+  }
+
+  // `inlineOnly`: a forum post's attachments leave out what its text already
+  // shows -- an image pasted into a reply is visible where it was pasted, and
+  // listing it again only crowds the files someone actually attached.
+  function renderAttachmentsReal(page, inlineOnly) {
     if (!page.attachments || !page.attachments.length) return "";
-    const rows = page.attachments.map((att) => {
+    const shown = new Set(inlineOnly
+      ? (page.assets || []).filter((a) => a.present && a.blob_hash).map((a) => a.blob_hash)
+      : []);
+    const listed = page.attachments.filter((att) =>
+      !(att.asset && att.asset.blob_hash && shown.has(att.asset.blob_hash)));
+    if (!listed.length) return "";
+    const rows = listed.map((att) => {
       const url = att.asset && att.asset.present ? blobUrl(att.asset.blob_hash) : null;
+      const label = attachmentLabel(att);
       const nameEl = url
-        ? '<a href="' + escapeHtml(url) + '" target="_blank" rel="noopener noreferrer">' + escapeHtml(att.filename || att.id) + '</a>'
-        : escapeHtml(att.filename || att.id);
+        ? '<a href="' + escapeHtml(url) + '" download="' +
+          escapeHtml(saveName(att.filename || label, att.content_type || (att.asset && att.asset.content_type))) +
+          '">' + escapeHtml(label) + '</a>'
+        : escapeHtml(label);
       const okBadge = url ? '<div class="fok">✓ archived</div>' : '<div class="fok" style="color:var(--warn)">not present</div>';
       return '<div class="file-row"><div class="fi">' + escapeHtml(((att.content_type || "file").split("/").pop() || "file").slice(0, 3).toUpperCase()) + '</div>' +
         '<div class="fn"><div class="fnm">' + nameEl + '</div><div class="fmeta"><span>' + escapeHtml(att.content_type || "") + '</span></div></div>' + okBadge + '</div>';
@@ -1829,7 +1864,9 @@
         escapeHtml(asset.content_type || "download") + '</span>' +
         (nodeId ? '<span>node ' + escapeHtml(nodeId) + '</span>' : "") +
         '</div></div>' +
-        '<a class="btn" href="' + escapeHtml(url) + '" target="_blank" rel="noopener noreferrer">Open</a></div>';
+        '<a class="btn" href="' + escapeHtml(url) + '" download="' +
+        escapeHtml(saveName(asset.filename || "attachment-" + (nodeId || "file"), asset.content_type)) +
+        '">Save</a></div>';
     }).join("");
     return rows ? '<div class="r-attach inline-downloads"><div class="sh">Attachments</div><div class="files-list">' + rows + '</div></div>' : "";
   }
@@ -1957,7 +1994,7 @@
       ((reply.flags || []).map((f) => '<span class="reply">' + escapeHtml(f) + '</span>').join("")) +
       '</div><div class="ctext">' + inlineBody(reply.content_html, reply.assets) +
       '</div>' + renderDownloadAssetsReal(reply.assets) +
-      (reply.attachments && reply.attachments.length ? renderAttachmentsReal(reply) : "") +
+      (reply.attachments && reply.attachments.length ? renderAttachmentsReal(reply, true) : "") +
       '</div>'
     ).join("");
     return '<div class="r-comments"><h2>Replies · ' + flat.length + '</h2><div class="thread">' + items + '</div></div>';
@@ -2109,7 +2146,7 @@
       (topic.tags || []).map((t) => '<span class="rloc">' + escapeHtml(t) + '</span>').join("") +
       originalPageLink(topic.alternate_url) + '</div>';
     html += '<div class="prose">' + readerBody(topic.content_html, topic.assets, topic.links) + '</div>';
-    html += renderAttachmentsReal(topic);
+    html += renderAttachmentsReal(topic, true);
     html += renderLinksReal(topic);
     html += renderReplyThread(topic);
     $("r-article").innerHTML = html;
@@ -7314,11 +7351,146 @@
     banner.hidden = false;
     banner.classList.remove("is-done", "is-running");
     const n = affected.length;
-    msg.textContent = n + " archive" + (n === 1 ? "" : "s") + " may be missing blog comments from an older capture. "
-      + "Repairing re-reads only the comment feeds into the archives you already have — nothing is recaptured.";
+    const reasons = Array.from(new Set(affected.flatMap((a) =>
+      String(a.repair_reason || "content may be missing from an older capture").split("; "))));
+    msg.textContent = n + " archive" + (n === 1 ? " needs" : "s need") + " a repair: " + reasons.join("; ") + ". "
+      + "Repair adds what is missing to the archives you already have, reading only what they lack — "
+      + "nothing has to be selected again, and nothing already in them is changed. "
+      + "It needs the server each archive was captured from to be available.";
     allBtn.hidden = false;
     allBtn.disabled = false;
     allBtn.textContent = "Repair all " + n;
+  }
+
+  // Archives an older release left incomplete. The remedy is a new archive
+  // with the same selections ("Capture again"), so the notice explains what
+  // is missing and offers that per archive; nothing is changed in place.
+  function renderIssueBanner() {
+    const banner = $("issue-banner");
+    const msg = $("issue-banner-msg");
+    if (!banner || !msg) return;
+    const byKey = new Map();
+    archivesOnPage.filter((a) => !a.captured_again_as && !a.copy_of).forEach((a) => {
+      (a.issues || []).forEach((issue) => {
+        if (!byKey.has(issue.key)) byKey.set(issue.key, { issue, archives: [] });
+        byKey.get(issue.key).archives.push(a);
+      });
+    });
+    if (!byKey.size) { banner.hidden = true; msg.innerHTML = ""; return; }
+    banner.hidden = false;
+    msg.innerHTML = "";
+    byKey.forEach(({ issue, archives }) => {
+      const n = archives.length;
+      const head = document.createElement("p");
+      head.innerHTML = "<b>" + escapeHtml(issue.title) + "</b> in " + n + " archive" + (n === 1 ? "" : "s") +
+        " — what happened, and what Repair does:";
+      const why = document.createElement("p");
+      why.className = "foot-note";
+      why.textContent = issue.explanation;
+      msg.appendChild(head);
+      msg.appendChild(why);
+      const list = document.createElement("ul");
+      list.className = "issue-archive-list";
+      archives.slice(0, 12).forEach((a) => {
+        const li = document.createElement("li");
+        const name = document.createElement("span");
+        name.textContent = (a.display_name || a.name) + " ";
+        li.appendChild(name);
+        list.appendChild(li);
+      });
+      if (n > 12) {
+        const more = document.createElement("li");
+        more.className = "foot-note";
+        more.textContent = "…and " + (n - 12) + " more, marked in the list below.";
+        list.appendChild(more);
+      }
+      msg.appendChild(list);
+    });
+  }
+
+  // A zip becomes a writable archive by unpacking it into a folder beside it;
+  // the zip itself is left as it is.
+  function unzipButton(a) {
+    const unzip = document.createElement("button");
+    unzip.type = "button";
+    unzip.className = "btn";
+    unzip.textContent = "Unzip";
+    unzip.title = "Unpack into a folder beside the .zip, which can be updated and repaired. " +
+      "The .zip stays as it is.";
+    unzip.addEventListener("click", async (event) => {
+      event.stopPropagation();
+      unzip.disabled = true;
+      unzip.textContent = "⏳ Unzipping…";
+      try {
+        const res = await fetch("/api/archive-unzip", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name: a.name }),
+        });
+        const j = await res.json().catch(() => ({}));
+        if (!res.ok || !j.ok) { notify(j.error || "The archive could not be unzipped.", "Unzip failed"); return; }
+        notify("Unzipped into " + j.name + ". The folder can be updated and repaired; the .zip is unchanged.", "Unzipped");
+        loadRecentArchives();
+      } catch (_) {
+        notify("The console could not be reached. Check that this tool is still running, then try again.", "Unzip failed");
+      } finally {
+        unzip.disabled = false;
+        unzip.textContent = "Unzip";
+      }
+    });
+    return unzip;
+  }
+
+  function captureAgainButton(a, primary) {
+    const again = document.createElement("button");
+    again.type = "button";
+    again.className = primary ? "btn primary" : "btn";
+    again.textContent = "Capture again";
+    again.title = "Capture the same source, components and author scope into a new archive. " +
+      "This archive is left as it is.";
+    again.addEventListener("click", (event) => {
+      event.stopPropagation();
+      captureAgain(a);
+    });
+    return again;
+  }
+
+  async function captureAgain(a) {
+    let plan;
+    try {
+      const res = await fetch("/api/archive-again?name=" + encodeURIComponent(a.name));
+      if (!res.ok) throw new Error("plan");
+      plan = await res.json();
+    } catch (_) {
+      notify("This archive's selections could not be read. Refresh the list and try again.", "Capture again");
+      return;
+    }
+    if (!plan.base_url || !(plan.components || []).length) {
+      notify("This archive does not record where it came from or what it captured, so it cannot be captured again. Start a new capture from a link instead.", "Capture again");
+      return;
+    }
+    let host = plan.base_url;
+    try { host = new URL(plan.base_url).host; } catch (_) {}
+    const threads = (plan.threads || []).length;
+    const rows = plan.components.map((c) =>
+      "<li>" + escapeHtml(c.kind) + ": " + escapeHtml(c.title || c.id) +
+      (c.kind === "forum" && threads
+        ? " — the " + threads + " thread" + (threads === 1 ? "" : "s") + " this archive holds, each read again whole"
+        : (c.count != null ? " (" + c.count + " now)" : "")) + "</li>").join("");
+    const ok = await showDialog({
+      title: "Capture " + (plan.label || a.name) + " again?",
+      bodyHtml:
+        "<p>A new archive is made from <b>" + escapeHtml(host) + "</b> with the same selections:</p>" +
+        "<ul>" + rows + "</ul>" +
+        (plan.community_title ? "<p>Community: " + escapeHtml(plan.community_title) + "</p>" : "") +
+        "<p>Author scope: " + (plan.author ? escapeHtml(plan.author) : "everyone") +
+        (plan.max_entries ? " · preview, up to " + plan.max_entries + " per component" : "") + "</p>" +
+        "<p>Everything is read anew, with no date cutoff. The existing archive is not changed; " +
+        "once the new one is complete, it is marked as captured again.</p>",
+      confirmLabel: "Capture into a new archive",
+      danger: false,
+    });
+    if (!ok) return;
+    beginRun({ again_from: a.name, base_url: plan.base_url, target_label: plan.label });
   }
 
   async function startRepair() {
@@ -7326,11 +7498,20 @@
     const affected = affectedArchives();
     if (!affected.length) return;
     const n = affected.length;
+    const zips = affected.filter((a) => a.is_zip).length;
     const ok = await showDialog({
       title: "Repair " + n + " archive" + (n === 1 ? "" : "s") + "?",
-      bodyHtml: "<p>This re-reads each archive using the source, components and author scope it "
-        + "recorded, and adds blog comments an older release missed. It changes nothing else, is "
-        + "safe to run again, and may take a little while.</p>",
+      bodyHtml: "<p>An older release skipped some content by mistake. Missing forum attachments "
+        + "do not show up as broken links: they are missing entirely, and nothing in the archive "
+        + "mentions them. Only attachments (and, in some older blog captures, comments) are "
+        + "affected; everything else in these archives is complete.</p>"
+        + "<p>Repair adds what is missing, using the source, components and author scope each "
+        + "archive recorded — nothing has to be selected again. It reads only what is missing and "
+        + "changes nothing that is already there. It needs the server each archive was captured "
+        + "from to be available; that is checked first. It is safe to run again.</p>"
+        + (zips ? "<p>" + (zips === 1 ? "One of these is a .zip archive, which is" : zips + " of these are .zip archives, which are")
+          + " read-only: each is first unzipped into a folder beside it, and the folder is repaired. "
+          + "The .zip stays as it is.</p>" : ""),
       confirmLabel: "Repair all " + n,
     });
     if (!ok) return;
@@ -7348,7 +7529,25 @@
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ names: affected.map((a) => a.name), confirmation: String(n) }),
       });
-      if (!res.ok) { const j = await res.json().catch(() => ({})); throw new Error(j.error || "The repair could not be started. Try again in a moment."); }
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}));
+        if (j.unreachable) {
+          // Not a failure of the repair: the server it needs does not answer.
+          repairActive = false;
+          if (banner) banner.classList.remove("is-running");
+          if ($("repair-stop")) $("repair-stop").hidden = true;
+          if ($("repair-affected")) $("repair-affected").disabled = false;
+          await showDialog({
+            title: "The server cannot be contacted",
+            bodyHtml: "<p>" + escapeHtml(j.error) + "</p>",
+            confirmLabel: "OK",
+            danger: false,
+          });
+          renderRepairBanner();
+          return;
+        }
+        throw new Error(j.error || "The repair could not be started. Try again in a moment.");
+      }
       await pollRepairStatus(n);
     } catch (e) {
       repairActive = false;
@@ -7378,6 +7577,11 @@
     const msg = $("repair-banner-msg");
     const banner = $("repair-banner");
     const pollDelayMs = 1500;
+    const startedAt = Date.now();
+    const elapsed = () => {
+      const s = Math.round((Date.now() - startedAt) / 1000);
+      return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0") + " elapsed";
+    };
     for (;;) {
       await new Promise((r) => setTimeout(r, pollDelayMs));
       let job;
@@ -7389,13 +7593,24 @@
         // Kept as separate, labelled dimensions — index pages, post feeds and
         // unique posts are different work and are never added together.
         const bits = [job.stage || "working"];
+        if (job.threads_total)
+          bits.push(Math.min(job.threads_done || 0, job.threads_total) + " / " + job.threads_total + " threads checked");
+        if (job.pages_read) bits.push(job.pages_read + " thread page" + (job.pages_read === 1 ? "" : "s") + " read");
+        if (job.files_missing) bits.push(job.files_missing + " could not be fetched");
+        if (job.item) bits.push("thread “" + job.item + "”");
         if (job.aggregate_pages) bits.push(job.aggregate_pages + " index page" + (job.aggregate_pages === 1 ? "" : "s"));
         if (job.posts_total)
           bits.push(Math.min(job.posts_done || 0, job.posts_total) + " / " + job.posts_total + " posts");
         if (job.post_feeds_done) bits.push(job.post_feeds_done + " comment feed" + (job.post_feeds_done === 1 ? "" : "s"));
         if (job.comments_restored)
           bits.push("recovered " + job.comments_restored + " comment" + (job.comments_restored === 1 ? "" : "s"));
-        msg.textContent = "Repairing archive " + at + " of " + (job.total || total) + " — " + bits.join(" · ") + "…";
+        if (job.attachments_restored)
+          bits.push("recovered " + job.attachments_restored + " attachment" + (job.attachments_restored === 1 ? "" : "s"));
+        bits.push(elapsed());
+        msg.textContent = "Repairing archive " + at + " of " + (job.total || total)
+          + (job.current_label ? ": " + job.current_label : "")
+          + (job.repairing ? " — " + job.repairing : "")
+          + " — " + bits.join(" · ");
         // Pacing note when it is the slow default with no config file found.
         const banner = $("repair-banner");
         if (banner && job.min_interval) {
@@ -7407,18 +7622,21 @@
         if ($("repair-stop")) { $("repair-stop").hidden = true; $("repair-stop").textContent = "Stop"; }
         const failed = (job.results || []).filter((r) => !r.ok).length;
         const restored = job.comments_restored || 0;
+        const files = job.attachments_restored || 0;
+        const gained = " and recovered " + restored + " previously-missing comment" + (restored === 1 ? "" : "s")
+          + (files ? " and " + files + " attachment" + (files === 1 ? "" : "s") : "");
         const nn = job.total || total || 0;
         const done = job.done || 0;
         if (banner) { banner.classList.remove("is-running"); banner.classList.add("is-done"); }
         if (msg) {
           if (job.stopped) {
             msg.textContent = "Stopped. Repaired " + done + " of " + nn + " archive" + (nn === 1 ? "" : "s")
-              + " and recovered " + restored + " previously-missing comment" + (restored === 1 ? "" : "s")
-              + ". The rest were not started — run Repair again to finish them.";
+              + gained + ". The rest were not started — run Repair again to finish them.";
           } else {
+            const unpacked = (job.results || []).filter((r) => r.unpacked_as).map((r) => r.unpacked_as);
             msg.textContent = "Done. Repaired " + nn + " archive" + (nn === 1 ? "" : "s")
-              + " and recovered " + restored + " previously-missing comment" + (restored === 1 ? "" : "s")
-              + ". Every archive is now up to date."
+              + gained + ". Every archive is now up to date."
+              + (unpacked.length ? " Unzipped and repaired as: " + unpacked.join(", ") + "." : "")
               + (failed ? " " + failed + " could not be repaired — see the log." : "");
           }
         }
@@ -8260,6 +8478,7 @@
       comments: $("xd-comments").checked,
       external: $("xd-external").checked,
       attach: $("xd-attach").checked,
+      attachInlineImages: $("xd-attach-inline").checked,
       bookmarks: $("xd-bookmarks").checked,
     };
   }
@@ -8273,6 +8492,7 @@
     $("xd-what").hidden = dev;
     $("xd-split").hidden = !xdSeveral();
     $("xd-pick").hidden = xdRadio("xd-scope") !== "choose";
+    $("xd-attach-inline-option").hidden = !$("xd-attach").checked;
     document.querySelector(".xd-foot").dataset.dev = dev ? "1" : "";
     $("xd-go").textContent = dev ? "Continue…" : "Export";
     if (xd) xdSaveChoices(xd.key, xdCurrentChoices());
@@ -8431,6 +8651,7 @@
     $("xd-comments").checked = remembered.comments !== false;
     $("xd-external").checked = remembered.external !== false;
     $("xd-attach").checked = remembered.attach === true;
+    $("xd-attach-inline").checked = remembered.attachInlineImages !== false;
     $("xd-bookmarks").checked = remembered.bookmarks === true;
     $("xd-item-row").hidden = !xd.item;
     if (xd.item) $("xd-item-label").textContent = xd.item.label === "This page" ? "The open page"
@@ -8508,7 +8729,10 @@
     const scope = xdScopeParams();
     if (scope.none) { notify("Tick at least one component to export.", "Nothing selected"); return; }
     const params = [...scope.params, ...xdSplitParams(), ...xdOptionParams()];
-    if ($("xd-attach").checked) params.push("attach_attachments=1");
+    if ($("xd-attach").checked) {
+      params.push("attach_attachments=1");
+      if (!$("xd-attach-inline").checked) params.push("attach_inline_images=0");
+    }
     exportLast.scope = xdRadio("xd-scope") || "all";
     exportLast.external = $("xd-external").checked;
     exportLast.bookmarks = $("xd-bookmarks").checked;
@@ -8623,6 +8847,7 @@
     }).then((j) => {
       const items = (j.archives || []);
       archivesOnPage = items;
+      renderIssueBanner();
       // Drop selections for archives that no longer exist.
       Array.from(archiveSelection).forEach((name) => {
         if (!items.some((a) => a.name === name)) archiveSelection.delete(name);
@@ -8678,21 +8903,65 @@
           badge.textContent = "Demo data — fake";
           b.appendChild(badge);
         }
+        if (a.is_zip) {
+          // A zip opens and reads but never takes a write: no update, no
+          // repair in place. Said on the card, not only when something fails.
+          const badge = document.createElement("span");
+          badge.className = "zip-badge";
+          badge.textContent = ".zip · read-only";
+          badge.title = "A zipped archive opens and reads, but cannot be updated or repaired " +
+            "in place. Unzip it into a folder to do that; the .zip stays as it is.";
+          b.appendChild(badge);
+        }
         const archiveName = document.createElement("span");
         archiveName.className = "archive-name mono";
         archiveName.textContent = a.name;
         b.appendChild(archiveName);
+        const meta = document.createElement("div");
+        meta.className = "archive-row-details";
         const itemsFact = woPlural(woItems(a), "item");
         const detail = document.createElement("span");
         detail.className = "foot-note archive-detail";
         detail.textContent = itemsFact + " · reading archive details…";
-        b.appendChild(detail);
+        meta.appendChild(detail);
         if (a.repair_needed) {
           const repairNote = document.createElement("span");
           repairNote.className = "archive-repair-note";
-          repairNote.textContent = "Comments may be missing — repair available";
+          repairNote.textContent = "Repair available — " + (a.repair_reason || "content may be missing");
           repairNote.title = a.repair_reason || "This archive was created by an older adapter.";
-          b.appendChild(repairNote);
+          meta.appendChild(repairNote);
+        }
+        (a.issues || []).forEach((issue) => {
+          // Explained beside the repair note rather than said twice.
+          const repairNote = meta.querySelector(".archive-repair-note");
+          if (repairNote) repairNote.title = issue.explanation;
+        });
+        if (a.copy_of) {
+          // A zipped copy of the folder beside it: the folder is what gets
+          // repaired, and this .zip must not read as if it had been.
+          const folder = archivesOnPage.find((x) => x.name === a.copy_of);
+          const unrepaired = (a.issues || [])[0];
+          const note = document.createElement("span");
+          note.className = unrepaired ? "archive-repair-note" : "foot-note archive-detail";
+          note.textContent = !unrepaired
+            ? "Zipped copy of " + a.copy_of
+            : folder && folder.repair_needed
+              ? "Zipped copy of " + a.copy_of + ", not repaired. Repair " + a.copy_of + " — this .zip stays as it is."
+              : "Not repaired: some forum attachments are missing from this .zip. The repaired copy is " + a.copy_of + ".";
+          if (unrepaired) note.title = unrepaired.explanation;
+          meta.appendChild(note);
+        }
+        if (a.captured_again_as) {
+          // The copy is repaired; this one is not, and must not read as if it were.
+          const note = document.createElement("span");
+          const unrepaired = (a.issues || [])[0];
+          note.className = unrepaired ? "archive-repair-note" : "foot-note archive-detail";
+          note.textContent = unrepaired
+            ? "Not repaired: " + unrepaired.title.toLowerCase().replace(/^some /, "some ") +
+              " from this " + (a.is_zip ? ".zip" : "archive") + ". The repaired copy is " + a.captured_again_as + "."
+            : "Newer copy: " + a.captured_again_as;
+          if (unrepaired) note.title = unrepaired.explanation;
+          meta.appendChild(note);
         }
         // `/api/archives` already carried the persisted summary, so only ask
         // for it separately when this archive has none stored yet.
@@ -8711,7 +8980,9 @@
             }
           })
           .catch(() => { detail.textContent = itemsFact + " · details unavailable"; });
-        b.addEventListener("click", () => openArchive(a.name, label, b));
+        const open = () => openArchive(a.name, label, b);
+        b.addEventListener("click", open);
+        meta.addEventListener("click", open);
         row.appendChild(b);
         const actions = document.createElement("div");
         actions.className = "ra-actions";
@@ -8730,7 +9001,9 @@
           event.stopPropagation();
           openArchiveForUpdate(a.name);
         });
-        actions.appendChild(extend);
+        if (a.is_zip) actions.appendChild(unzipButton(a));
+        else actions.appendChild(extend);
+        if (!a.is_demo) actions.appendChild(captureAgainButton(a, false));
         const details = document.createElement("button");
         details.type = "button";
         details.className = "btn";
@@ -8746,7 +9019,7 @@
         // Save the whole archive as one .zip BESIDE it on disk — archives are
         // local and can be large, so nothing is streamed through the browser;
         // it writes <name>.zip next to the archive and reports where.
-        if (!a.is_demo) {
+        if (!a.is_demo && !a.is_zip) {
           const dl = document.createElement("button");
           dl.type = "button";
           dl.className = "btn";
@@ -8818,6 +9091,7 @@
             });
         });
         actions.appendChild(del);
+        row.appendChild(meta);
         // Empty -> populated reads as a list arriving, not as a pop. Capped
         // at 8 so a full list never feels slow to draw.
         if (!reduce && !flipFrom) {

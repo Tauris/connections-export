@@ -11,6 +11,7 @@
   <a href="#man-communities">Several communities in one archive</a>
   <a href="#man-update">Adding to an archive later</a>
   <a href="#man-repair">Repairing a blog archive from an older release</a>
+  <a href="#man-again">Forum attachments missing from an older archive — repair</a>
   <a href="#man-pacing">Pacing, and running overnight</a>
   <a href="#man-proxy">Proxies</a>
   <a href="#man-cli">The command line</a>
@@ -435,6 +436,24 @@ connections-export crawl --repair --into PATH\TO\ARCHIVE
 
 **How the archive is recognised as needing repair.** A capture records which version of each component reader produced it; a blog captured before the fix is marked with the older reader and is what the offer keys off. An older archive from before that record existed is recognised instead from its own request log — a blog whose comment feeds were never read from page 0 — so the offer is made whenever completeness cannot be confirmed, and never withheld on a guess. An archive captured by this release or later is never flagged, because its comments are already complete.
 
+### <a id="man-again"></a>Forum attachments missing from an older archive — repair
+
+**What is missing.** When an archive was made with a release before 1.0.1, some attachments were skipped by mistake: documents uploaded to forum topics and replies — a Word or PDF file, say. They do not show up as broken links: they are missing entirely, and nothing in the archive mentions them. **Only these attachments are affected**; pages, posts, replies, comments and the images in their text are complete. (The feed lists an uploaded document in a nested file field, which those releases did not read, and its download address there does not work — the thread's page has the one that does.)
+
+**The console tells you which archives are affected.** On **Archives**, the repair banner names the problem, a notice explains it and lists the archives, and each affected archive carries *Repair available* in the list.
+
+**Repair needs the server the archive was captured from.** The missing files were never fetched, so they can only come from there. Repair asks that server first; if it cannot be contacted, Repair says so and changes nothing — try again when the server can be reached from your computer.
+
+**Repair adds the missing files to the archive you have, reading as little as possible.** Nothing has to be selected again: the repair works from the feeds the archive already stores. A thread with no missing file costs nothing; for a thread that has one, the thread's page is read — from the archive if it is stored there, otherwise once from the deployment — for the download address that works, and each missing file is downloaded once. No forum, topic or reply feed is asked for again. What is written is only added, never changed, and the archive records that the repair ran, so it is not offered again; running it a second time asks the deployment for nothing.
+
+**A zipped archive is read-only,** so it cannot be repaired — or updated — where it is; its card says *.zip · read-only*. **Unzip** writes a normal archive folder beside it and leaves the .zip as it was. **Repair** does that for you: it unzips the archive into a folder, repairs the folder, and leaves the .zip unchanged. The .zip then says *Not repaired* and names the repaired copy, so the two cannot be mistaken for each other. Keep using the folder, or zip it again once it is repaired. A .zip that sits beside its own folder — the copy *Save as .zip* writes — is recognised as that folder's zipped copy: only the folder is offered the repair, and the .zip says it is a copy and not repaired.
+
+From the command line the same repair is `connections-export crawl --repair --into PATH\TO\ARCHIVE` — it does whichever repairs the archive needs, forums and blog comments alike.
+
+An **update** of the archive does not do this: an update re-reads only threads that have changed since, and the missing documents are in threads that have not.
+
+**Capture again** is the alternative when you would rather keep the old archive untouched: it makes a new archive with the same deployment, components, community and author scope, re-reading the threads the old one holds, each whole, and never widening to the rest of their forum. Once it has finished, the old archive names the new one.
+
 ## <a id="man-pacing"></a>Pacing, and running overnight
 
 An export is thousands of requests against a live deployment. It waits **1 second between them** by default.
@@ -549,7 +568,7 @@ Each file is a complete document, with its own cover ("File 2 of 5 … The other
 
 **Before it starts**, the export says roughly how many pages it will have, how big it will be and how long it will take. If there is not enough disk space or no usable browser, it says so instead of failing partway; if memory is short, it warns that the export will be slower.
 
-**Attachments** are listed in the PDF by name and size; the files are in the archive. Tick *Attach the pages' attachment files* (or `--attach-files`) to attach them to the PDF itself.
+**Attachments** not matched to images shown inline in the page or post body are listed in the PDF by name and size; the files are in the archive. Matched images stay inline and are not repeated in that list. Tick *Attach files* (or `--attach-files`) to include captured attachment files in the PDF's attachments panel. By default, this includes originals of inline images; untick *Include original files for images shown inline* (or use `--no-attach-inline-images`) to omit those extra copies while keeping all other attachments. Inline images remain visible on the page either way. Including their originals preserves the captured files separately alongside the page-rendered images and increases the PDF size.
 
 On the command line:
 

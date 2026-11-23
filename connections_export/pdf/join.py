@@ -27,6 +27,7 @@ import re
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
+from urllib.parse import unquote
 
 CHUNK = 1 << 20
 
@@ -710,10 +711,18 @@ def _write_attachments(w: _Writer, attachments) -> int | None:
     return tree
 
 
-def rewrite_links(src: Path, out_path: Path, rewrite_annot: AnnotRewrite) -> int:
+def rewrite_links(
+    src: Path,
+    out_path: Path,
+    rewrite_annot: AnnotRewrite,
+    *,
+    file_attachment_appearance: bool = False,
+) -> int:
     """Copy `src` to `out_path` object for object -- same numbers, bookmarks,
     attachments and all -- rewriting only its link annotations. Streaming,
-    like `join`. Returns how many links were rewritten."""
+    like `join`. Returns how many links were rewritten. When requested, file
+    attachment annotations get a blank appearance so the viewer's default
+    attachment icon does not obscure the linked text."""
     part = _read_part(src)
     changed = 0
     with src.open("rb") as f, out_path.open("wb") as out:
@@ -732,6 +741,7 @@ def rewrite_links(src: Path, out_path: Path, rewrite_annot: AnnotRewrite) -> int
         out.write(b"%PDF-1.7\n%\xe2\xe3\xcf\xd3\n")
         w = _Writer(out)
         w.next_num = max(part.offsets) + 1
+        appearance = None
         for num in sorted(part.offsets):
             obj = _read_obj(f, part, num)
             body = obj.body
@@ -740,9 +750,174 @@ def rewrite_links(src: Path, out_path: Path, rewrite_annot: AnnotRewrite) -> int
                 if new is not None:
                     body = new if new != b"" else link_with(body, b"")
                     changed += 1
+                    if (
+                        file_attachment_appearance
+                        and _dict_value(body, b"/Subtype") == b"/FileAttachment"
+                    ):
+                        if appearance is None:
+                            appearance = w.reserve()
+                            w.write_data_stream(
+                                appearance,
+                                b"<</Type /XObject /Subtype /Form /FormType 1 "
+                                b"/BBox [0 0 1 1] /Resources <<>>>>",
+                                b"",
+                            )
+                        body = _set_key(body, b"/AP", b"<</N %d 0 R>>" % appearance)
             if obj.stream_at is None:
                 w.write_obj(num, body)
             else:
                 w.write_stream(num, body, f, obj.stream_at, obj.stream_len)
         w.finish(part.root, part.info)
+    return changed
+
+
+_ATTACHMENT_LINK_PREFIX = "connections-export-attachment:"
+
+
+def _embedded_file_specs(root) -> dict[str, object]:
+    names = root.get("/Names")
+    if names is None:
+        return {}
+    names = names.get_object()
+    embedded = names.get("/EmbeddedFiles")
+    if embedded is None:
+        return {}
+
+    specs: dict[str, object] = {}
+
+    def walk(node) -> None:
+        node = node.get_object()
+        pairs = node.get("/Names", ())
+        for index in range(0, len(pairs) - 1, 2):
+            specs[str(pairs[index])] = pairs[index + 1]
+        for child in node.get("/Kids", ()):
+            walk(child)
+
+    walk(embedded)
+    return specs
+
+
+def rewrite_embedded_attachment_links(path: Path) -> int:
+    """Turn the PDF's private attachment links into clickable file annotations.
+
+    The common Chromium PDF shape is rewritten by the streaming joiner, so
+    embedding files does not require holding the finished PDF in memory.
+    """
+    from pypdf import PdfReader  # noqa: PLC0415
+
+    with path.open("rb") as source:
+        reader = PdfReader(source, strict=False)
+        specs = _embedded_file_specs(reader.trailer["/Root"])
+    spec_ids = {name: getattr(spec, "idnum", None) for name, spec in specs.items()}
+
+    def rewrite(body: bytes, _pages: Pages) -> bytes | None:
+        uri = link_uri(body)
+        if uri is None or not uri.startswith(_ATTACHMENT_LINK_PREFIX):
+            return None
+        name = unquote(uri[len(_ATTACHMENT_LINK_PREFIX) :])
+        spec_id = spec_ids.get(name)
+        if spec_id is None:
+            raise ValueError(f"PDF attachment link has no embedded file: {name}")
+        rect = _dict_value(body, b"/Rect")
+        if rect is None:
+            raise ValueError(f"PDF attachment link has no rectangle: {name}")
+        return (
+            b"<</Type /Annot /Subtype /FileAttachment /Rect "
+            + rect
+            + b" /FS "
+            + str(spec_id).encode("ascii")
+            + b" 0 R /Name /Paperclip /F 4>>"
+        )
+
+    temporary = path.with_name(path.name + ".attachment-links")
+    try:
+        try:
+            changed = rewrite_links(path, temporary, rewrite, file_attachment_appearance=True)
+        except NotSimple:
+            temporary.unlink(missing_ok=True)
+            changed = _rewrite_embedded_attachment_links_pypdf(path, temporary)
+        if changed:
+            temporary.replace(path)
+        return changed
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _rewrite_embedded_attachment_links_pypdf(src: Path, dst: Path) -> int:
+    """pypdf fallback for PDFs outside the streaming joiner's supported shape."""
+    from pypdf import PdfReader, PdfWriter  # noqa: PLC0415
+    from pypdf.generic import (  # noqa: PLC0415
+        ArrayObject,
+        DecodedStreamObject,
+        DictionaryObject,
+        NameObject,
+        NumberObject,
+    )
+
+    reader = PdfReader(str(src), strict=False)
+    writer = PdfWriter(clone_from=reader)
+    specs = _embedded_file_specs(writer._root_object)
+    changed = 0
+    appearance = None
+    for page in writer.pages:
+        annotations = page.get("/Annots")
+        if annotations is None:
+            continue
+        rewritten = ArrayObject()
+        page_changed = False
+        for reference in annotations:
+            annotation = reference.get_object()
+            action = annotation.get("/A")
+            if hasattr(action, "get_object"):
+                action = action.get_object()
+            uri = str(action.get("/URI", "")) if action is not None else ""
+            if not uri.startswith(_ATTACHMENT_LINK_PREFIX):
+                rewritten.append(reference)
+                continue
+            name = unquote(uri[len(_ATTACHMENT_LINK_PREFIX) :])
+            spec = specs.get(name)
+            if spec is None:
+                raise ValueError(f"PDF attachment link has no embedded file: {name}")
+            rect = annotation.get("/Rect")
+            if rect is None:
+                raise ValueError(f"PDF attachment link has no rectangle: {name}")
+            if appearance is None:
+                blank = DecodedStreamObject()
+                blank.set_data(b"")
+                blank.update(
+                    {
+                        NameObject("/Type"): NameObject("/XObject"),
+                        NameObject("/Subtype"): NameObject("/Form"),
+                        NameObject("/FormType"): NumberObject(1),
+                        NameObject("/BBox"): ArrayObject(
+                            [
+                                NumberObject(0),
+                                NumberObject(0),
+                                NumberObject(1),
+                                NumberObject(1),
+                            ]
+                        ),
+                        NameObject("/Resources"): DictionaryObject(),
+                    }
+                )
+                appearance = writer._add_object(blank)
+            file_annotation = DictionaryObject(
+                {
+                    NameObject("/Type"): NameObject("/Annot"),
+                    NameObject("/Subtype"): NameObject("/FileAttachment"),
+                    NameObject("/Rect"): rect,
+                    NameObject("/FS"): spec,
+                    NameObject("/Name"): NameObject("/Paperclip"),
+                    NameObject("/F"): NumberObject(4),
+                    NameObject("/AP"): DictionaryObject({NameObject("/N"): appearance}),
+                }
+            )
+            rewritten.append(writer._add_object(file_annotation))
+            changed += 1
+            page_changed = True
+        if page_changed:
+            page[NameObject("/Annots")] = rewritten
+    if changed:
+        with dst.open("wb") as output:
+            writer.write(output)
     return changed

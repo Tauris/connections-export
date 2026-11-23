@@ -22,11 +22,15 @@ from connections_export.derive import DeriveError
 from connections_export.gui import support
 from connections_export.gui.archives import (
     SUMMARY_FILENAME,
+    archive_base_url_of,
+    archive_repair_status,
+    is_zip_archive,
     list_archives,
     read_archive_summary,
     resolve_archive,
     summarize_archive,
     superseded_names,
+    unzip_archive,
     writable_archive,
 )
 from connections_export.gui.model_source import ModelSource
@@ -175,6 +179,61 @@ def _blog_comment_count(archive_dir) -> int | None:
         return None
 
 
+def _record_unpacked_from(folder, zip_name: str) -> None:
+    """Note in a repaired folder that it was unpacked from `zip_name`, so the
+    zip points to it instead of offering the repair again
+    (`RunMetadata.captured_again_from`, read by `with_recaptures`)."""
+    from datetime import UTC, datetime  # noqa: PLC0415
+
+    from connections_export.archive.records import RunMetadata  # noqa: PLC0415
+    from connections_export.archive.store import Archive  # noqa: PLC0415
+
+    now = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    archive = Archive.open(folder)
+    archive.write_run_metadata(
+        RunMetadata(
+            run_id=f"unpacked-{now.replace(':', '')}",
+            base_url=archive_base_url_of(folder) or "",
+            principal="unzip",
+            adapter_version="unzip-1",
+            source_system_version="",
+            started_at=now,
+            completed_at=now,
+            run_kind="update",
+            captured_again_from=zip_name,
+        )
+    )
+
+
+def _repair_server_problem(app, archive_dirs) -> str | None:
+    """The first reason a server the given archives came from cannot be
+    used for a repair, or None when every one of them answers."""
+    from connections_export.cli import _build_default_client  # noqa: PLC0415
+    from connections_export.config import Config  # noqa: PLC0415
+    from connections_export.crawler.reach import server_problem  # noqa: PLC0415
+
+    asked: set[str] = set()
+    for archive_dir in archive_dirs:
+        base_url = archive_base_url_of(archive_dir)
+        if not base_url or base_url in asked:
+            continue
+        asked.add(base_url)
+        editable = getattr(app.state, "editable_settings", None) or {}
+        try:
+            client = _build_default_client(
+                Config(base_url=base_url, auth_mode=editable.get("auth_mode") or "sspi"),
+                os.environ,
+                min_interval=0.0,
+                timeout=15,
+            )
+        except Exception as exc:  # noqa: BLE001 - a client that cannot be built is the answer
+            return str(exc)
+        problem = server_problem(client, base_url)
+        if problem:
+            return problem
+    return None
+
+
 def register(
     app,
     *,
@@ -220,6 +279,12 @@ def register(
                         "item_count": a.item_count,
                         "repair_needed": a.repair_needed,
                         "repair_reason": a.repair_reason,
+                        "issues": a.issues,
+                        # Opens and reads, never takes a write: shown as such,
+                        # and repaired by unzipping first.
+                        "is_zip": is_zip_archive(a.path),
+                        "captured_again_as": a.captured_again_as,
+                        "copy_of": a.copy_of,
                         "summary": read_archive_summary(a.path),
                     }
                     for a in infos
@@ -227,6 +292,17 @@ def register(
                 "archives_dir": str(support.ARCHIVES_BASE),
             }
         )
+
+    @app.get("/api/archive-again")
+    def archive_again(name: str) -> JSONResponse:
+        """What "Capture again" would repeat from this archive -- shown to the
+        person before anything starts, so a new archive is never a surprise."""
+        from connections_export.gui.routes.run import again_plan  # noqa: PLC0415
+
+        target = resolve_archive(support.ARCHIVES_BASE, name)
+        if target is None:
+            return JSONResponse({"error": "archive not found"}, status_code=404)
+        return JSONResponse(again_plan(target))
 
     @app.get("/api/repair-status")
     def repair_status() -> JSONResponse:
@@ -278,15 +354,23 @@ def register(
                 return JSONResponse(
                     {"error": f"{name} is not detected as needing repair"}, status_code=422
                 )
-            if not writable_archive(info.path):
-                return JSONResponse({"error": f"{name} is read-only"}, status_code=422)
+            # A zip is read-only; its repair unzips it into a folder beside it
+            # first and repairs that, leaving the zip as it is.
             targets.append((name, info.path))
+
+        # A repair fetches what the original capture missed, so it needs the
+        # server each archive came from. Asked once per server, before the job
+        # starts, so "cannot be contacted" arrives as an answer, not a failure.
+        problem = _repair_server_problem(_app, [path for _name, path in targets])
+        if problem:
+            return JSONResponse({"error": problem, "unreachable": True}, status_code=409)
 
         _app.state.repair_job = {
             "state": "running",
             "total": len(targets),
             "done": 0,
             "comments_restored": 0,
+            "attachments_restored": 0,
             "current": targets[0][0] if targets else None,
             "stage": "starting",
             # Progress dimensions kept SEPARATE (hand-over #3): aggregate index
@@ -334,9 +418,38 @@ def register(
                     pass
 
                 for name, target in targets:
+                    if stop_event.is_set():
+                        job["stopped"] = True
+                        break
                     job["current"] = name
+                    unpacked_as = None
+                    if is_zip_archive(target):
+                        job["stage"] = "unzipping into a folder"
+                        target = unzip_archive(target)
+                        unpacked_as = target.name
                     summary = read_archive_summary(target) or {}
-                    job["stage"] = "counting before repair"
+                    # Only what the due repairs need: counting blog comments
+                    # means building the archive's whole model, which on a big
+                    # archive is minutes with nothing to show -- so it is done
+                    # only for a blog repair. The forum repair reports its own
+                    # numbers as it goes (`RepairProgress`).
+                    due = archive_repair_status(target)["repair_keys"]
+                    blog_due = "blog-comments" in due
+                    # Which archive, and what is being repaired in it -- the
+                    # banner says so, not only "archive 1 of 3".
+                    listed = infos.get(name)
+                    job["current_label"] = (listed.display_name if listed else None) or name
+                    job["repairing"] = ", ".join(
+                        {
+                            "forum-attachments": "forum attachments",
+                            "blog-comments": "blog comments",
+                        }[k]
+                        for k in due
+                    )
+                    job["item"] = ""
+                    job["threads_done"] = job["threads_total"] = 0
+                    job["pages_read"] = job["files_fetched"] = job["files_missing"] = 0
+                    files_base = job.get("attachments_restored", 0)
                     job["posts_done"] = 0
                     job["posts_total"] = sum(
                         int(group.get("count") or 0)
@@ -346,10 +459,14 @@ def register(
                     job["aggregate_pages"] = 0
                     job["post_feeds_done"] = 0
                     job["comments_recovered"] = 0
-                    before = _blog_comment_count(target)
-                    job["stage"] = "reading aggregate index"
+                    if blog_due:
+                        job["stage"] = "counting the blog comments the archive holds"
+                    before = _blog_comment_count(target) if blog_due else None
+                    job["stage"] = (
+                        "checking the server" if not blog_due else "reading aggregate index"
+                    )
 
-                    def emit(event, job=job):
+                    def emit(event, job=job, files_base=files_base):
                         # Two separate dimensions, told apart by URL: the blog's
                         # aggregate comment index vs. a single post's
                         # `entrycomments` feed. Never summed together.
@@ -360,6 +477,15 @@ def register(
                                     job["stage"] = "fetching affected post feeds"
                             else:
                                 job["aggregate_pages"] += 1
+                        if isinstance(event, crawler_events.RepairProgress):
+                            job["stage"] = event.stage
+                            job["threads_done"] = event.threads_done
+                            job["threads_total"] = event.threads_total
+                            job["pages_read"] = event.pages_read
+                            job["files_fetched"] = event.files_fetched
+                            job["files_missing"] = event.files_missing
+                            job["item"] = event.item
+                            job["attachments_restored"] = files_base + event.files_fetched
                         # Unique posts for THIS run, from its own derive events.
                         if isinstance(event, crawler_events.BlogPostDerived):
                             job["posts_done"] += 1
@@ -374,8 +500,16 @@ def register(
                         )
                         == 0
                     )
-                    job["stage"] = "counting after repair"
-                    after = _blog_comment_count(target)
+                    # A stop is answered now, not after another count of the
+                    # whole archive.
+                    if blog_due and not stop_event.is_set():
+                        job["stage"] = "counting the blog comments recovered"
+                    after = (
+                        _blog_comment_count(target)
+                        if blog_due and not stop_event.is_set()
+                        else None
+                    )
+                    files_restored = job["files_fetched"]
                     restored = (
                         after - before
                         if before is not None and after is not None and after >= before
@@ -383,10 +517,14 @@ def register(
                     )
                     if restored:
                         job["comments_restored"] += restored
+                    if ok and unpacked_as:
+                        _record_unpacked_from(target, name)
                     result = {
                         "name": name,
                         "ok": ok,
                         "comments_restored": restored,
+                        "attachments_restored": files_restored,
+                        "unpacked_as": unpacked_as,
                         "aggregate_pages": job["aggregate_pages"],
                         "post_feeds_done": job["post_feeds_done"],
                         "posts_done": job["posts_done"],
@@ -593,6 +731,23 @@ def register(
         if target is None:
             return JSONResponse({"status": "not_found"}, status_code=404)
         return JSONResponse(summarize_archive(target))
+
+    @app.post("/api/archive-unzip")
+    def archive_unzip(body: _ArchiveZipRequest) -> JSONResponse:
+        """Unpack a zipped archive into a folder beside it, which can then be
+        updated, extended and repaired; the zip stays as it is."""
+        target = resolve_archive(support.ARCHIVES_BASE, body.name)
+        if target is None:
+            return JSONResponse({"ok": False, "error": "archive not found"}, status_code=404)
+        if not is_zip_archive(target):
+            return JSONResponse(
+                {"ok": False, "error": f"{body.name} is already a folder"}, status_code=400
+            )
+        try:
+            folder = unzip_archive(target)
+        except Exception as exc:  # noqa: BLE001 - said to the person, not raised
+            return JSONResponse({"ok": False, "error": f"It could not be unzipped: {exc}"})
+        return JSONResponse({"ok": True, "name": folder.name, "path": str(folder)})
 
     @app.post("/api/archive-zip")
     def archive_zip(body: _ArchiveZipRequest) -> JSONResponse:

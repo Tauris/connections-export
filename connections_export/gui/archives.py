@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
@@ -144,6 +144,19 @@ class ArchiveInfo:
     item_count: int
     repair_needed: bool = False
     repair_reason: str | None = None
+    repair_keys: list[str] = field(default_factory=list)
+    #: Known problems an older release left in this archive, each with what
+    #: went wrong and what to do (see `archive_issues`).
+    issues: list[dict] = field(default_factory=list)
+    #: The archives whose selections a completed run here repeated.
+    captured_again_from: frozenset[str] = frozenset()
+    #: The newer archive that captured this one again, once one has.
+    captured_again_as: str | None = None
+    #: The runs this archive holds, by id -- how a zip is recognised as a
+    #: zipped copy of the folder beside it (`with_zip_twins`).
+    run_ids: frozenset[str] = frozenset()
+    #: For a zip: the folder beside it that it is a zipped copy of.
+    copy_of: str | None = None
 
 
 #: Source hosts that mark a run as demo data (the fake server's own hosts).
@@ -334,7 +347,164 @@ def archive_ledger(archive_dir: Path) -> dict:
     }
 
 
+#: What an older forum reader missed, said to the person who has to decide
+#: whether it matters to them.
+FORUM_ATTACHMENTS_ISSUE = {
+    "key": "forum-attachments",
+    "title": "Some forum attachments are missing",
+    "explanation": (
+        "When this archive was made, some attachments were skipped by mistake: "
+        "documents uploaded to forum topics and replies (a Word or PDF file, say). "
+        "They do not show up as broken links -- they are missing entirely, and "
+        "nothing in the archive mentions them. Only these attachments are affected: "
+        "pages, posts, replies, comments and the images in their text are complete. "
+        "Repair adds the missing attachments to this archive. It needs the server the "
+        "archive was captured from to be available, reads only what is missing, and "
+        "changes nothing that is already there."
+    ),
+    "remedy": "repair",
+}
+
+
+def _runs(archive_dir: Path) -> list:
+    from connections_export.archive.records import RunMetadata  # noqa: PLC0415
+
+    runs = []
+    try:
+        for entry in source_for(archive_dir).run_metadata():
+            try:
+                runs.append(RunMetadata.model_validate_json(entry.data))
+            except (OSError, ValueError):
+                continue
+    except (ArchiveSourceError, OSError, ValueError):
+        return []
+    return runs
+
+
+def archive_issues(archive_dir: Path) -> tuple[list[dict], frozenset[str]]:
+    """Known problems in this archive, and the archives it captured again.
+
+    Read from run metadata alone: each run records the version of the reader
+    that made it. A forum captured by the `forums-1` reader can lack uploaded
+    documents (`FORUM_ATTACHMENTS_ISSUE`); the remedy is a new archive, so
+    nothing here ever changes the old one.
+    """
+    runs = _runs(archive_dir)
+    issues = []
+    if forum_attachments_repair_needed(runs):
+        issues.append(dict(FORUM_ATTACHMENTS_ISSUE))
+    again = frozenset(
+        run.captured_again_from for run in runs if run.captured_again_from and run.completed_at
+    )
+    return issues, again
+
+
+def with_recaptures(infos: list[ArchiveInfo]) -> list[ArchiveInfo]:
+    """Mark each archive a newer copy has replaced -- a Capture again, or the
+    folder a zip was unzipped into and repaired. Its repair is no longer
+    offered (that would make a second copy), but its issues are kept: it is
+    still not repaired itself, and says so beside the copy's name."""
+    newest: dict[str, str] = {}
+    for info in sorted(infos, key=lambda i: (i.mtime, i.name)):
+        for source in info.captured_again_from:
+            newest[source] = info.name
+    return [
+        replace(
+            info,
+            captured_again_as=newest[info.name],
+            # Its newer copy answers for it; repairing the old one as well
+            # would make a second copy of the same thing.
+            repair_needed=False,
+            repair_reason=None,
+            repair_keys=[],
+        )
+        if info.name in newest
+        else info
+        for info in infos
+    ]
+
+
+def with_zip_twins(infos: list[ArchiveInfo]) -> list[ArchiveInfo]:
+    """Recognise a zip that is a zipped copy of the folder beside it.
+
+    "Save as .zip" writes ``X.zip`` next to ``X``; the folder may have been
+    updated since, so the zip is a copy when every run it holds is in the
+    folder too. The folder is the archive to repair -- repairing the zip as
+    well would unzip a third copy of the same thing -- so the zip is not
+    offered the repair, keeps its issues, and names the folder."""
+    folders = {info.name: info for info in infos if info.path.is_dir()}
+    out = []
+    for info in infos:
+        twin = folders.get(info.path.stem) if is_zip_archive(info.path) else None
+        if twin is not None and info.run_ids and info.run_ids <= twin.run_ids:
+            info = replace(
+                info, copy_of=twin.name, repair_needed=False, repair_reason=None, repair_keys=[]
+            )
+        out.append(info)
+    return out
+
+
 def archive_repair_status(archive_dir: Path) -> dict:
+    """Which known repairs this archive needs, from its run metadata alone.
+
+    `repair_keys` names them (``blog-comments``, ``forum-attachments``) for
+    `crawl --repair`, which does exactly those and nothing else;
+    `repair_reason` says why, for the person deciding.
+    """
+    blog = _blog_repair_status(archive_dir)
+    keys, reasons = [], []
+    if blog["repair_needed"]:
+        keys.append("blog-comments")
+        reasons.append(blog["repair_reason"])
+    if forum_attachments_repair_needed(_runs(archive_dir)):
+        keys.append("forum-attachments")
+        reasons.append("some forum attachments were skipped by mistake when it was made")
+    return {
+        "repair_needed": bool(keys),
+        "repair_reason": "; ".join(reasons) or None,
+        "repair_keys": keys,
+    }
+
+
+#: The first release whose recorded repair can be trusted: before it, a repair
+#: that was stopped part-way was still recorded as made.
+TRUSTED_REPAIR_FROM = (1, 0, 1, 1, 5)  # 1.0.1b5
+
+
+def _version_key(version: str | None) -> tuple | None:
+    """`1.0.1b5` -> (1, 0, 1, 1, 5); a final release ranks above its betas."""
+    match = re.fullmatch(r"(\d+)\.(\d+)\.(\d+)(?:(a|b|rc)(\d+))?(?:[.+-].*)?", version or "")
+    if not match:
+        return None
+    major, minor, patch, stage, number = match.groups()
+    rank = {"a": 0, "b": 1, "rc": 2, None: 3}[stage]
+    return (int(major), int(minor), int(patch), rank, int(number or 0))
+
+
+def forum_attachments_repair_needed(runs: list) -> bool:
+    """A forum captured by the `forums-1` reader, and no trusted repair since.
+
+    A repair is recorded (`RunMetadata.repairs`), not inferred from a newer
+    reader: an update by a fixed release re-reads only changed threads. Only a
+    repair recorded by `TRUSTED_REPAIR_FROM` or later counts -- an earlier one
+    may have been stopped and recorded anyway, and repeating a repair that had
+    finished costs nothing, since it fetches only what is missing."""
+    from connections_export.crawler.repair import FORUM_ATTACHMENTS  # noqa: PLC0415
+
+    if not any(run.adapter_version == "forums-1" for run in runs):
+        return False
+
+    def trusted(run) -> bool:
+        key = _version_key(getattr(run, "generator_version", None))
+        return key is not None and key >= TRUSTED_REPAIR_FROM
+
+    return not any(
+        run.completed_at and FORUM_ATTACHMENTS in (run.repairs or []) and trusted(run)
+        for run in runs
+    )
+
+
+def _blog_repair_status(archive_dir: Path) -> dict:
     """Detect whether the latest component run predates a known repair.
 
     This reads only run metadata. An old blog capture is repairable because
@@ -568,6 +738,62 @@ def _is_archive_candidate(child: Path) -> bool:
     return child.is_file() and child.suffix.lower() == ".zip"
 
 
+def is_zip_archive(path: Path) -> bool:
+    """A zipped archive: it opens and reads, and never takes a write."""
+    return path.is_file() and path.suffix.lower() == ".zip"
+
+
+def unzip_archive(zip_path: Path) -> Path:
+    """Unpack a zipped archive into a new folder beside it, and return it.
+
+    The folder is a normal, writable archive -- it can be updated, extended
+    and repaired -- and the zip is left exactly as it is. Only the archive
+    inside the zip is unpacked (at its root or under its one folder, as
+    `ZipSource` finds it), into a name not yet taken, and nothing is written
+    outside that folder whatever the zip's entries claim.
+    """
+    import shutil  # noqa: PLC0415
+    import zipfile  # noqa: PLC0415
+
+    from connections_export.archive.source import ZipSource  # noqa: PLC0415
+
+    source = ZipSource(zip_path)
+    prefix = source._resolve_prefix()
+    stem = zip_path.stem
+    target = zip_path.with_name(stem)
+    counter = 2
+    while target.exists():
+        target = zip_path.with_name(f"{stem}-{counter}")
+        counter += 1
+    staging = zip_path.with_name(f".{target.name}.unzipping")
+    shutil.rmtree(staging, ignore_errors=True)
+    try:
+        with zipfile.ZipFile(zip_path) as handle:
+            for info in handle.infolist():
+                if not info.filename.startswith(prefix) or info.is_dir():
+                    continue
+                relative = Path(info.filename[len(prefix) :])
+                if relative.is_absolute() or ".." in relative.parts or not relative.parts:
+                    continue  # never outside the folder
+                destination = staging / relative
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                with handle.open(info) as member, destination.open("wb") as out:
+                    shutil.copyfileobj(member, out)
+        staging.rename(target)
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
+    return target
+
+
+def archive_base_url_of(path: Path) -> str | None:
+    """The deployment an archive -- a folder or a zip -- was captured from."""
+    from connections_export.crawler.provenance import FAKE_BASE_URLS  # noqa: PLC0415
+
+    urls = [run.base_url for run in _runs(path) if run.base_url]
+    real = [url for url in urls if url.rstrip("/") not in FAKE_BASE_URLS]
+    return (real or urls or [None])[0]
+
+
 def writable_archive(archive_dir: Path) -> bool:
     """Whether this archive can be written into. A zip cannot."""
     return not (archive_dir.is_file() and archive_dir.suffix.lower() == ".zip")
@@ -599,6 +825,15 @@ def list_archives(base: Path) -> list[ArchiveInfo]:
                 **archive_repair_status(child),
             )
         )
+        issues, again = archive_issues(child)
+        # A demo archive's content is invented; it has nothing to recover.
+        infos[-1] = replace(
+            infos[-1],
+            issues=[] if infos[-1].is_demo else issues,
+            captured_again_from=again,
+            run_ids=frozenset(run.run_id for run in _runs(child)),
+        )
+    infos = with_zip_twins(with_recaptures(infos))
     # Name breaks the tie, because mtime alone does not: two archives written
     # in the same second -- a batch, or one run started right after another --
     # carry the same mtime, and `iterdir` order is then whatever the

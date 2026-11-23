@@ -175,3 +175,11 @@ class RunMetadata(BaseModel):
     #: an issue, or find the tool if it ever leaves PyPI. Defaulted like the
     #: others so an older record with no such key still validates.
     generator_repo_url: str = Field(default_factory=lambda: _generator_repo_url())
+    #: The archive whose selections this run repeated ("Capture again"), by
+    #: its folder name. Lets that older archive say it has been captured
+    #: again, without anything being written into it. Optional and additive.
+    captured_again_from: str | None = None
+    #: Known defects this run repaired in place (e.g. ``"forum-attachments"``).
+    #: A repair is recorded rather than inferred: an ordinary update by a fixed
+    #: release re-reads only what changed, so it repairs nothing old.
+    repairs: list[str] = Field(default_factory=list)

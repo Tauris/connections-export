@@ -97,6 +97,7 @@ def demo_synth_seed(seed: int = 0) -> SynthSeed:
     return SynthSeed(
         seed=seed,
         human_names=True,
+        forum_reply_attachment=True,
         # So a demo can show an update catching a reply added to a topic that
         # did not otherwise change -- the one thing a date-filtered topics
         # feed may miss.

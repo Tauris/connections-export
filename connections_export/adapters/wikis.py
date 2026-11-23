@@ -430,16 +430,37 @@ def parse_attachments_feed(data: bytes | str) -> list[Attachment]:
         if not uuid:
             raise AdapterError("attachment entry missing id")
         enclosure = atom.links_by_rel(entry).get("enclosure")
-        attachments.append(
-            Attachment(
-                uuid=uuid,
-                filename=atom.find_text(entry, "atom:title"),
-                content_type=(enclosure.get("type") if enclosure is not None else None),
-                enclosure_href=(enclosure.get("href") if enclosure is not None else None),
-                author=_author_name(entry),
-                created=atom.find_text(entry, "atom:published"),
+        file_links = [
+            (link, field) for link, field in atom.file_field_links(entry) if link.get("href")
+        ]
+        if file_links:
+            for link, field in file_links:
+                attachments.append(
+                    Attachment(
+                        uuid=field.get("fid") or link.get("fid") or link.get("nodeId") or uuid,
+                        filename=(
+                            field.get("name")
+                            or link.get("name")
+                            or link.get("title")
+                            or atom.find_text(entry, "atom:title")
+                        ),
+                        content_type=link.get("type"),
+                        enclosure_href=link.get("href"),
+                        author=_author_name(entry),
+                        created=atom.find_text(entry, "atom:published"),
+                    )
+                )
+        else:
+            attachments.append(
+                Attachment(
+                    uuid=uuid,
+                    filename=atom.find_text(entry, "atom:title"),
+                    content_type=(enclosure.get("type") if enclosure is not None else None),
+                    enclosure_href=(enclosure.get("href") if enclosure is not None else None),
+                    author=_author_name(entry),
+                    created=atom.find_text(entry, "atom:published"),
+                )
             )
-        )
     return attachments
 
 

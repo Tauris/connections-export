@@ -28,7 +28,7 @@ from contextvars import ContextVar
 from dataclasses import dataclass
 from html import escape as _escape
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, quote, urlsplit
 
 import lxml.etree
 import lxml.html
@@ -909,9 +909,13 @@ def _render_comments(comments: list[DerivedComment]) -> str:
 # --- attachments -------------------------------------------------------------
 
 
-class AttachedFiles(list):
+class AttachedFiles(list[tuple[str, str]]):
     """The attachments a render chose to attach to the PDF itself:
     `(name, digest)` in document order, each name unique."""
+
+    def __init__(self, *, include_inline_images: bool = True) -> None:
+        super().__init__()
+        self.include_inline_images = include_inline_images
 
     def add(self, filename: str, digest: str) -> str:
         names = {name for name, _digest in self}
@@ -929,10 +933,10 @@ _ATTACHED: ContextVar[AttachedFiles | None] = ContextVar("attached files", defau
 
 
 @contextlib.contextmanager
-def attaching_files() -> Iterator[AttachedFiles]:
+def attaching_files(*, include_inline_images: bool = True) -> Iterator[AttachedFiles]:
     """Within this scope each captured attachment is recorded for attaching
     to the finished PDF (`pdf.paged.attach_files`), and listed as attached."""
-    attached = AttachedFiles()
+    attached = AttachedFiles(include_inline_images=include_inline_images)
     token = _ATTACHED.set(attached)
     try:
         yield attached
@@ -947,8 +951,8 @@ def _render_attachment(attachment: DerivedAttachment, blob_bytes: BlobBytes) -> 
     every attachment of the export would go through the browser's memory and
     into the PDF inside a link most viewers cannot open, and a large archive's
     attachments alone can exhaust the machine. The files are in the export
-    package; asked to, the renderer attaches them to the PDF as real file
-    attachments instead (`attaching_files`)."""
+    package; asked to, the renderer embeds them and turns their visible
+    Download controls into PDF file-attachment annotations."""
     raw_name = attachment.filename or attachment.id
     filename = _escape(raw_name)
     data = None
@@ -961,16 +965,78 @@ def _render_attachment(attachment: DerivedAttachment, blob_bytes: BlobBytes) -> 
         attached = _ATTACHED.get()
         if attached is not None:
             name = attached.add(raw_name, digest)
+            href = f"connections-export-attachment:{quote(name, safe='')}"
             if name != raw_name:
                 note += f" &middot; attached as {_escape(name)}"
             else:
                 note += " &middot; attached to this PDF"
+            return (
+                f'<li><a class="hcl-attachment-download" href="{href}">{_escape(name)}</a> '
+                f'<span class="hcl-attachment-meta">({note})</span></li>'
+            )
         return f'<li>{filename} <span class="hcl-attachment-meta">({note})</span></li>'
     marker = f'<span class="hcl-missing-attachment">[{NOT_CAPTURED_ATTACHMENT_MARKER}]</span>'
     return f"<li>{filename} {marker}</li>"
 
 
-def _render_attachments(attachments: list[DerivedAttachment], blob_bytes: BlobBytes) -> str:
+def _asset_reference_keys(
+    asset: ResolvedAsset, *, item_id: str | None = None
+) -> set[tuple[str, str]]:
+    keys: set[tuple[str, str]] = set()
+    if item_id:
+        keys.add(("id", item_id))
+    for href in (asset.original_href, asset.resolved_url):
+        if not href:
+            continue
+        parsed = urlsplit(href)
+        keys.add(("url", parsed._replace(fragment="").geturl()))
+        query = parse_qs(parsed.query)
+        keys.update(("id", value) for name in ("nodeId", "fid") for value in query.get(name, ()))
+    return keys
+
+
+def _partition_inline_images(
+    attachments: list[DerivedAttachment], body_assets: list[ResolvedAsset]
+) -> tuple[list[DerivedAttachment], list[DerivedAttachment]]:
+    inline_keys = set()
+    for asset in body_assets:
+        if asset.scope == "same" and asset.present and asset.blob_hash:
+            inline_keys.update(_asset_reference_keys(asset))
+    if not inline_keys:
+        return attachments, []
+    listed: list[DerivedAttachment] = []
+    inline: list[DerivedAttachment] = []
+    for attachment in attachments:
+        target = (
+            inline
+            if inline_keys & _asset_reference_keys(attachment.asset, item_id=attachment.id)
+            else listed
+        )
+        target.append(attachment)
+    return listed, inline
+
+
+def _record_inline_attachments(attachments: list[DerivedAttachment], blob_bytes: BlobBytes) -> None:
+    """Keep inline originals downloadable without adding a second body row."""
+    attached = _ATTACHED.get()
+    if attached is None or not attached.include_inline_images:
+        return
+    for attachment in attachments:
+        if not attachment.asset.present or not attachment.asset.blob_hash:
+            continue
+        digest = _blob_digest(attachment.asset.blob_hash)
+        if digest is not None and blob_bytes(digest) is not None:
+            attached.add(attachment.filename or attachment.id, digest)
+
+
+def _render_attachments(
+    attachments: list[DerivedAttachment],
+    blob_bytes: BlobBytes,
+    body_assets: list[ResolvedAsset] | None = None,
+) -> str:
+    if body_assets:
+        attachments, inline_attachments = _partition_inline_images(attachments, body_assets)
+        _record_inline_attachments(inline_attachments, blob_bytes)
     if not attachments:
         return ""
     items = "".join(_render_attachment(attachment, blob_bytes) for attachment in attachments)
@@ -1139,7 +1205,7 @@ def _render_page_section(
     tags = _render_tags(page.tags)
     body = _sanitize_body(page, blob_bytes)
     comments = _render_comments(page.comments) if include_comments else ""
-    attachments = _render_attachments(page.attachments, blob_bytes)
+    attachments = _render_attachments(page.attachments, blob_bytes, page.assets)
     # Every wiki page starts on a fresh PDF page (not just depth-0 roots): a
     # subpage is its own document to the reader, so it earns its own page.
     page_break_class = " page-break"
@@ -1284,11 +1350,13 @@ def _render_forum_reply(
         _sanitize_html(reply.content_html or "", reply.assets, reply.links, blob_bytes),
         f"#r-{reply_id}",
     )
+    attachments = _render_attachments(reply.attachments, blob_bytes, reply.assets)
     return (
         f'<div class="forum-reply" id="r-{reply_id}" data-depth="{depth}" '
         f'style="margin-left: {depth * 1.5}em">'
         f"{meta}{flags}"
         f'<div class="reply-body">{body}</div>'
+        f"{attachments}"
         "</div>"
     )
 
@@ -1328,11 +1396,13 @@ def _render_forum_topic(
         _sanitize_html(topic.content_html, topic.assets, topic.links, blob_bytes),
         f"#t-{section_id}",
     )
+    attachments = _render_attachments(topic.attachments, blob_bytes, topic.assets)
     replies = _render_reply_thread(topic, blob_bytes, scope_body)
     return (
         f'<section id="t-{section_id}" class="hcl-topic page-break">'
         f'<h2 class="pdf-sectitle" data-outline="2">{title}</h2>{meta}{flags}'
         f'<div class="topic-body">{body}</div>'
+        f"{attachments}"
         f"{replies}"
         "</section>"
     )
@@ -1724,6 +1794,10 @@ img, svg, video, canvas, iframe, object, embed {
 .hcl-file-meta { font-size: var(--pdf-meta-size); color: var(--pdf-muted); white-space: nowrap; }
 .hcl-file-note { font-size: var(--pdf-meta-size); color: var(--pdf-muted); }
 .hcl-missing-image, .hcl-missing-attachment { color: #a00; font-style: italic; }
+.hcl-attachment-download {
+  color: inherit; text-decoration: underline; text-decoration-color: var(--pdf-muted);
+  text-decoration-style: dotted;
+}
 /* A third-party image: recognisable on paper, not only by colour. */
 .hcl-external-image {
   display: inline-block; max-width: 100%; border: 1px dashed #8a6d00; padding: 2px;

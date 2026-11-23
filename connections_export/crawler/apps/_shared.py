@@ -29,7 +29,10 @@ from connections_export.crawler.engine import (
 #: entry point.
 ADAPTER_VERSION = "wikis-1"
 BLOGS_ADAPTER_VERSION = "blogs-2"
-FORUMS_ADAPTER_VERSION = "forums-1"
+#: forums-2: every download a topic or reply links to is an attachment, and
+#: what each post's page lists is added. A forums-1 capture can be missing a
+#: reply's uploaded documents (see `gui.archives.archive_issues`).
+FORUMS_ADAPTER_VERSION = "forums-2"
 FILES_ADAPTER_VERSION = "files-1"
 RTE_ADAPTER_VERSION = "rte-1"
 COMMUNITY_ADAPTER_VERSION = "community-1"

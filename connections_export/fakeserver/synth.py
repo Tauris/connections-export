@@ -87,6 +87,9 @@ class SynthSeed:
     posts_per_blog: int = 3
     comments_per_post: int = 3
     tags_per_post: int = 2
+    #: Add one uploaded document to the first reply, using the nested forum
+    #: file-field feed shape and a rendered-page download link.
+    forum_reply_attachment: bool = False
     # -- Forums (Stage 2, all not documented). Read only by synthesize_forums.
     forum_count: int = 2
     topics_per_forum: int = 3
@@ -1020,7 +1023,7 @@ def _synthesize_topic(
         # picking unrelated lines out of a shared pool -- and the person
         # reporting "that fixed it" is the one who asked, not a bystander.
         reply_text, by_op = topic_reply(title, i)
-        return FakeForumReply(
+        reply = FakeForumReply(
             uuid=ids.next(),
             author=(
                 (author if by_op else _pick(_others(_PEOPLE, author), f"t{topic_index}r{i}"))
@@ -1035,6 +1038,22 @@ def _synthesize_topic(
             source_topic=topic.uuid,
             wave=reply_wave,
         )
+        if seed.forum_reply_attachment and forum_index == 0 and topic_index == 0 and i == 0:
+            filename = "Forum reply notes.docx"
+            reply.attachments.append(
+                FakeAttachment(
+                    uuid=ids.next(),
+                    filename=filename,
+                    content_type=(
+                        "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                    ),
+                    size=64,
+                    author=reply.author,
+                    created=reply.published,
+                    content=b"PK\x03\x04Synthetic forum reply attachment: " + filename.encode(),
+                )
+            )
+        return reply
 
     # Top-level replies: each refs the topic directly (so build_reply_tree
     # yields each as a root -- the topic uuid never appears among reply ids).

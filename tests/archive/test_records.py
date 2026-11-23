@@ -138,6 +138,9 @@ def test_run_metadata_has_stable_field_order_and_schema_version():
         "generator_version",
         "generator_url",
         "generator_repo_url",
+        # The archive a "Capture again" repeated. Appended, like the others.
+        "captured_again_from",
+        "repairs",
     ]
     assert run.schema_version == 1
 

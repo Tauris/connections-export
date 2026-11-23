@@ -18,6 +18,7 @@ yet a project dependency; nothing here needs XPath, just well-formed,
 namespaced output).
 """
 
+from urllib.parse import quote
 from xml.etree import ElementTree as ET
 
 from connections_export.fakeserver.model import (
@@ -912,6 +913,23 @@ def forum_replies_feed(
         reply_to.set("ref", _forum_entry_id(reply.ref))
         reply_to.set("source", _forum_entry_id(reply.source_topic))
         reply_to.set("href", f"{base_url}/forums/atom/reply?replyUuid={reply.ref}")
+        alternate = _sub(entry, ATOM_NS, "link")
+        alternate.set("rel", "alternate")
+        alternate.set("type", "text/html")
+        alternate.set("href", f"{base_url}/forums/html/topic?id={topic.uuid}")
+        for attachment in reply.attachments:
+            field = _sub(entry, SNX_NS, "field")
+            field.set("name", attachment.filename)
+            field.set("fid", attachment.uuid)
+            field.set("type", "file")
+            link = _sub(field, ATOM_NS, "link")
+            link.set("name", attachment.filename)
+            link.set("type", attachment.content_type)
+            link.set(
+                "href",
+                f"{base_url}/forums/atom/download/{quote(attachment.filename, safe='')}"
+                f"?nodeId={attachment.uuid}",
+            )
     if has_more:
         next_page = (page or 1) + 1
         _append_next(

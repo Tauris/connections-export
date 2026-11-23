@@ -74,7 +74,7 @@ class FakeVersion:
 
 @dataclass
 class FakeAttachment:
-    """A page attachment.
+    """A downloadable file attached to a wiki page or forum reply.
 
     # INFERRED: attachment *entry* contents are undocumented; we
     # only know attachments are listed via `?category=attachment` and
@@ -307,6 +307,7 @@ class FakeForumReply:
     ref: str
     source_topic: str
     flags: list[str] = field(default_factory=list)
+    attachments: list[FakeAttachment] = field(default_factory=list)
     #: Which wave of content this item belongs to (see `FakeBlogPost.wave`).
     wave: int = 0
 

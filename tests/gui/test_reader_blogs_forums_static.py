@@ -61,7 +61,7 @@ def test_reply_thread_renderer_exists():
 
 def test_forum_attachments_are_rendered_in_the_reader():
     assert "reply.attachments" in JS
-    assert "renderAttachmentsReal(topic)" in JS
+    assert "renderAttachmentsReal(topic, true)" in JS
     assert "renderDownloadAssetsReal(reply.assets)" in JS
     assert "inline-downloads" in JS
     assert "'</div>' + renderDownloadAssetsReal(reply.assets)" in JS

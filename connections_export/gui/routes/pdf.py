@@ -564,6 +564,7 @@ def register(
         external_images: bool = True,
         open_bookmarks: bool = False,
         attach_attachments: bool = False,
+        attach_inline_images: bool = True,
         split: str = "none",
         max_pages: int | None = None,
         max_mb: float | None = None,
@@ -576,7 +577,8 @@ def register(
         The result is written beside the archive (`<archive>-pdf/`); with
         `split` (and `max_pages` / `max_mb`) it is several PDFs in a folder
         of their own plus a ZIP of them for the download. `attach_attachments`
-        attaches the pages' attachments to the PDF as files."""
+        attaches the pages' attachments to the PDF as files;
+        `attach_inline_images=0` omits originals for images already shown inline."""
         plan = prepare(
             fidelity=fidelity,
             comments=comments,
@@ -625,6 +627,8 @@ def register(
                     kwargs["part_size_mb"] = plan.part_size_mb
                 if attach_attachments and "attach_attachments" in params:
                     kwargs["attach_attachments"] = True
+                if attach_attachments and "attach_inline_images" in params:
+                    kwargs["attach_inline_images"] = attach_inline_images
                 # Renderers that do not report progress (and test doubles
                 # keeping the (model, blob_bytes) contract) are not given it.
                 if "progress" in params:

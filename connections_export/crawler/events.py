@@ -304,6 +304,22 @@ class RunComplete:
     report: Any
 
 
+@dataclass(frozen=True)
+class RepairProgress:
+    """How an in-place repair is going (`crawler.repair`), emitted as it
+    works so a long repair visibly moves: which stage, how many of the
+    archive's threads are checked, and what it has had to read and add."""
+
+    stage: str
+    threads_done: int = 0
+    threads_total: int = 0
+    pages_read: int = 0
+    files_fetched: int = 0
+    files_missing: int = 0
+    #: The thread being worked on, by title, when there is one.
+    item: str = ""
+
+
 Event = (
     RunStarted
     | Discovered
@@ -322,6 +338,7 @@ Event = (
     | Pruned
     | AuthorFilterSummary
     | TopicSelection
+    | RepairProgress
     | RunComplete
 )
 

@@ -99,6 +99,24 @@ def test_parse_attachments_feed():
         assert attachment.enclosure_href is not None
 
 
+def test_parse_attachments_feed_reads_nested_file_fields():
+    xml = (
+        '<feed xmlns="http://www.w3.org/2005/Atom" '
+        'xmlns:snx="http://www.ibm.com/xmlns/prod/sn">'
+        "<entry><id>urn:lsid:ibm.com:td:entry-1</id>"
+        '<snx:field name="Plan B.docx" fid="file-1" type="file">'
+        '<link type="application/msword" href="/download/Plan%20B.docx?nodeId=file-1"/>'
+        "</snx:field></entry></feed>"
+    )
+
+    [attachment] = parse_attachments_feed(xml)
+
+    assert attachment.uuid == "file-1"
+    assert attachment.filename == "Plan B.docx"
+    assert attachment.content_type == "application/msword"
+    assert attachment.enclosure_href == "/download/Plan%20B.docx?nodeId=file-1"
+
+
 def test_parse_tags_feed():
     wikiset = _wikiset()
     wiki = wikiset.wikis[0]

@@ -40,6 +40,7 @@ def test_the_dialog_markup_is_an_accessible_modal():
         'id="xd-comments"',
         'id="xd-external"',
         'id="xd-attach"',
+        'id="xd-attach-inline"',
         'id="xd-bookmarks"',
         'id="xd-estimate"',
         'id="xd-where"',
@@ -55,6 +56,7 @@ def test_the_dialog_markup_is_an_accessible_modal():
     ):
         assert label in dialog
     assert "Attach the pages' attachment files" in dialog
+    assert "Include original files for images shown inline" in dialog
     assert ".xdlg" in CSS
 
 
@@ -84,6 +86,7 @@ def test_the_dialog_plans_live_and_starts_the_shared_runner_with_split_params():
     go = _body("xdGo")
     assert "startPdfExport(" in go and "xdSplitParams()" in go
     assert "attach_attachments=1" in go
+    assert "attach_inline_images=0" in go
     assert "/api/pdf/jobs" not in go
     assert "openDevExportForReader(format)" in go
     assert "plan.checks" in _body("xdRenderPlan")  # pre-flight checks block Export on errors

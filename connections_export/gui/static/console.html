@@ -117,6 +117,10 @@
         <button class="btn primary" id="repair-all" type="button">Repair all</button>
         <button class="btn danger" id="repair-stop" type="button" hidden title="Stop the repair. The archive it is on keeps what it already fetched; the rest are not started.">Stop</button>
       </div>
+      <div class="archive-repair-banner archive-issue-banner" id="issue-banner" hidden>
+        <span class="repair-banner-icon" aria-hidden="true">&#9888;</span>
+        <div class="repair-banner-msg" id="issue-banner-msg"></div>
+      </div>
       <div class="archive-toolbar" id="archive-toolbar" hidden>
         <button class="btn" id="select-superseded" type="button" title="Select every run that a later attempt at the same target has replaced">Select superseded</button>
         <button class="btn" id="repair-affected" type="button" disabled>Repair affected</button>
@@ -613,6 +617,7 @@
             <label class="xd-choice" title="Comments are always archived; untick to leave them out of the PDF."><input type="checkbox" id="xd-comments" checked /><span class="xd-text">Include comments</span></label>
             <label class="xd-choice" title="Images the pages show from other websites are not in the archive. Ticked, they are fetched now and put in the PDF, each marked &quot;External image E1…&quot; and listed with its original address on an External content page. Whether you may reproduce them is for you to judge."><input type="checkbox" id="xd-external" checked /><span class="xd-text">Include external images</span></label>
             <label class="xd-choice"><input type="checkbox" id="xd-attach" /><span class="xd-text">Attach the pages' attachment files to the PDF <span class="xd-hint">otherwise they are listed by name and size; the files are in the archive</span></span></label>
+            <label class="xd-choice" id="xd-attach-inline-option" hidden><input type="checkbox" id="xd-attach-inline" checked /><span class="xd-text">Include original files for images shown inline <span class="xd-hint">uncheck to keep the image in the page but omit its extra downloadable copy</span></span></label>
             <label class="xd-choice" title="The PDF always has bookmarks. Ticked, viewers open it with the bookmarks panel showing; some viewers lay that panel over the page."><input type="checkbox" id="xd-bookmarks" /><span class="xd-text">Open with bookmarks showing</span></label>
           </fieldset>
         </div>

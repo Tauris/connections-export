@@ -39,10 +39,19 @@ def test_split_writes_a_folder_of_pdfs(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(cli, "_default_pdf_render", lambda _fidelity: lambda *a, **k: b"")
     out = tmp_path / "set"
     code = cli.pdf_main(
-        ["--demo", "--split", "app", "--attach-files", "--output", str(out)],
+        [
+            "--demo",
+            "--split",
+            "app",
+            "--attach-files",
+            "--no-attach-inline-images",
+            "--output",
+            str(out),
+        ],
     )
     assert code == 0
     names = sorted(p.name for p in out.glob("*.pdf"))
     assert len(names) >= 5 and names[0].startswith("1 - ")
     assert seen.get("attach_attachments") is True
+    assert seen.get("attach_inline_images") is False
     assert f"to {out}" in capsys.readouterr().out

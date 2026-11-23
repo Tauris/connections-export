@@ -361,6 +361,16 @@ def link_href(entry: etree._Element, rel: str) -> str | None:
     return link.get("href") if link is not None else None
 
 
+def file_field_links(entry: etree._Element) -> list[tuple[etree._Element, etree._Element]]:
+    """Atom links nested under an ``snx:field type="file"`` on any entry."""
+    return [
+        (link, field)
+        for field in entry.findall("snx:field", namespaces=NS)
+        if field.get("type") == "file"
+        for link in field.findall("atom:link", namespaces=NS)
+    ]
+
+
 def content_html(entry: etree._Element) -> str | None:
     """`<content>` text, or `None` when the entry carries no content element."""
     element = entry.find("atom:content", namespaces=NS)

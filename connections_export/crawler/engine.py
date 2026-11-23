@@ -655,6 +655,8 @@ def begin_run(
         community_title=community_title,
         author_filter=author_filter,
         since_cutoff=since_cutoff,
+        captured_again_from=getattr(config, "captured_again_from", None),
+        repairs=list(getattr(config, "repairs", None) or []),
     )
     # Written now, without `completed_at`. That absence is the record that this
     # run is in flight -- and if it dies here, the absence is what stops a
